@@ -2,12 +2,28 @@
 
 Rules for test design, fixture patterns, and mock discipline.
 
-## Prefer Integration Tests Over Mocked Unit Tests
+## Scenarios-First — List Use Cases Before Code
 
-**When:** Testing a service class that orchestrates storage + file I/O.
-**Rule:** Use real local infrastructure (e.g., in-memory SQLite, a `LocalFileManager` pointed at `tmp_path`). Avoid mocking both storage and file manager together — it tests nothing real.
-**Why:** Tests that mock all collaborators verify only that mocks were called, not that the system works.
-**How to apply:** Use in-memory DB and temp-dir file manager for infrastructure; only `MagicMock` for true external boundaries (LLM providers, third-party APIs).
+**When:** Starting work on any feature larger than a single helper.
+**Rule:** Before writing code, enumerate the concrete user-flow scenarios the feature must handle. Each scenario becomes one integration test. If you can't articulate the scenarios, the design isn't concrete enough — replan, don't code.
+**Why:** Tests written after the code echo the code's structure; tests written from scenarios echo the user's intent. Catches the "tests pass but the feature doesn't do what it should" failure mode at design time.
+**How to apply:**
+
+- Scenario format: "User does X, system shows Y, with edge case Z."
+- One scenario per acceptance-criterion line in the design doc / PR description.
+- Every PR ships BOTH unit tests (fast, pure logic, mocks OK for external boundaries) AND integration tests (one per scenario, real components).
+
+## Integration Tests Use Real Components — Not Mocks
+
+**When:** Writing a test that claims to cover end-to-end behavior.
+**Rule:** Real DB (template-isolated per test, or fresh schema per test), real ORM, real validators, real external APIs where the feature actually touches them. Reserve mocks for true external boundaries (LLM providers, third-party APIs) and only at the unit layer below.
+**Why:** Mocked integration tests have shipped real bugs because the mock confirmed the code-path while reality contradicted it. A test that mocks every collaborator verifies only that mocks were called, not that the system works.
+**How to apply:**
+
+- Per-test database isolation via template DBs (Postgres `CREATE DATABASE x TEMPLATE template_db`) or a fresh in-memory database per test.
+- For LLM-touching features: use the real API with deterministic fixture inputs in CI; skip expensive runs as nightly-only when cost matters.
+- Static analysis (mypy/pyright/eslint) is the cheap pre-check; integration tests are the load-bearing pre-check.
+- If the test class mocks more than two collaborators, the production code's boundaries are wrong — fix those first, then the test.
 
 ## Explicit Collaborators With Stubs — Not `MagicMock` for Internal Services
 

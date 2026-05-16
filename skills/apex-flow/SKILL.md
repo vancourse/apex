@@ -1,5 +1,5 @@
 ---
-name: sdlc-methodology
+name: apex-flow
 description: Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist with alternatives and critiques, phase-routed skill gates for planning/implementing/reviewing, port-verification discipline. Fires when planning a non-trivial change, designing a new endpoint or service, refactoring across files, opening a PR, or reviewing changes. Keywords: plan, design, refactor, endpoint, payload, review, PR, implement, ship.
 ---
 
@@ -33,6 +33,22 @@ For any non-trivial design task (new endpoint, new service, multi-file refactor,
 5. **Justify additions over reuse.** Pure-addition designs are a smell — if your design only adds code (no deletions, no consolidation), explain why no existing path can be extended. See [`rules/principles.md` §3](../../rules/principles.md#3-pure-addition-designs-are-a-smell).
 
 Skip this checklist only for trivial fixes (typo, single-line behavior change, obvious bug). When in doubt, run it — the cost is one extra paragraph in the response, the saving is multiple round-trips of "you should have asked X first."
+
+### 1c. Verify the ask against raw quotes, not writeups
+
+When re-auditing what was actually asked for — "did we close X?", "is Y done?", "what's left from the customer's ask?" — trust the verbatim quote in the source (meeting note, ticket, customer email) and the actual code (grep, Read). Both common shortcuts drift from the source:
+
+- **Status-row symbols / status doc cells** lag the code and frequently summarize only one edge case per feature.
+- **"What they're asking for" / "Open questions" interpretation blocks in writeups** mix the literal ask with engineering scope-creep added during analysis.
+
+**4-column audit table.** For every "did we ship X" question, produce a row:
+
+| Raw quote | Writeup interpretation (if any) | Actual code (file:line) | Visible to user? |
+|---|---|---|---|
+
+The "visible to user" column is separate from "shipped" because code can be live without being exposed by demo seeds, UI rendering, or docs. A feature can be done in code but invisible in the demo, and the reviewer reasonably concludes "not shipped" from what they see.
+
+**When this fires:** any question that matches "audit existing work against an ask" — not "design a fix." For fix design, §1a (reconnaissance) and §1b (adversarial checklist) own the gates.
 
 ## 2. Break Down Hard Problems
 

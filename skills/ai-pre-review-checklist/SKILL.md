@@ -230,7 +230,45 @@ Pass condition:
 
 ---
 
-## Step 7: Force A Reviewer Simulation
+## Step 7: Force A Consumer-Tracing Pass
+
+Prompt:
+
+```md
+For every contract this branch changes — a table column, a function
+signature, a payload field, an SQL gate, a status transition — list the
+consumers that read or depend on the contract.
+
+For each consumer, answer:
+
+- does the change break it, or is it correctly accounted for?
+- is the consumer covered by a test in this branch, or only by indirect
+  coverage of the legacy path?
+
+For every new code path introduced (a new branch, a new variant, a new
+status):
+
+- is there at least one test that exercises it directly, not via fallback
+  to the legacy path?
+
+For every "mirrors X" claim in the PR description:
+
+- paste X next to the new code, line-by-line, and confirm 1:1 parity.
+```
+
+Pass condition:
+
+- consumers are named explicitly, not waved off as "the code that uses this"
+- new code paths have at least one direct test, not just fallback coverage
+- "mirrors X" claims are backed by line-by-line diff, not approximate
+  similarity
+
+If you cannot list 3+ consumers in 5 minutes, the change has more reach
+than the diff suggests — replan or split the PR.
+
+---
+
+## Step 8: Force A Reviewer Simulation
 
 Prompt:
 
@@ -249,7 +287,7 @@ Pass condition:
 
 ---
 
-## Step 8: Force A "What Did You Not Validate?" Answer
+## Step 9: Force A "What Did You Not Validate?" Answer
 
 Prompt:
 
@@ -295,6 +333,8 @@ Before posting the branch, make sure all of the following are true:
 - concurrency assumptions are defensible
 - success/failure/fallback semantics are clear
 - tests match the actual layer and behavior being exercised
+- consumers of changed contracts are traced; new code paths have direct tests
+- "mirrors X" claims in the PR description are backed by line-by-line diff
 - you know what was only inspected and what remains unvalidated
 - the PR description is ready (see `pr-review-primer` skill)
 

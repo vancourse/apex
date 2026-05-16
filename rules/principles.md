@@ -83,9 +83,9 @@ class ProgressThrottler:
 
 | Principle | Applied in |
 |---|---|
-| Producer/consumer dual | `sdlc-methodology` §1a (planning), `api-surface-review` Pass 5 (API shape), `typescript-review` frontend-backend-layering (FE/BE split) |
-| First plausible affordance | `sdlc-methodology` §1a (planning) |
-| Pure-addition smell | `sdlc-methodology` §1b (adversarial design checklist) |
+| Producer/consumer dual | `apex-flow` §1a (planning), `api-surface-review` Pass 5 (API shape), `typescript-review` frontend-backend-layering (FE/BE split) |
+| First plausible affordance | `apex-flow` §1a (planning) |
+| Pure-addition smell | `apex-flow` §1b (adversarial design checklist) |
 | Wire-format symmetry | `polymorphic-type-modeling` rule 4 |
 | SR primitives | `polymorphic-type-modeling` rule 5 |
 

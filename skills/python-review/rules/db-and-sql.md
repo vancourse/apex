@@ -46,3 +46,28 @@ Rules for SQL queries, ORM usage, migrations, and connection management.
 
 **When:** Sorting data for deterministic persistence.
 **Rule:** Return the same sorted version to the caller. Don't sort for the write path and return the unsorted original.
+
+## Empty-String vs NULL on FK TEXT Columns
+
+**When:** Writing to a TEXT column that FK-references a lookup table (e.g. `transactions.final_code → codes(code)`).
+**Rule:** Never write the empty string. Convert empty → NULL at every write site — `NULLIF(col, '')` in SQL, `col or None` in Python.
+**Why:** AI-generated code likes to write `''` for "couldn't determine" or "not yet set." Empty string is not NULL — it's a real value that FK-violates against the lookup table. The crash is far from the write site and reads as a database integrity bug, not an application bug.
+**How to apply:**
+
+```sql
+-- ❌ BAD: empty string passes through, FK-violates on the lookup
+INSERT INTO transactions (id, final_code) VALUES ($1, $2);
+
+-- ✅ GOOD: NULLIF at the write site
+INSERT INTO transactions (id, final_code) VALUES ($1, NULLIF($2, ''));
+```
+
+```python
+# ❌ BAD: '' for "couldn't categorize"
+record.final_code = result.code  # result.code is '' on failure
+
+# ✅ GOOD: explicit None at the application layer
+record.final_code = result.code or None
+```
+
+**Pre-PR check:** for any new write site touching an FK TEXT column, grep the diff for the column name and confirm every write path runs through `NULLIF` (SQL) or `or None` (Python). One missed site is a production crash.

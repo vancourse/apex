@@ -113,3 +113,28 @@ response.name = response.name.replace(" ", "_")
 **When:** An event (WebSocket, SSE, API response) can be emitted from multiple code paths (cache-hit vs. full pipeline).
 **Rule:** Every path must populate the same fields. Missing fields cause silent UI failures — blank sections, null displays.
 **How to apply:** Grep for every location that emits the event type. Verify all locations populate the same fields. Consider a TypedDict or dataclass to enforce shape at the type level.
+
+## Fake Routing Pattern — A Function Named For Behavior It Doesn't Do
+
+**When:** Reviewing a new function whose name implies a decision — `route_*`, `dispatch_*`, `select_*`, `*_filter`, `*_eligibility`, `pick_*`, `choose_*` — or a config flag whose name implies a code branch.
+**Rule:** Identify the single line inside the body that *actually differs* from the prior path. If you cannot point at it, the routing is fake — the function name is aspirational, not descriptive. Rename to match what the body actually does, or delete and inline.
+**Why:** AI generates "router" functions that route to one destination, "filter" functions that always pass through, "eligibility" gates that are never called, and "memory-tier" code paths that don't read memory. These pass type checks, often pass unit tests (because the tests cover only the named path), and silently regress behavior — the production system runs the legacy code while the new function sits inert.
+
+**Smells that recur:**
+
+```python
+# ❌ BAD: name says "route to fast/slow model" but body always picks one
+def route_model(task: Task) -> Model:
+    return SlowModel()  # FastModel branch never reachable
+
+# ❌ BAD: name says "uses memory" but never reads it
+def categorize_with_memory(txn: Transaction) -> Category:
+    txn.categorization_source = "memory_exact"  # field set, memory never read
+    return llm_categorize(txn)
+
+# ❌ BAD: "eligibility filter" described in design doc, never called
+def is_tier3_eligible(verdict: Verdict) -> bool: ...
+# nowhere in the codebase calls is_tier3_eligible
+```
+
+**Pre-PR check:** for every new function with one of those name patterns, ask: what's the line in the body that makes this branch different from the prior path? If the answer is "no line" or "the assignment of a field that nobody reads," the routing is fake.

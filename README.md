@@ -12,7 +12,7 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 | Skill | What it does |
 |---|---|
-| `sdlc-methodology` | Umbrella planning gates: reconnaissance + adversarial design checklist + phase-routing pointer |
+| `apex-flow` | Umbrella planning gates: reconnaissance + adversarial design checklist + phase-routing pointer |
 | `pr-discipline` | Draft-PR default, pre-commit + minimal-push, layered PR stacks (≤400 LOC), single-PR review scope, self-review checklist, responding-to-comments pointer |
 | `api-surface-review` | 5-pass review of new endpoints / payloads / handlers from the *consumer's* perspective |
 | `ai-pre-review-checklist` | 8-step robustness gate for AI-assisted branches (branch explanation, layering, state, concurrency, fallback, tests, reviewer sim, gaps) |
@@ -75,7 +75,7 @@ Paste this into your global `~/.claude/CLAUDE.md` after installing the plugin. T
 
 ## 1. Plan Before Coding
 
-For any non-trivial change, invoke `sdlc-methodology` to load the planning gates
+For any non-trivial change, invoke `apex-flow` to load the planning gates
 (reconnaissance, adversarial checklist) before writing code.
 
 ## 2. Skill Gates

@@ -71,3 +71,29 @@ eventSource.onmessage = (event) => {
   handleEvent(data);
 };
 ```
+
+## Fake Routing Pattern — A Function Named For Behavior It Doesn't Do
+
+**When:** Reviewing a new function whose name implies a decision — `route*`, `dispatch*`, `*Filter`, `*Eligibility`, `is*Eligible`, `pick*`, `choose*` — or a config flag whose name implies a code branch.
+**Rule:** Identify the single line inside the body that *actually differs* from the prior path. If you cannot point at it, the routing is fake — the function name is aspirational, not descriptive. Rename to match the actual behavior, or delete and inline.
+**Why:** AI generates "router" functions that route to one destination, "filter" predicates that always return true, "eligibility" gates that are never called. These pass type checks, pass unit tests narrow to the named path, and silently regress behavior — the production system runs the legacy code while the new function sits inert.
+
+**Smells that recur:**
+
+```typescript
+// ❌ BAD: name says "route by status" but always returns the same component
+function routeByStatus(status: TaskStatus): React.FC {
+  return TaskDefaultView;  // other-status branches never reachable
+}
+
+// ❌ BAD: predicate filter that always passes through
+function isActionable(item: WorkItem): boolean {
+  return true;  // filter does nothing
+}
+
+// ❌ BAD: "eligibility" helper exported but never imported
+export function isReviewEligible(pr: PullRequest): boolean { ... }
+// no importer in this PR; no importer anywhere
+```
+
+**Pre-PR check:** for every new function with one of those name patterns, ask: what's the line in the body that makes this branch different from the prior path? If the answer is "no line," the routing is fake.

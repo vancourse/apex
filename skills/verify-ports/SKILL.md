@@ -78,4 +78,4 @@ Then propose the design accounting for the destination's reality, not the source
 ## Relationship to other skills
 
 - **`api-surface-review`** — port the wire format AND check it against the producer's actual current shape. The port is a hypothesis; the surface review tests it.
-- **`sdlc-methodology` §1a (reconnaissance)** — codebase reconnaissance applies here too: grep for sibling implementations before adopting the port.
+- **`apex-flow` §1a (reconnaissance)** — codebase reconnaissance applies here too: grep for sibling implementations before adopting the port.

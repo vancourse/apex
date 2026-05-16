@@ -21,7 +21,7 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
    │ 1. PLAN                                                       │
-   │    sdlc-methodology        §1a reconnaissance                 │
+   │    apex-flow        §1a reconnaissance                 │
    │                              (cost-shape inversion,           │
    │                               codebase recon,                 │
    │                               producer/consumer dual)         │
@@ -107,7 +107,7 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
 
 ```
                               PLAN  IMPL  VERIFY  PRE-PR  OPEN  POST-OPEN  REVIEW
-sdlc-methodology               ✓
+apex-flow               ✓
 api-surface-review             ✓    ✓             ✓                          ✓¹
 python-review                       ✓             ✓                          ✓
 typescript-review                   ✓             ✓                          ✓
