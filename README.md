@@ -1,4 +1,4 @@
-# sdlc-methodology
+# apex
 
 An opinionated Claude Code plugin that bundles a personal SDLC framework — planning gates, code-review skills, PR workflow discipline, and workflow-automation hooks. Designed to make AI-assisted coding survive a strict reviewer.
 
@@ -109,7 +109,7 @@ Read the relevant file at the start of any session that touches that project.
 ### Local development (recommended while iterating)
 
 ```bash
-claude --plugin-dir /Users/ravi/devenv/sdlc-methodology
+claude --plugin-dir /Users/ravi/devenv/apex
 ```
 
 This loads the plugin from disk for a single session. Edit files, reload Claude Code, see changes.
@@ -119,7 +119,7 @@ This loads the plugin from disk for a single session. Edit files, reload Claude 
 ```bash
 # In the plugin directory
 git init && git add -A && git commit -m "Initial commit"
-git remote add origin git@github.com:<you>/sdlc-methodology.git
+git remote add origin git@github.com:<you>/apex.git
 git push -u origin main
 ```
 
