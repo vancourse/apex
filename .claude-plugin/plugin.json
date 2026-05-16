@@ -12,11 +12,5 @@
     "planning",
     "design-review",
     "pr-review"
-  ],
-  "dependencies": [
-    "superpowers",
-    "frontend-design",
-    "skill-creator",
-    "consolidate-memory"
   ]
 }

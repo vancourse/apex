@@ -49,16 +49,16 @@ Reference files at `rules/`, loaded on-demand by skills:
 
 These are not auto-loaded. Skills reference them by anchor; your own CLAUDE.md can reference them when relevant.
 
-### Plugin dependencies
+### Recommended companions (install separately)
 
-This plugin declares `dependencies` in `plugin.json` for tools used heavily alongside this methodology:
+These are not declared as `dependencies` in `plugin.json` — Claude Code's dependency resolver requires every listed dep to resolve to an installable plugin by name, and a single typo or a name that's actually a skill (rather than a plugin) silently fails the entire install. We keep apex's manifest dependency-free and list its useful companions here instead:
 
-- `superpowers` — brainstorming, planning, debugging, TDD, parallel-agent skills
-- `frontend-design` — distinctive, polished frontend interfaces
-- `skill-creator` — create / iterate skills
-- `consolidate-memory` — reflective memory consolidation
+- `superpowers` (in `obra/superpowers` marketplace) — brainstorming, planning, debugging, TDD, parallel-agent skills
+- `frontend-design` (in `anthropics/claude-plugins-official`) — distinctive, polished frontend interfaces
+- `skill-creator` (in `anthropics/claude-plugins-official`) — create / iterate skills
+- `anthropic-skills` (in `anthropics/claude-plugins-official`) — bundles `consolidate-memory`, `pdf`, `xlsx`, `docx`, `pptx`, `skill-creator`, and others
 
-If you don't use one of these, remove it from `dependencies` before installing. If a dependency lives in a marketplace you haven't added, the install will fail to resolve it — make sure the relevant marketplaces are configured.
+Install each separately via `/plugin install <name>@<marketplace>` if you want them.
 
 ## What this plugin does NOT ship
 
