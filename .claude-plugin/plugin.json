@@ -1,0 +1,22 @@
+{
+  "name": "sdlc-methodology",
+  "version": "0.1.0",
+  "description": "Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist, phase-routed skill gates, hooks for workflow automation. Pairs custom review skills with curated third-party plugin dependencies.",
+  "author": {
+    "name": "Ravi"
+  },
+  "keywords": [
+    "sdlc",
+    "methodology",
+    "code-review",
+    "planning",
+    "design-review",
+    "pr-review"
+  ],
+  "dependencies": [
+    "superpowers",
+    "frontend-design",
+    "skill-creator",
+    "consolidate-memory"
+  ]
+}
