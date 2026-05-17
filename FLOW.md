@@ -2,6 +2,36 @@
 
 How this plugin's skills and hooks compose into a single workflow. Read this when you want to know *which skill fires at which phase* — the README answers "what's installed" and "how do I install it."
 
+## Architecture phase (one-time, or amendment-triggered)
+
+This phase runs ONCE at project start and again whenever a feature crosses the existing architecture boundary (triggered by `apex:design-feature` Pass 4 finding incompatible integration).
+
+```
+   ┌───────────────────────────────────────────────────────────────┐
+   │ ARCHITECTURE (foundational; not per-feature)                  │
+   │    apex:architecture-design                                   │
+   │      §1 Framework / runtime / language                        │
+   │      §2 Persistence + tenancy model                           │
+   │      §3 Trust boundaries + auth + data classification         │
+   │      §4 Observability + deployment shape                      │
+   │      §5 Design system + UI foundation                         │
+   │      §6 Branch / release / PR-stack strategy                  │
+   │      §7 System-level threat model (STRIDE)                    │
+   │      → each pass outputs an ADR in docs/adr/                  │
+   │      → FREEZE the architecture                                │
+   │                                                               │
+   │    apex:adr-review                                            │
+   │      5-element audit per ADR: context, decision, alternatives,│
+   │      consequences (incl. security + reversibility), status    │
+   │      Fires for every ADR (initial set + amendments).          │
+   └───────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+                  feature work pipeline below ↓
+```
+
+Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can't be served by the frozen architecture, STOP the feature work and write an amendment ADR via `apex:adr-review` first. Then resume design against the amended architecture.
+
 ## The pipeline
 
 ```
@@ -45,8 +75,14 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    │                              (4-column audit table)           │
    │    apex:design-feature     (if NEW feature, not fix —         │
    │                              scenarios + MVP + deferrals +    │
-   │                              integration + failure modes,     │
+   │                              integration + failure modes +    │
+   │                              §6 attack surface,               │
    │                              with overlap + OSS + adversarial)│
+   │    apex:threat-model       (if feature accepts external input,│
+   │                              handles classified data, or      │
+   │                              changes a privilege transition — │
+   │                              STRIDE against attack surface,   │
+   │                              anchored on ADR-0003 + ADR-0007) │
    │    api-surface-review      (if new endpoint/payload/handler   │
    │                              → run against PROPOSED shape)    │
    │    protocol-first-workflow (if starting new Python component) │
@@ -108,6 +144,12 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    │                              mock budget, failure-mode        │
    │                              coverage (test SET, vs ai-pre-   │
    │                              review-checklist's per-test)     │
+   │    apex:security-review     5 passes: secrets, authn+authz,   │
+   │                              input val + output encoding, dep │
+   │                              vuln + supply chain, audit log + │
+   │                              security observability. Verifies │
+   │                              implementation against the       │
+   │                              feature's threat model output.   │
    │    pr-discipline §2          full check suite → squash WIPs   │
    │                              to ONE commit per PR             │
    │    api-surface-review        (if API surface touched)         │
@@ -180,6 +222,7 @@ Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=
 prd-review                     ✓
 apex-flow                            ✓
 design-feature                       ✓⁷
+threat-model                         ✓⁸
 impl-plan-review                            ✓
 test-strategy                               ✓         ✓
 api-surface-review                   ✓                ✓                ✓                                  ✓¹
@@ -192,6 +235,7 @@ verify-ports                         ✓⁵               ✓⁵
 verification-before-completion                                ✓
 ai-pre-review-checklist                                              ✓
 test-coverage-audit                                                  ✓
+security-review                                                      ✓⁹
 pr-discipline                                                        ✓      ✓                                    ✓
 pr-review-primer                                                            ✓
 copilot-review-loop                                                                ✓
@@ -211,8 +255,11 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 ⁵ porting / adapting code from another repository
 ⁶ when addressing reviewer comments on an open PR (human or Copilot)
 ⁷ NEW feature design (not fix) — distinct from `apex-flow` §1b which covers fixes + refactors generically
+⁸ when the feature accepts external input, handles classified data, or changes a privilege transition
+⁹ for any PR touching auth / data access / external input / cryptography / sensitive paths
+(architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
-## Seven principles overlaid on the pipeline
+## Eight principles overlaid on the pipeline
 
 1. **Plan before coding** — never skip phase 1; re-enter it mid-task if the design breaks. For NEW features, phase 0 (SPEC) + phase 2 (IMPL-PLAN) are both required upstream gates.
 2. **Multi-phase rule** — `api-surface-review` runs at PLAN, IMPL, AND PRE-PR. Invoking it once does not discharge later gates. Design intent and code reality diverge between phases; the later passes catch the drift.
@@ -220,7 +267,8 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 4. **Ask before push** — every transition from local → remote requires explicit user confirmation. Default to `--draft` on PR creation.
 5. **Self-improvement loop** — every non-obvious lesson goes into memory or domain-knowledge so the next session starts smarter.
 6. **Loop termination** — the COPILOT review (phase 6b) and human-review address cycle (phase 6c) both terminate at NITs-only OR 5 rounds. Five rounds with non-NIT issues outstanding = the PR shape is wrong; return to an upstream gate (IMPL-PLAN, design, or PRD).
-7. **Freeze gates** — the PRD freezes after `apex:prd-review` Pass 7; the implementation plan freezes after `apex:impl-plan-review`. Both freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation."
+7. **Freeze gates** — the architecture freezes after `apex:architecture-design` (7 ADRs); the PRD freezes after `apex:prd-review` Pass 7; the implementation plan freezes after `apex:impl-plan-review`. All three freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation." Per-feature work runs against frozen upstream artifacts.
+8. **Security is structural, not ceremonial** — `apex:architecture-design` Pass 3 (trust boundaries + auth + data classification) and Pass 7 (system-level threat model) set the security invariants ALL future features inherit. `apex:threat-model` applies STRIDE per-feature against those invariants. `apex:security-review` audits the implementation against the threat model at PR time. The hook `scan-secrets-on-edit` BLOCKS writes that contain real-looking secrets. Security checked at design beats security checked at PR; security checked at PR beats security found in prod.
 
 ## When to skip phases
 

@@ -1,6 +1,14 @@
-# Security
+# Security — Python tooling specifics
 
-Rules for secrets, input validation, authorization, path traversal, and prompt injection.
+Python-specific security patterns (secrets handling, Pydantic boundary validation, parameterized queries, authn/authz at edge, PII redaction, filename sanitization, path-traversal prevention, LLM prompt delimitation, parsing bounds).
+
+The 5-pass PR-time security audit methodology — secrets management, authn/authz, input validation + output encoding, dependency vulnerability + supply chain, audit log + observability for security events — lives in **`apex:security-review`**.
+
+Design-phase threat modeling (STRIDE against the feature's attack surface, anchored on system-level trust boundaries) lives in **`apex:threat-model`**.
+
+Foundational architecture-level security decisions (trust boundaries, data classification, auth model, system-level threat model) live in **`apex:architecture-design`** Passes 3 + 7.
+
+This file holds Python-specific implementation patterns the above gates reference.
 
 ## Secrets Never Live in Code or Logs
 

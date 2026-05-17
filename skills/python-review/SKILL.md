@@ -20,7 +20,9 @@ the current task — do not load all of them.
 | Python testing tooling (pytest stubs vs MagicMock, async fixture typing, .model_dump test data, transaction-rollback fixture, pytest-xdist) | `rules/testing.md`                          |
 | Exception specificity, fail-fast, silent data loss, `assert` in production   | `rules/error-handling.md`                   |
 | `structlog`, log levels, PII redaction, error IDs, docstring contracts       | `rules/logging-observability.md`            |
-| Auth, secrets, SQLi, path traversal, prompt injection, parsing bounds        | `rules/security.md`                         |
+| **PR-time security audit** (secrets / authn+authz / input validation + output encoding / dep vuln + supply chain / audit log) | invoke **`apex:security-review`** |
+| **Design-phase threat modeling** (STRIDE against feature attack surface) | invoke **`apex:threat-model`** |
+| Python security tooling (secrets in `os.environ`, Pydantic boundary, parameterized SQL, filename sanitization, path-traversal, LLM delimitation, parsing bounds) | `rules/security.md`                         |
 | FastAPI routes, request validation, partial success, pagination envelopes    | `rules/api-design.md`                       |
 | Imports, layer placement, dead code, docstring drift, dependency management  | `rules/code-hygiene.md`                     |
 | AI-assisted code (`getattr`/`hasattr`/`isinstance` speculation, SDK guards)  | `rules/ai-code-smells.md`                   |

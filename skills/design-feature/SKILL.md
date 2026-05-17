@@ -91,6 +91,16 @@ The adversarial half asks *"what is this design getting away with?"*
 
 **Adversarial counter-pass:** Walk each failure mode and find the one where the design says "throws an error" or "logs and continues" without specifying *user-visible behavior*. Those are unresolved — the implementation will fill them in arbitrarily and the user will see something accidental. Also: name a failure mode not in the list above that this specific feature uniquely exposes (e.g., schema migration mid-rollout, feature-flag flip mid-request, partial CDN cache).
 
+### Pass 6 — Attack surface (invoke `apex:threat-model`)
+
+**Check:** Apply STRIDE to this feature's attack surface, anchored on the trust boundaries + data classification from `apex:architecture-design` Pass 3 (or your equivalent ADR-0003). Run the full **`apex:threat-model`** skill and append its "Threat Model" output to this design doc.
+
+**Why:** Pass 5 covers *operational* failure modes (cold start, empty data, half-state) — what the system does when something goes wrong. Pass 6 covers *adversarial* failure modes — what the system does when someone tries to make something go wrong. They have different mental models, different mitigations, and different reviewers; conflating them buries security in operational concerns.
+
+**Pass condition:** The threat model produces a 6-category output (Spoofing / Tampering / Repudiation / Information disclosure / DoS / Elevation of privilege) with named mitigations OR explicit accepted residual risks per category. `apex:security-review` (PR time) audits the implementation against this output.
+
+**Adversarial counter-pass:** Don't author the threat model yourself in cooperative mode — dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` for any feature touching auth, payment, multi-tenant data, admin actions, or cryptography. See `apex:threat-model` for the "when to invoke the heavier pattern" criteria.
+
 ## Existing-product overlap scan
 
 Same shape as the PRD-review scan, with an implementation lens:

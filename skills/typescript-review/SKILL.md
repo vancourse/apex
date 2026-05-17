@@ -27,6 +27,9 @@ the current task — do not load all of them.
 | Imports, dead code, speculative exports, PR discipline        | `rules/code-hygiene.md`           |
 | AI-assisted code (speculative defaults, three-state null)     | `rules/ai-code-smells.md`         |
 | FE doing server-domain work (classify, synthesise, transform) | `rules/frontend-backend-layering.md` |
+| **PR-time security audit** (secrets / authn+authz / input validation + output encoding / dep vuln + supply chain / audit log) | invoke **`apex:security-review`** |
+| **Design-phase threat modeling** (STRIDE against feature attack surface) | invoke **`apex:threat-model`** |
+| TS/React security tooling (no secrets in localStorage; XSS / dangerouslySetInnerHTML; CSP; cookie flags HttpOnly+Secure+SameSite; CSRF tokens; open-redirect validation; postMessage origin checks; iframe sandbox; SRI; error-tracker filters) | `rules/security.md` |
 
 ## When multiple topics apply
 
