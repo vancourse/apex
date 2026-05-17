@@ -24,9 +24,12 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    │           refactors, debugging)                               │
    │    superpowers:brainstorming  (explore intent — if no PRD yet)│
    │    superpowers:writing-plans  (turn intent into a plan/PRD)   │
-   │    apex:prd-review            (audit the PRD — 5 passes +     │
-   │                                product-overlap + OSS scan +   │
-   │                                adversarial counter-pass)      │
+   │    apex:prd-review            (7-pass audit: criteria,        │
+   │                                scenarios, scope, unknowns,    │
+   │                                metric, sequencing, freeze;    │
+   │                                + product-overlap + OSS scan   │
+   │                                + adversarial counter-pass.    │
+   │                                FREEZE the spec at Pass 7.)    │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -199,7 +202,7 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 ⁶ when addressing reviewer comments on an open PR (human or Copilot)
 ⁷ NEW feature design (not fix) — distinct from `apex-flow` §1b which covers fixes + refactors generically
 
-## Five principles overlaid on the pipeline
+## Seven principles overlaid on the pipeline
 
 1. **Plan before coding** — never skip phase 1; re-enter it mid-task if the design breaks. For NEW features, phase 0 (SPEC) + phase 2 (IMPL-PLAN) are both required upstream gates.
 2. **Multi-phase rule** — `api-surface-review` runs at PLAN, IMPL, AND PRE-PR. Invoking it once does not discharge later gates. Design intent and code reality diverge between phases; the later passes catch the drift.
@@ -211,14 +214,16 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 
 ## When to skip phases
 
-The pipeline assumes a non-trivial change. For trivial work, drop phases:
+The pipeline assumes a non-trivial NEW-feature change. For trivial or non-feature work, drop phases:
 
 | Change type | Phases that fire |
 |---|---|
-| Typo / single-line fix / obvious bug | 2, 3, 5 (no plan, no robustness gate) |
-| Internal refactor with no API change | 1 (light), 2, 3, 4, 5, 6 (skip api-surface-review) |
-| New endpoint / payload / service handler | all phases, all skills |
-| Doc / comment update | 5 only (still ask before push) |
-| Reviewing someone else's PR | 6 only |
+| Typo / single-line fix / obvious bug | 3, 4, 6 (skip 0 SPEC, 1 PLAN, 2 IMPL-PLAN, 5 PRE-PR) |
+| Internal refactor with no API change | 1 (light), 3, 4, 5, 6, 7 (skip 0 SPEC, 2 IMPL-PLAN, api-surface-review) |
+| Fix / refactor of existing behavior | 1, 3, 4, 5, 6, 7 (skip 0 SPEC — no new spec; skip 2 IMPL-PLAN unless the fix touches >1 layer) |
+| NEW endpoint / payload / handler | 0, 1, 2, 3, 4, 5, 6, 6b, 6c, 7 — all phases, all skills |
+| NEW feature from scratch | all phases (0 → 7), full freeze-gate chain (spec → design → plan) |
+| Doc / comment-only update | 6 only (still ask before push; Copilot review optional per `apex:pr-discipline`) |
+| Reviewing someone else's PR | 7 only |
 
-When in doubt, run the gate. The cost is one skill invocation; the cost of skipping is multiple review cycles.
+When in doubt, run the gate. The cost is one skill invocation; the cost of skipping is multiple review cycles or a misshapen feature.
