@@ -49,6 +49,32 @@ Each layer has exactly one concern, one mocking policy, one home in the repo, on
 
 **Deletion implication.** Router tests that mock the DB and assert business behavior are doing the wrong job. They get folded into service tests with real DB. The router contract test gets ≤3 narrow assertions per router.
 
+### Mapping to industry-standard terms
+
+The apex layer names emphasize the *concern* (service-real-DB, scenario-through-API, browser-driven). Common industry terms map as follows:
+
+| Industry term | Apex layer(s) | Notes |
+|---|---|---|
+| Unit test | 1 | Pure functions, no I/O, no collaborators |
+| Narrow integration test | 2 | One service + its real collaborators (DB, internal services). External SDKs mocked at boundary |
+| Broad integration test, or **API-level system test** | 4 | Drives the backend through `/api/*` end-to-end with recorded external fixtures. Often collapsed with plain "integration test" by shops that don't distinguish narrow/broad |
+| Router / controller contract test | 3 | ≤3 narrow assertions per router; wiring + auth + shape only |
+| Component / widget test | 5 | One frontend component in isolation, with API responses fixtured |
+| End-to-end (E2E) test, or **UI-level system test** | 6, 7 | Browser-driven; real backend, real DB; external SDKs fixtured at backend boundary |
+| Smoke test against real upstream / canary | 8 | Drift detection only; pinned model snapshots |
+
+**"Is integration test the same as system test?"** Strictly **no** — integration test verifies *integration between specific components* (Martin Fowler: narrow = two collaborators; broad = many through a slice). System test verifies *the entire system as a black box*, usually via the public API or UI. In practice the two terms collapse at the API level (Layer 4), where the broadest non-UI test happens to be both. Apex avoids picking a side: Layer 4 is named "backend API scenario" to describe what it *does* (one PRD scenario, end-to-end through `/api/*`), not which industry term wins in your shop.
+
+**Common collapses you may see in the wild:**
+
+- "Integration test" used to mean Layer 2 (services + DB) — common in backend-heavy teams
+- "Integration test" used to mean Layer 4 (API-level) — common in service-oriented teams
+- "System test" used to mean Layer 4 — common in REST/HTTP-focused teams
+- "System test" used to mean Layer 6/7 — common in product / QA-led teams
+- "End-to-end test" used to mean Layer 4 OR Layer 6, depending on whether the team considers the UI part of "the system"
+
+When a stakeholder uses one of these terms, ask which layer they mean; don't assume.
+
 ## Mocking policy per layer
 
 | Layer | What can be mocked | What CANNOT |
