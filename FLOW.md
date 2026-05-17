@@ -20,14 +20,30 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
                 └──────────────────┬──────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
+   │ 0. SPEC  (when starting a NEW feature — skip for fixes,       │
+   │           refactors, debugging)                               │
+   │    superpowers:brainstorming  (explore intent — if no PRD yet)│
+   │    superpowers:writing-plans  (turn intent into a plan/PRD)   │
+   │    apex:prd-review            (audit the PRD — 5 passes +     │
+   │                                product-overlap + OSS scan +   │
+   │                                adversarial counter-pass)      │
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+   ┌───────────────────────────────▼───────────────────────────────┐
    │ 1. PLAN                                                       │
-   │    apex-flow        §1a reconnaissance                 │
+   │    apex-flow               §1a reconnaissance                 │
    │                              (cost-shape inversion,           │
    │                               codebase recon,                 │
    │                               producer/consumer dual)         │
    │                            §1b adversarial checklist          │
    │                              (min change, alternatives,       │
    │                               critiques, reuse-vs-add)        │
+   │                            §1c verify ask vs raw quotes       │
+   │                              (4-column audit table)           │
+   │    apex:design-feature     (if NEW feature, not fix —         │
+   │                              scenarios + MVP + deferrals +    │
+   │                              integration + failure modes,     │
+   │                              with overlap + OSS + adversarial)│
    │    api-surface-review      (if new endpoint/payload/handler   │
    │                              → run against PROPOSED shape)    │
    │    protocol-first-workflow (if starting new Python component) │
@@ -58,10 +74,11 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
    │ 4. PRE-PR ROBUSTNESS GATE                                     │
-   │    ai-pre-review-checklist   8 steps: explain, layering,      │
+   │    ai-pre-review-checklist   9 steps: explain, layering,      │
    │                              state ownership, concurrency,    │
    │                              success/failure/fallback,        │
-   │                              tests, reviewer-sim, gaps        │
+   │                              tests, consumer-tracing,         │
+   │                              reviewer-sim, gaps               │
    │    pr-discipline §2          full check suite → squash WIPs   │
    │                              to ONE commit per PR             │
    │    api-surface-review        (if API surface touched)         │
@@ -103,24 +120,36 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────────────────────────────────────┘
 ```
 
+## Side paths (not phase-sequential)
+
+**DEBUG.** When a bug, test failure, or unexpected behavior interrupts any phase above, drop into `superpowers:systematic-debugging` (root-cause-first / reproduce-first / log-first discipline). Apex deliberately defers — the systematic-debugging skill is a complete discipline and we don't duplicate it. Once the bug is understood, return to whatever phase you were in.
+
+**ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` — one cooperative, one adversarial, both running the same apex skill on the same input. The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
+
 ## Skill × Phase matrix
 
 ```
-                              PLAN  IMPL  VERIFY  PRE-PR  OPEN  POST-OPEN  REVIEW
-apex-flow               ✓
-api-surface-review             ✓    ✓             ✓                          ✓¹
-python-review                       ✓             ✓                          ✓
-typescript-review                   ✓             ✓                          ✓
-frontend-design                     ✓²
-protocol-first-workflow        ✓³   ✓³
-polymorphic-type-modeling      ✓⁴   ✓⁴
-verify-ports                   ✓⁵   ✓⁵
-verification-before-completion              ✓
-ai-pre-review-checklist                            ✓
-pr-discipline                                      ✓      ✓                  ✓
-pr-review-primer                                          ✓
-responding-to-review                                                ✓⁶
-memory-note                                                                  after
+                              SPEC  PLAN  IMPL  VERIFY  PRE-PR  OPEN  POST-OPEN  REVIEW
+prd-review                     ✓
+apex-flow                            ✓
+design-feature                       ✓⁷
+api-surface-review                   ✓    ✓             ✓                          ✓¹
+python-review                              ✓             ✓                          ✓
+typescript-review                          ✓             ✓                          ✓
+frontend-design                            ✓²
+protocol-first-workflow              ✓³   ✓³
+polymorphic-type-modeling            ✓⁴   ✓⁴
+verify-ports                         ✓⁵   ✓⁵
+verification-before-completion                    ✓
+ai-pre-review-checklist                                  ✓
+pr-discipline                                            ✓      ✓                  ✓
+pr-review-primer                                                ✓
+responding-to-review                                                  ✓⁶
+memory-note                                                                          after
+
+superpowers:systematic-debugging   — side path; fires on bug discovery (any phase)
+superpowers:brainstorming          — upstream of SPEC (intent exploration)
+superpowers:writing-plans          — upstream of SPEC (plan/PRD authoring)
 ```
 
 ¹ if API surface in diff
@@ -129,6 +158,7 @@ memory-note                                                                  aft
 ⁴ new variant / event-type / discriminated union
 ⁵ porting / adapting code from another repository
 ⁶ when addressing reviewer comments on an open PR
+⁷ NEW feature design (not fix) — distinct from `apex-flow` §1b which covers fixes + refactors generically
 
 ## Five principles overlaid on the pipeline
 

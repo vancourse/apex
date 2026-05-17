@@ -12,10 +12,12 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 | Skill | What it does |
 |---|---|
-| `apex-flow` | Umbrella planning gates: reconnaissance + adversarial design checklist + phase-routing pointer |
+| `prd-review` | 5-pass PRD audit (acceptance criteria / out-of-scope / unknowns / success metric / sequencing) + internal-product-overlap scan + OSS-alternatives scan + inline adversarial counter-pass. The SPEC-phase gate, before design. |
+| `apex-flow` | Umbrella planning gates: §1a reconnaissance + §1b adversarial design checklist + §1c verify ask vs raw quotes + phase-routing pointer |
+| `design-feature` | Feature-design-from-scratch gate (NEW features, not fixes) — scenarios + MVP cut + deferral list + integration with existing surface + failure modes, with product-overlap + OSS-alternatives + adversarial counter-pass. Distinct from `apex-flow` §1b which is generic. |
 | `pr-discipline` | Draft-PR default, pre-commit + minimal-push, layered PR stacks (≤400 LOC), single-PR review scope, self-review checklist, responding-to-comments pointer |
 | `api-surface-review` | 5-pass review of new endpoints / payloads / handlers from the *consumer's* perspective |
-| `ai-pre-review-checklist` | 8-step robustness gate for AI-assisted branches (branch explanation, layering, state, concurrency, fallback, tests, reviewer sim, gaps) |
+| `ai-pre-review-checklist` | 9-step robustness gate for AI-assisted branches (branch explanation, layering, state, concurrency, fallback, tests, **consumer-tracing**, reviewer sim, gaps) |
 | `verification-before-completion` | Phase 3 gate — prove the change works before claiming done (run tests, check logs, exercise in browser, cover edge cases) |
 | `verify-ports` | 5-point checklist when copying code from another repo (schema / product state / UX / external format / defensive code) |
 | `responding-to-review` | PR review-comment discipline — every blocker needs a concrete artifact, every reply maps to a diff |
@@ -26,6 +28,8 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `typescript-review` | Generic TS/React rules with a routing table to 13 topic files |
 | `summarize-changes` | Branch / working-tree summary with risks and likely verification commands |
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
+
+**Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, `superpowers:dispatching-parallel-agents` for the two-agent adversarial pair pattern referenced by `prd-review` and `design-feature`.
 
 ### Hooks
 
