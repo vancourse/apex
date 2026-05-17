@@ -74,7 +74,10 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
    │ 3. IMPLEMENT (+ tests-per-layer; PRD scenarios → integration  │
-   │               tests 1:1 — see python-review/rules/testing.md) │
+   │               tests 1:1 — methodology: apex:test-strategy)    │
+   │    test-strategy              (8-layer model, mocking policy, │
+   │                                CI tiering, isolation, 17 rules│
+   │                                — routes the test-writing)     │
    │    python-review              (Python — routes to topic file) │
    │    typescript-review          (TS / React — same)             │
    │    frontend-design            (UI change)                     │
@@ -98,8 +101,13 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    │    ai-pre-review-checklist   9 steps: explain, layering,      │
    │                              state ownership, concurrency,    │
    │                              success/failure/fallback,        │
-   │                              tests, consumer-tracing,         │
-   │                              reviewer-sim, gaps               │
+   │                              tests (quality), consumer-       │
+   │                              tracing, reviewer-sim, gaps      │
+   │    test-coverage-audit       5 passes: PRD↔mirror, layer      │
+   │                              discipline, tier discipline,     │
+   │                              mock budget, failure-mode        │
+   │                              coverage (test SET, vs ai-pre-   │
+   │                              review-checklist's per-test)     │
    │    pr-discipline §2          full check suite → squash WIPs   │
    │                              to ONE commit per PR             │
    │    api-surface-review        (if API surface touched)         │
@@ -173,6 +181,7 @@ prd-review                     ✓
 apex-flow                            ✓
 design-feature                       ✓⁷
 impl-plan-review                            ✓
+test-strategy                               ✓         ✓
 api-surface-review                   ✓                ✓                ✓                                  ✓¹
 python-review                                         ✓                ✓                                  ✓
 typescript-review                                     ✓                ✓                                  ✓
@@ -182,6 +191,7 @@ polymorphic-type-modeling            ✓⁴               ✓⁴
 verify-ports                         ✓⁵               ✓⁵
 verification-before-completion                                ✓
 ai-pre-review-checklist                                              ✓
+test-coverage-audit                                                  ✓
 pr-discipline                                                        ✓      ✓                                    ✓
 pr-review-primer                                                            ✓
 copilot-review-loop                                                                ✓

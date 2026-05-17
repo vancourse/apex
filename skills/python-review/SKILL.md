@@ -16,7 +16,8 @@ the current task — do not load all of them.
 | Pydantic models, dataclasses, typing, generics, state transitions            | `rules/types-and-models.md`                 |
 | SQL queries, ORM, N+1, pagination, caching, connection pools, idempotency    | `rules/db-and-sql.md`                       |
 | asyncio tasks, locks, timeouts, sync-in-async, SSE streaming                 | `rules/async-concurrency.md`                |
-| pytest, fixtures, stubs vs MagicMock, integration tests, mock discipline     | `rules/testing.md`                          |
+| **Test methodology** (8-layer model, mocking policy, PRD↔mirror, scenarios-first, CI tiering, isolation, 17 rules) | invoke **`apex:test-strategy`** |
+| Python testing tooling (pytest stubs vs MagicMock, async fixture typing, .model_dump test data, transaction-rollback fixture, pytest-xdist) | `rules/testing.md`                          |
 | Exception specificity, fail-fast, silent data loss, `assert` in production   | `rules/error-handling.md`                   |
 | `structlog`, log levels, PII redaction, error IDs, docstring contracts       | `rules/logging-observability.md`            |
 | Auth, secrets, SQLi, path traversal, prompt injection, parsing bounds        | `rules/security.md`                         |

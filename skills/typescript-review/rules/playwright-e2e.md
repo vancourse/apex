@@ -1,6 +1,6 @@
 # Playwright E2E Tests
 
-State-based waits, test isolation, selectors, and test data hygiene.
+State-based waits, test isolation, selectors, and test data hygiene — Playwright-specific tooling. For the underlying methodology (when E2E vs component vs scenario tests apply, mocking policy at the E2E boundary, CI tier placement, recorded fixtures at the backend boundary), invoke **`apex:test-strategy`** first.
 
 ## State-Based Waits — Replace `waitForTimeout` Everywhere
 

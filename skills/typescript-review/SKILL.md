@@ -21,6 +21,8 @@ the current task — do not load all of them.
 | React hooks — deps, stale closures, AbortController, cleanup  | `rules/react-hooks.md`            |
 | React components — props, dialogs, mutations, routing, a11y   | `rules/react-components.md`       |
 | Zustand (or similar) stores — atomic updates, cleanup         | `rules/zustand-stores.md`         |
+| **Test methodology** (8-layer model, mocking policy, PRD↔mirror, scenarios-first, CI tiering, isolation, 17 rules) | invoke **`apex:test-strategy`** |
+| TS/React testing tooling (Vitest vi.mock vs MSW, @testing-library/react + user-event, TanStack Query fresh client, Zod test payloads) | `rules/testing.md`                |
 | Playwright e2e — state-based waits, isolation, selectors      | `rules/playwright-e2e.md`         |
 | Imports, dead code, speculative exports, PR discipline        | `rules/code-hygiene.md`           |
 | AI-assisted code (speculative defaults, three-state null)     | `rules/ai-code-smells.md`         |
