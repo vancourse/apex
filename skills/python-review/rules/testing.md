@@ -25,6 +25,26 @@ Rules for test design, fixture patterns, and mock discipline.
 - Static analysis (mypy/pyright/eslint) is the cheap pre-check; integration tests are the load-bearing pre-check.
 - If the test class mocks more than two collaborators, the production code's boundaries are wrong — fix those first, then the test.
 
+## PRD ↔ Integration Test Mirror
+
+**When:** Implementing a feature whose PRD was reviewed via `apex:prd-review` (which enumerates testable scenarios at Pass 2).
+
+**Rule:** Integration tests mirror PRD scenarios **1:1**:
+
+- Every PRD scenario has **≥1 integration test** that exercises it end-to-end.
+- Every integration test names which PRD scenario it covers (in the test name, docstring, or a pytest marker — `@pytest.mark.scenario("prd-3")` is a fine pattern).
+- A scenario without a test = the PRD is unverified at the implementation layer; that's a failing pre-PR check.
+- A test without a PRD scenario = either the PRD is incomplete (amend it via a delta commit to the PRD) OR the test is gold-plating (delete it, or downgrade to a unit test).
+
+**Why:** The PRD owns the scenario list. Integration tests are the verification artifact for those scenarios. Without this mirror invariant, scope drifts silently: the team builds features the PRD didn't ask for ("gold-plating"), or skips scenarios the PRD requires ("phantom coverage"). The mirror closes the spec-to-impl loop — `apex:prd-review` Pass 2 owns the list, `apex:impl-plan-review` Pass 3 owns the test plan per layer, and this rule is what makes those two upstream gates load-bearing rather than ceremonial.
+
+**How to apply:**
+
+- Name integration tests after PRD scenarios: `test_scenario_3_user_uploads_january_pdf_balance_check_blocks_categorization`.
+- Pre-PR check: enumerate the PRD scenarios, grep for integration tests, verify 1:1 correspondence. Run this against the diff before opening the PR.
+- If you need a test that doesn't fit any PRD scenario, ask: should this scenario be amended into the PRD? If yes, do that first; if no, the test is gold-plating — delete it or convert to a unit test (which doesn't claim end-to-end verification).
+- For features where the PRD enumerates 8 scenarios but you only have 3 integration tests, that's not "we're partway done" — that's "the PRD says we shipped 8 things and we've actually shipped 3." Either ship the missing 5 or amend the PRD to reflect the actual scope.
+
 ## Explicit Collaborators With Stubs — Not `MagicMock` for Internal Services
 
 **When:** A service test needs to isolate an internal collaborator (not an external API).

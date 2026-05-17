@@ -12,15 +12,17 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 | Skill | What it does |
 |---|---|
-| `prd-review` | 5-pass PRD audit (acceptance criteria / out-of-scope / unknowns / success metric / sequencing) + internal-product-overlap scan + OSS-alternatives scan + inline adversarial counter-pass. The SPEC-phase gate, before design. |
+| `prd-review` | **7-pass PRD audit** (acceptance criteria / **testable scenarios enumerated** / out-of-scope / unknowns / success metric / sequencing / **spec-freeze readiness**) + internal-product-overlap scan + OSS-alternatives scan + inline adversarial counter-pass. The SPEC-phase gate, before design. |
 | `apex-flow` | Umbrella planning gates: §1a reconnaissance + §1b adversarial design checklist + §1c verify ask vs raw quotes + phase-routing pointer |
 | `design-feature` | Feature-design-from-scratch gate (NEW features, not fixes) — scenarios + MVP cut + deferral list + integration with existing surface + failure modes, with product-overlap + OSS-alternatives + adversarial counter-pass. Distinct from `apex-flow` §1b which is generic. |
+| `impl-plan-review` | 5-pass review of the implementation plan (how to BUILD it, not what to build) — layered PR stack + sequencing + test plan per layer (PRD scenarios → integration tests 1:1) + rollout strategy + reversibility. Plus adversarial counter-pass + plan-freeze readiness gate. |
 | `pr-discipline` | Draft-PR default, pre-commit + minimal-push, layered PR stacks (≤400 LOC), single-PR review scope, self-review checklist, responding-to-comments pointer |
 | `api-surface-review` | 5-pass review of new endpoints / payloads / handlers from the *consumer's* perspective |
 | `ai-pre-review-checklist` | 9-step robustness gate for AI-assisted branches (branch explanation, layering, state, concurrency, fallback, tests, **consumer-tracing**, reviewer sim, gaps) |
 | `verification-before-completion` | Phase 3 gate — prove the change works before claiming done (run tests, check logs, exercise in browser, cover edge cases) |
 | `verify-ports` | 5-point checklist when copying code from another repo (schema / product state / UX / external format / defensive code) |
 | `responding-to-review` | PR review-comment discipline — every blocker needs a concrete artifact, every reply maps to a diff |
+| `copilot-review-loop` | PR review loop with the Copilot bot reviewer — GraphQL `requestReviews` mutation (REST + `gh` CLI silently no-op on bots), GraphQL verification, request → wait → address → re-request cycle, stop at NITs-only OR 5 rounds whichever first |
 | `pr-review-primer` | Copy-paste reviewer-facing description template |
 | `polymorphic-type-modeling` | Discriminated-union + dispatcher + wire-format-symmetry rules for new variants |
 | `protocol-first-workflow` | Python Protocol-first TDD with mock-count limits and stub generation |

@@ -1,6 +1,6 @@
 ---
 name: prd-review
-description: 5-pass review of a Product Requirements Document or product spec — acceptance criteria, out-of-scope statement, unknowns named, success metric, sequencing. Plus internal-product-overlap and OSS-alternatives scans, plus adversarial counter-pass at every step. Fires when reading a new PRD, writing one, or auditing whether a spec is sound enough to design from. Pairs with superpowers:brainstorming (upstream — explore intent) and apex:design-feature (downstream — design the actual feature). Keywords: PRD, product spec, requirements, acceptance criteria, success metric, scope, audit.
+description: 7-pass review of a Product Requirements Document or product spec — acceptance criteria, testable scenarios enumerated (PRD owns the test list, integration tests mirror 1:1), out-of-scope statement, unknowns named, success metric, sequencing, spec-freeze readiness. Plus internal-product-overlap and OSS-alternatives scans, plus adversarial counter-pass at every step. Fires when reading a new PRD, writing one, or auditing whether a spec is sound enough to freeze and design from. Pairs with superpowers:brainstorming (upstream — explore intent), apex:design-feature (downstream — design the actual feature), apex:impl-plan-review (further downstream — review the build plan), and apex:python-review/rules/testing.md (PRD ↔ Integration Test Mirror). Keywords: PRD, product spec, requirements, acceptance criteria, scenarios, success metric, scope, audit, freeze.
 ---
 
 # PRD Review
@@ -25,12 +25,12 @@ Pairs with:
 
 ## Adversarial counter-pass — read this first
 
-Every one of the 5 passes below has an **adversarial counter-pass** appended. The counter-pass is not optional; it is the load-bearing half of the review. Run it cold, in a separate cognitive pass — ideally as a second agent (see "Adversarial pair pattern" at the end).
+Every one of the 7 passes below has an **adversarial counter-pass** appended. The counter-pass is not optional; it is the load-bearing half of the review. Run it cold, in a separate cognitive pass — ideally as a second agent (see "Adversarial pair pattern" at the end).
 
 The cooperative half asks *"does this PRD say what it needs to say?"*
 The adversarial half asks *"what is this PRD getting away with?"*
 
-## The 5 passes
+## The 7 passes
 
 ### Pass 1 — Acceptance criteria: observable, not aspirational
 
@@ -42,7 +42,17 @@ The adversarial half asks *"what is this PRD getting away with?"*
 
 **Adversarial counter-pass:** For each criterion, name a path where the criterion is *satisfied* but the user is unhappy / a competitor still beats us / the metric moved for the wrong reason. If you find one, the criterion is under-specified.
 
-### Pass 2 — Out-of-scope statement
+### Pass 2 — Testable scenarios enumerated (PRD owns the test list)
+
+**Check:** The PRD includes a list of concrete USER-FLOW SCENARIOS — not just acceptance criteria. Each scenario is "user does X, system shows Y, with edge case Z." The PRD owns this list; **integration tests at implementation time mirror it 1:1**.
+
+**Why:** Acceptance criteria are statements ("the user can do X"). Scenarios are narratives that translate criteria into concrete behavior. Without an explicit scenarios list, the design phase invents scenarios in isolation and integration tests gold-plate. With a PRD-owned scenarios list, the contract is clear: every scenario gets ≥1 integration test, every integration test names its PRD scenario, no orphans on either side. See `apex:python-review/rules/testing.md` → "PRD ↔ Integration Test Mirror" for the impl-side enforcement of this invariant.
+
+**Pass condition:** At least 3 testable scenarios written. Each names a user action, a system response, and at least one edge case (empty / error / boundary / permission-denied / partial-state). Scenarios are numbered or labeled so impl-time tests can reference them by ID.
+
+**Adversarial counter-pass:** For each scenario, name a user-visible behavior the scenario doesn't cover but the criteria seem to imply. If 2+ found, the scenario list is missing flows the criteria assume. Also: name a "happy path" scenario that has no paired failure-path counterpart — most happy paths need at least one failure-path companion scenario.
+
+### Pass 3 — Out-of-scope statement
 
 **Check:** The PRD explicitly states what is **NOT** in scope — adjacencies that look related but are deferred, edge cases that won't be handled, integrations that aren't shipping.
 
@@ -52,7 +62,7 @@ The adversarial half asks *"what is this PRD getting away with?"*
 
 **Adversarial counter-pass:** Name something OBVIOUSLY in-scope from the title/intent that isn't in the body. If you find one, either the scope is mis-stated or the in-scope list is incomplete. Also: name something the PRD treats as in-scope that *should be deferred* — feature gravity is real, MVPs balloon.
 
-### Pass 3 — Unknowns named
+### Pass 4 — Unknowns named
 
 **Check:** What's still uncertain that the design phase has to resolve? The PRD should NAME these unknowns, not pretend everything is known.
 
@@ -62,7 +72,7 @@ The adversarial half asks *"what is this PRD getting away with?"*
 
 **Adversarial counter-pass:** Name an assumption the PRD makes that isn't called out. Examples: an implicit data shape, a UX convention inherited from a sibling product without being verified for this one, a customer's tolerance for friction, a regulatory regime, a deployment topology. Every "obviously" you can identify is an unknown the PRD didn't name.
 
-### Pass 4 — Success metric
+### Pass 5 — Success metric
 
 **Check:** How will we know AFTER launch whether this worked?
 
@@ -75,7 +85,7 @@ The adversarial half asks *"what is this PRD getting away with?"*
 
 **Adversarial counter-pass:** Name a way the metric could move in the right direction without the feature actually working (Goodhart's law). Examples: usage goes up because the feature is unavoidable, not because users love it; retention goes up because we removed an off-ramp, not because we added value; satisfaction goes up because the comparison cohort is smaller. If you can name such a path, the metric is gameable and needs a paired anti-metric.
 
-### Pass 5 — Sequencing / dependency
+### Pass 6 — Sequencing / dependency
 
 **Check:** What does this feature depend on? What depends on this feature shipping? Is the ordering explicit?
 
@@ -84,6 +94,24 @@ The adversarial half asks *"what is this PRD getting away with?"*
 **Pass condition:** Upstream dependencies are named with status (shipped / in-flight / not started); downstream features are named with the contract this PRD owes them.
 
 **Adversarial counter-pass:** Name a dependency the PRD assumes is solved but isn't (e.g., "users will already have X" when X is itself a future feature). Also: name a downstream feature that quietly depends on a particular shape this PRD produces — and isn't acknowledged.
+
+### Pass 7 — Spec freeze readiness
+
+**Check:** Passes 1-6 are all cleared. Adversarial counter-passes addressed. Overlap and OSS scans complete (see below). Stakeholders have signed off (or, for solo work, you have signed off in a separate cognitive role from the author role).
+
+**Why freeze matters:** From this moment on, scope changes require a documented PRD amendment (a delta commit to the PRD). Without an explicit freeze, scope creep during design / impl-plan / implementation phases compounds — the team builds against a moving target. Freeze gives the downstream phases something stable to react to.
+
+**What "frozen" means in practice:**
+
+- No more "obvious requirements" added to the PRD without an amendment commit
+- `apex:design-feature` can now load and trust the spec
+- `apex:impl-plan-review` can scope the layered PR stack against a fixed acceptance surface
+- Integration tests will be planned 1:1 against Pass 2's scenarios (`apex:python-review/rules/testing.md` → "PRD ↔ Integration Test Mirror")
+- If reality later forces a spec change, it's an EXPLICIT amendment, not a silent re-interpretation during implementation
+
+**Pass condition:** A frozen-spec marker exists. Format doesn't matter (commit message, git tag, YAML field, status-doc row, doc heading) — the marker is what matters. The PRD itself states "frozen as of <date / commit / amendment-N>."
+
+**Adversarial counter-pass:** Name a part of the spec that's still ambiguous enough that two implementers would build subtly different things. If found, the spec isn't ready to freeze — that ambiguity needs resolving first. Also: name an "obviously" implied behavior that isn't actually written down — those are the silent re-interpretations that bite during implementation.
 
 ## Existing-product overlap scan
 
@@ -126,7 +154,7 @@ For any non-trivial feature, ask: **does open-source already solve this?** Reinv
 
 The inline adversarial counter-passes above are the *cheap* version (one agent does both). For non-trivial PRDs, dispatch the review as **two parallel agents** (see `superpowers:dispatching-parallel-agents`):
 
-- **Cooperative agent** — runs the 5 passes + overlap scan + OSS scan in "steelman" mode. Finds what works, what's well-stated, what's defensible. Reports with citations.
+- **Cooperative agent** — runs the 7 passes + overlap scan + OSS scan in "steelman" mode. Finds what works, what's well-stated, what's defensible. Reports with citations.
 - **Adversarial agent** — runs the same checklist in attack mode. Each adversarial counter-pass becomes the primary lens. Finds what's vague, what's assumed away, what's overstated, what's missing. Reports with file:line citations from the PRD itself.
 
 Both agents run in isolated worktrees with the same input PRD. They report independently. Reconcile their findings. Most real PRD weaknesses surface only when both views are produced and compared — single-pass review reliably misses the adversarial half.
@@ -135,7 +163,7 @@ Both agents run in isolated worktrees with the same input PRD. They report indep
 
 The PRD passes if:
 
-- All 5 passes meet their pass conditions
+- All 7 passes meet their pass conditions
 - Existing-product overlap is explicitly addressed (no overlap proven, or replacement/extension stated)
 - ≥1 OSS alternative was considered with rationale
 - The adversarial counter-pass (or adversarial agent) produced findings that have either been addressed in the PRD or explicitly accepted with reason

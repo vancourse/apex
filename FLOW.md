@@ -53,7 +53,25 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 2. IMPLEMENT                                                  │
+   │ 2. IMPL PLAN  (how to BUILD it — distinct from §1 PLAN which  │
+   │                is what to build; frozen design enters here)   │
+   │    impl-plan-review        §1 layered PR stack                │
+   │                              (≤400 LOC per PR, one layer)     │
+   │                            §2 sequencing / dependency order   │
+   │                              (foundation → service → API → UI)│
+   │                            §3 test plan per layer             │
+   │                              (PRD scenarios → integration     │
+   │                               tests 1:1)                      │
+   │                            §4 rollout strategy                │
+   │                              (feature flag / direct deploy /  │
+   │                               migration-first / compat window)│
+   │                            §5 reversibility (rollback story)  │
+   │                            then FREEZE the plan               │
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+   ┌───────────────────────────────▼───────────────────────────────┐
+   │ 3. IMPLEMENT (+ tests-per-layer; PRD scenarios → integration  │
+   │               tests 1:1 — see python-review/rules/testing.md) │
    │    python-review              (Python — routes to topic file) │
    │    typescript-review          (TS / React — same)             │
    │    frontend-design            (UI change)                     │
@@ -63,7 +81,7 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 3. VERIFY                                                     │
+   │ 4. VERIFY                                                     │
    │    verification-before-completion  "Never declare done        │
    │                                     without proof."           │
    │       • run tests                                             │
@@ -73,7 +91,7 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 4. PRE-PR ROBUSTNESS GATE                                     │
+   │ 5. PRE-PR ROBUSTNESS GATE                                     │
    │    ai-pre-review-checklist   9 steps: explain, layering,      │
    │                              state ownership, concurrency,    │
    │                              success/failure/fallback,        │
@@ -86,7 +104,7 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 5. OPEN PR                                                    │
+   │ 6. OPEN PR                                                    │
    │    pr-discipline §1     ASK BEFORE PUSH — draft by default    │
    │    pr-review-primer     description template                  │
    │                          (what / why-this-shape / flow /      │
@@ -97,15 +115,31 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 5b. POST-OPEN — Addressing reviewer comments                  │
-   │    responding-to-review  every blocker needs a concrete      │
-   │                          artifact; every reply maps to a diff;│
-   │                          mechanical flagged-line verification │
-   │                          before requesting re-review          │
+   │ 6b. COPILOT REVIEW                                            │
+   │    copilot-review-loop   GraphQL requestReviews mutation      │
+   │                          (botIds: ["BOT_kgDOCnlnWA"]) — REST  │
+   │                          + gh CLI silently no-op on bots, so  │
+   │                          must use GraphQL throughout; verify  │
+   │                          landing via GraphQL reviewRequests   │
+   │                          query (gh pr view filters bots);     │
+   │                          wait ~15 min; address via 6c; re-    │
+   │                          request; STOP at NITs-only OR 5      │
+   │                          rounds, whichever first              │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 6. REVIEW  (yours or others')                                 │
+   │ 6c. ADDRESS REVIEW — reviewer comments (human or Copilot)     │
+   │    responding-to-review  every blocker needs a concrete       │
+   │                          artifact; every reply maps to a diff;│
+   │                          mechanical flagged-line verification │
+   │                          before requesting re-review          │
+   │    (For Copilot specifically, the request → wait → address →  │
+   │     rerequest cycle terminates per 6b's cap: NITs-only OR     │
+   │     5 rounds, whichever first.)                               │
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+   ┌───────────────────────────────▼───────────────────────────────┐
+   │ 7. REVIEW  (yours or others')                                 │
    │    pr-discipline §4     SINGLE PR scope — no historical crawl │
    │                          target 2-3 min of agent work         │
    │    python-review / typescript-review                          │
@@ -128,28 +162,33 @@ How this plugin's skills and hooks compose into a single workflow. Read this whe
 
 ## Skill × Phase matrix
 
+Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=6, COPILOT=6b, ADDRESS=6c, REVIEW=7.
+
 ```
-                              SPEC  PLAN  IMPL  VERIFY  PRE-PR  OPEN  POST-OPEN  REVIEW
+                              SPEC  PLAN  IMPL-PLAN  IMPL  VERIFY  PRE-PR  OPEN  COPILOT  ADDRESS  REVIEW
 prd-review                     ✓
 apex-flow                            ✓
 design-feature                       ✓⁷
-api-surface-review                   ✓    ✓             ✓                          ✓¹
-python-review                              ✓             ✓                          ✓
-typescript-review                          ✓             ✓                          ✓
-frontend-design                            ✓²
-protocol-first-workflow              ✓³   ✓³
-polymorphic-type-modeling            ✓⁴   ✓⁴
-verify-ports                         ✓⁵   ✓⁵
-verification-before-completion                    ✓
-ai-pre-review-checklist                                  ✓
-pr-discipline                                            ✓      ✓                  ✓
-pr-review-primer                                                ✓
-responding-to-review                                                  ✓⁶
-memory-note                                                                          after
+impl-plan-review                            ✓
+api-surface-review                   ✓                ✓                ✓                                  ✓¹
+python-review                                         ✓                ✓                                  ✓
+typescript-review                                     ✓                ✓                                  ✓
+frontend-design                                       ✓²
+protocol-first-workflow              ✓³               ✓³
+polymorphic-type-modeling            ✓⁴               ✓⁴
+verify-ports                         ✓⁵               ✓⁵
+verification-before-completion                                ✓
+ai-pre-review-checklist                                              ✓
+pr-discipline                                                        ✓      ✓                                    ✓
+pr-review-primer                                                            ✓
+copilot-review-loop                                                                ✓
+responding-to-review                                                                                ✓⁶
+memory-note                                                                                                          after
 
 superpowers:systematic-debugging   — side path; fires on bug discovery (any phase)
 superpowers:brainstorming          — upstream of SPEC (intent exploration)
-superpowers:writing-plans          — upstream of SPEC (plan/PRD authoring)
+superpowers:writing-plans          — upstream of IMPL-PLAN (writes the plan; review with apex:impl-plan-review)
+superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent adversarial pair pattern (see Side paths)
 ```
 
 ¹ if API surface in diff
@@ -157,16 +196,18 @@ superpowers:writing-plans          — upstream of SPEC (plan/PRD authoring)
 ³ new Python component
 ⁴ new variant / event-type / discriminated union
 ⁵ porting / adapting code from another repository
-⁶ when addressing reviewer comments on an open PR
+⁶ when addressing reviewer comments on an open PR (human or Copilot)
 ⁷ NEW feature design (not fix) — distinct from `apex-flow` §1b which covers fixes + refactors generically
 
 ## Five principles overlaid on the pipeline
 
-1. **Plan before coding** — never skip phase 1; re-enter it mid-task if the design breaks.
-2. **Multi-phase rule** — `api-surface-review` runs at plan, implement, AND pre-PR. Invoking it once does not discharge later gates. Design intent and code reality diverge between phases; the later passes catch the drift.
-3. **Prove it works** — phase 3 is non-negotiable. Verification is what separates "the code exists" from "this is done."
+1. **Plan before coding** — never skip phase 1; re-enter it mid-task if the design breaks. For NEW features, phase 0 (SPEC) + phase 2 (IMPL-PLAN) are both required upstream gates.
+2. **Multi-phase rule** — `api-surface-review` runs at PLAN, IMPL, AND PRE-PR. Invoking it once does not discharge later gates. Design intent and code reality diverge between phases; the later passes catch the drift.
+3. **Prove it works** — phase 4 (VERIFY) is non-negotiable. Verification is what separates "the code exists" from "this is done."
 4. **Ask before push** — every transition from local → remote requires explicit user confirmation. Default to `--draft` on PR creation.
 5. **Self-improvement loop** — every non-obvious lesson goes into memory or domain-knowledge so the next session starts smarter.
+6. **Loop termination** — the COPILOT review (phase 6b) and human-review address cycle (phase 6c) both terminate at NITs-only OR 5 rounds. Five rounds with non-NIT issues outstanding = the PR shape is wrong; return to an upstream gate (IMPL-PLAN, design, or PRD).
+7. **Freeze gates** — the PRD freezes after `apex:prd-review` Pass 7; the implementation plan freezes after `apex:impl-plan-review`. Both freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation."
 
 ## When to skip phases
 
