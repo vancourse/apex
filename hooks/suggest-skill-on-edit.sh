@@ -18,13 +18,13 @@ case "$file" in
     ext="${file##*.}"
     case "$ext" in
       py)
-        msg="API-surface path detected (${file##*/}). Before editing, invoke api-surface-review (run all 5 passes against the proposed/current shape) AND python-review. Run BOTH — they are orthogonal."
+        msg="API-surface path detected (${file##*/}). Before editing, invoke apex:api-surface-review (run all 5 passes against the proposed/current shape) AND apex:python-review. Run BOTH — they are orthogonal."
         ;;
       ts|tsx)
-        msg="API-surface path detected (${file##*/}). Before editing, invoke api-surface-review (run all 5 passes against the proposed/current shape) AND typescript-review. Run BOTH — they are orthogonal."
+        msg="API-surface path detected (${file##*/}). Before editing, invoke apex:api-surface-review (run all 5 passes against the proposed/current shape) AND apex:typescript-review. Run BOTH — they are orthogonal."
         ;;
       *)
-        msg="API-surface path detected (${file##*/}). Before editing, invoke api-surface-review (run all 5 passes against the proposed/current shape)."
+        msg="API-surface path detected (${file##*/}). Before editing, invoke apex:api-surface-review (run all 5 passes against the proposed/current shape)."
         ;;
     esac
     # PreToolUse additionalContext schema.
