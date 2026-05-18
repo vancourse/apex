@@ -1,6 +1,6 @@
 ---
 name: postgres-review
-description: Generic PostgreSQL review rules — schema design, indexing, query performance, migrations, transactions + locking, observability. Routing table inside; load only the rule file matching the current task. Fires when designing or reviewing a Postgres schema change, migration, index addition, or hand-rolled SQL beyond ORM convenience methods. Pairs with apex:python-review/rules/db-and-sql.md (ORM/Python-side concerns) — load THIS skill for Postgres-internal topics. For multi-tenant isolation strategies (RLS, schema-per-tenant, DB-per-tenant, app-layer filtering), invoke apex:multi-tenancy. Keywords: postgres, postgresql, sql review, schema, index, migration, transaction, isolation, locking, explain, pg_stat_statements, vacuum.
+description: Generic PostgreSQL review rules — schema design today; indexing, migrations, transactions + locking, and observability are planned rule files (see SKILL.md 'Coming next'). Routing table inside; load only the rule file matching the current task. Fires when designing or reviewing a Postgres schema change or hand-rolled SQL. Pairs with apex:python-review/rules/db-and-sql.md (ORM/Python-side concerns) — load THIS skill for Postgres-internal topics. For multi-tenant isolation strategies (RLS, schema-per-tenant, DB-per-tenant, app-layer filtering), invoke apex:multi-tenancy. Keywords: postgres, postgresql, sql review, schema, index, migration, transaction, isolation, locking, explain, pg_stat_statements, vacuum.
 ---
 
 # Postgres Review Rules
@@ -8,11 +8,13 @@ description: Generic PostgreSQL review rules — schema design, indexing, query 
 Generic, cross-project PostgreSQL rules. Read only the rule file(s) matching
 the current task — do not load all of them.
 
-This skill covers **Postgres-internal** concerns (schema, indexes, RLS
-policies, migrations, transactions, locking, vacuum). For **ORM / Python-side**
-concerns (N+1, connection pooling, cache deduplication, idempotency tests,
-pagination), load `apex:python-review/rules/db-and-sql.md` instead. The two
-skills are designed to be loaded together when a change crosses the boundary.
+This skill covers **Postgres-internal** concerns, starting with schema design.
+Indexing, migrations, transactions + locking, and observability are planned
+rule files (see 'Coming next' below). For **RLS and multi-tenant isolation**,
+invoke `apex:multi-tenancy` directly. For **ORM / Python-side** concerns
+(N+1, connection pooling, cache deduplication, idempotency tests, pagination),
+load `apex:python-review/rules/db-and-sql.md` instead. The skills are designed
+to be loaded together when a change crosses the boundary.
 
 ## Routing table
 
@@ -40,11 +42,15 @@ and to `apex:architecture-design` Pass 2 for foundational decisions.
 
 ## When this fires
 
+Currently (`rules/schema-design.md` is the only rule file today):
 - Designing or reviewing a new table / column / constraint / index
-- Authoring or reviewing an RLS policy
-- Writing or reviewing a migration
-- Investigating a slow query, deadlock, or vacuum issue
 - Writing hand-rolled SQL beyond ORM convenience methods
+
+Planned (once additional rule files land):
+- Authoring or reviewing a migration → `rules/migrations.md`
+- Investigating a slow query, deadlock, or vacuum issue → `rules/observability.md`, `rules/transactions-locking.md`
+
+For RLS and multi-tenant isolation, invoke **`apex:multi-tenancy`** directly.
 
 ## When this does NOT fire
 

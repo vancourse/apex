@@ -3,9 +3,10 @@
 Rules for the **Python / ORM side** of database access: query shape, retry
 discipline, connection pooling, cache deduplication, idempotency, pagination.
 
-For **Postgres-internal** topics — schema design, indexing strategy,
-`EXPLAIN ANALYZE` reading, migration safety patterns, transactions +
-locking, vacuum/autovacuum, observability — invoke **`apex:postgres-review`**.
+For **Postgres-internal** topics — schema design, indexing, migrations,
+transactions + locking, vacuum/autovacuum, observability — invoke
+**`apex:postgres-review`** (schema design ships today; indexing, migrations,
+transactions + locking, and observability are planned rule files).
 
 For **multi-tenant isolation** — Postgres RLS policy authorship,
 schema-per-tenant, DB-per-tenant, app-layer filtering, tenant-context
