@@ -23,7 +23,7 @@ Initial public release.
 | `apex:test-coverage-audit` | Pre-PR audit: PRD↔mirror, layer discipline, CI tier discipline, mock budget, failure-mode coverage. |
 | `apex:security-review` | PR-time 5-pass security audit: secrets, authn+authz, input val + output encoding, dep vuln + supply chain, audit log. |
 | `apex:python-review` | Generic Python rules with routing table to 11 topic files. |
-| `apex:typescript-review` | Generic TypeScript/React rules with routing table to 13 topic files. |
+| `apex:typescript-review` | Generic TypeScript/React rules with routing table to 15 topic files. |
 | `apex:postgres-review` | Generic PostgreSQL rules — schema design today; indexing, migrations, transactions + locking, observability planned. |
 | `apex:multi-tenancy` | Multi-tenant isolation — Postgres RLS today; schema-per-tenant, DB-per-tenant, app-layer filtering, tenant-context propagation planned. |
 | `apex:api-surface-review` | 5-pass API surface review from the consumer's perspective. |
@@ -44,9 +44,9 @@ Initial public release.
 | Hook | Event | Behavior |
 |---|---|---|
 | `suggest-skill-on-prompt` | UserPromptSubmit | Injects review-skill reminders on Python / TS / API surface keywords |
-| `suggest-skill-on-edit` | PreToolUse (Edit/Write) | Reminds to invoke `api-surface-review` on API-surface paths |
-| `guard-security-paths` | PreToolUse (Edit/Write) | Security-review reminder on auth / credentials / oauth / secrets paths |
-| `guard-dependency-bump` | PreToolUse (Edit/Write) | Review-risk reminder on dependency manifests and lock files |
+| `suggest-skill-on-edit` | PreToolUse (Edit/Write/MultiEdit) | Reminds to invoke `api-surface-review` on API-surface paths |
+| `guard-security-paths` | PreToolUse (Edit/Write/MultiEdit) | Security-review reminder on auth / credentials / oauth / secrets paths |
+| `guard-dependency-bump` | PreToolUse (Edit/Write/MultiEdit) | Review-risk reminder on dependency manifests and lock files |
 | `guard-destructive` | PreToolUse (Bash) | Blocks `rm -rf` on root/home, force-push to main, `--no-verify` commits, `.env` writes |
-| `scan-secrets-on-edit` | PreToolUse (Edit/Write) | **Blocks** writes containing real-shaped secrets (AWS / GitHub PAT / Stripe / Slack / Anthropic / OpenAI / Google / SSH keys) |
-| `format-on-save` | PostToolUse (Edit/Write) | Auto-formats `.py` (ruff), `.ts/.tsx/.js/.json/.md/.yaml/.css` (prettier) |
+| `scan-secrets-on-edit` | PreToolUse (Edit/Write/MultiEdit) | **Blocks** writes containing real-shaped secrets (AWS / GitHub PAT / Stripe / Slack / Anthropic / OpenAI / Google / SSH keys) |
+| `format-on-save` | PostToolUse (Edit/Write/MultiEdit) | Auto-formats `.py` (ruff), `.ts/.tsx/.js/.json/.md/.yaml/.css` (prettier) |
