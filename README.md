@@ -135,7 +135,7 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:apex-flow
 ```
 
-> **Note:** The CLAUDE.md stubs reference skills as `apex:<skill>` (the model's routing name). The interactive slash command in Claude Code is `/apex:<skill>` — note the leading `/`.
+> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). The interactive slash command in Claude Code adds the plugin prefix: `/apex:apex-flow`, `/apex:python-review`, etc.
 
 Other common entry points:
 
