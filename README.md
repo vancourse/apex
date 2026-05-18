@@ -149,6 +149,10 @@ claude /plugin install <github-url-or-marketplace-name>
 - **Add a dependency** — edit the `dependencies` array in `.claude-plugin/plugin.json`.
 - **Strip a dependency** — remove from `dependencies`; users without the corresponding marketplace will install cleanly.
 
+## Contributing
+
+apex itself follows the discipline it prescribes — every change opens a draft PR, requests Copilot review via the GraphQL mutation, addresses findings until NITs-only OR 5 rounds, and squash-merges to `main`. **No direct-to-main pushes.** See [CONTRIBUTING.md](CONTRIBUTING.md) for the full rules and the typical PR flow including local-install sync after merge.
+
 ## Why this plugin exists
 
 AI-assisted coding produces locally coherent code that misses branch-shaping concerns: wrong layer, new abstraction without justification, shared-state bugs hidden by happy-path tests, echo-back response fields, hardcoded timeouts with no measured latency.
