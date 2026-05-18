@@ -13,8 +13,7 @@
 ## Test plan
 
 - [ ] Cross-references resolve (any `rules/` pointer introduced in a SKILL.md routing table exists or is labelled "(planned)")
-- [ ] No project-specific names, paths, or internal tool references in skill content
+- [ ] No project-specific names, paths, or internal tool references in skill content (if adding skill files, grep for any internal project names you may have used as examples)
 - [ ] Hook scripts tested locally against the trigger condition
-- [ ] No project-specific names appear in skill content (if adding skill files, grep for any internal project names you may have used as examples)
 
 <!-- Add scenario-specific checks below -->
