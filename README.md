@@ -135,6 +135,8 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:apex-flow
 ```
 
+> **Note:** The CLAUDE.md stubs reference skills as `apex:<skill>` (the model's routing name). The interactive slash command in Claude Code is `/apex:<skill>` — note the leading `/`.
+
 Other common entry points:
 
 | When you're... | Run |
@@ -151,9 +153,11 @@ See [FLOW.md](FLOW.md) for the full phase-by-phase routing map.
 ### Fork and customize
 
 ```bash
-git clone https://github.com/vancourse/apex
-# Edit skills/, hooks/, rules/ as needed
-claude --plugin-dir ./apex   # load from disk for the current session
+# 1. Fork on GitHub: https://github.com/vancourse/apex/fork
+# 2. Clone your fork:
+git clone https://github.com/<your-username>/apex
+# 3. Load from disk for the current session:
+claude --plugin-dir ./apex
 ```
 
 - **Add a skill** — drop `skills/<name>/SKILL.md` (frontmatter + body). Picked up automatically via the `description` field.
