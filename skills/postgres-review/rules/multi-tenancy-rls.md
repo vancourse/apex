@@ -9,11 +9,24 @@ Rules for tenant isolation via Postgres RLS. The single biggest source of multi-
 **Why:** Postgres exempts the table owner from RLS policies unless `FORCE ROW LEVEL SECURITY` is set. If your application connects as the role that owns the tables, RLS is *off* for it regardless of what `CREATE POLICY` statements you've written. Splitting owner and runtime roles is the structural defense; relying on `FORCE` alone is the override.
 
 ```sql
--- ✅ Two-role pattern
-CREATE ROLE app_owner LOGIN PASSWORD '...';   -- owns tables, creates policies
-CREATE ROLE app_user  LOGIN PASSWORD '...';   -- application connects as this
+-- ✅ Two-role pattern.
+-- Credentials are provisioned out-of-band (secret manager / infra tooling /
+-- migration tool template variables) — do NOT commit plaintext passwords.
+CREATE ROLE app_owner LOGIN;   -- owns tables, creates policies
+CREATE ROLE app_user  LOGIN;   -- application connects as this
+
+-- Schema-level USAGE is required before any per-table grant takes effect.
+GRANT USAGE ON SCHEMA app TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO app_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+
+-- Note: IDENTITY columns (`GENERATED … AS IDENTITY`) do NOT require explicit
+-- sequence grants — the table grant is sufficient. If you use legacy
+-- `serial`/`bigserial`, also grant on the owned sequences:
+--   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app TO app_user;
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA app
+--     GRANT USAGE, SELECT ON SEQUENCES TO app_user;
 ```
 
 ## Enable **and** `FORCE` Row Level Security per table
@@ -69,14 +82,25 @@ COMMIT;
 **Application wrapper pattern (language-agnostic):**
 
 ```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
 async def tenant_db(pool, tenant_id: int):
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SET LOCAL app.tenant_id = $1", str(tenant_id))
             yield conn
+
+# Usage at the request handler boundary:
+# async with tenant_db(pool, tenant_id=42) as conn:
+#     rows = await conn.fetch("SELECT * FROM app.invoices")
 ```
 
-Every request handler opens a `tenant_db` block; no direct pool acquisition outside it. Reviewers grep for `pool.acquire` and `conn.execute("SET …app.tenant_id…")` to confirm the discipline.
+The `@asynccontextmanager` decorator is load-bearing — without it, the bare
+`async def … yield` is an async generator and `async with` against it raises
+`TypeError: 'async_generator' object does not support the asynchronous
+context manager protocol`. Every request handler opens a `tenant_db` block;
+no direct pool acquisition outside it. Reviewers grep for `pool.acquire` and `conn.execute("SET …app.tenant_id…")` to confirm the discipline.
 
 ## RLS does not prevent cross-tenant foreign-key references — composite FKs do
 
@@ -132,7 +156,8 @@ CREATE TABLE app.line_items (
 ## Worked example — minimal compliant migration
 
 ```sql
--- 1. Roles (idempotent — usually one-time at DB setup)
+-- 1. Roles + schema (idempotent — usually one-time at DB setup).
+--    Credentials provisioned out-of-band — never commit plaintext passwords.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_owner') THEN
     CREATE ROLE app_owner LOGIN;
@@ -141,6 +166,9 @@ DO $$ BEGIN
     CREATE ROLE app_user LOGIN;
   END IF;
 END $$;
+
+CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION app_owner;
+GRANT USAGE ON SCHEMA app TO app_user;   -- required before per-table grants
 
 -- 2. Table with tenant_id and composite UNIQUEs
 CREATE TABLE app.invoices (
@@ -155,6 +183,9 @@ CREATE TABLE app.invoices (
 );
 ALTER TABLE app.invoices OWNER TO app_owner;
 GRANT SELECT, INSERT, UPDATE, DELETE ON app.invoices TO app_user;
+-- IDENTITY columns do not need explicit sequence grants; the table grant
+-- covers ID generation. For legacy `serial`, also GRANT USAGE, SELECT on
+-- the owned sequence.
 
 -- 3. RLS enable + FORCE + policy with both clauses
 ALTER TABLE app.invoices ENABLE ROW LEVEL SECURITY;
