@@ -15,7 +15,8 @@ the current task — do not load all of them.
 | Class/module layering, SOLID, GoF patterns, service-class signal             | `rules/architecture.md`                     |
 | Pydantic models, dataclasses, typing, generics, state transitions            | `rules/types-and-models.md`                 |
 | SQL queries, ORM, N+1, pagination, caching, connection pools, idempotency    | `rules/db-and-sql.md`                       |
-| **Postgres-internal** topics (schema design, RLS policies, indexing, migrations, transactions + locking, observability) | invoke **`apex:postgres-review`** |
+| **Postgres-internal** topics (schema design, indexing, migrations, transactions + locking, observability) | invoke **`apex:postgres-review`** |
+| **Multi-tenant isolation** (Postgres RLS, schema-per-tenant, DB-per-tenant, app-layer filtering, tenant-context propagation) | invoke **`apex:multi-tenancy`** |
 | asyncio tasks, locks, timeouts, sync-in-async, SSE streaming                 | `rules/async-concurrency.md`                |
 | **Test methodology** (8-layer model, mocking policy, PRD↔mirror, scenarios-first, CI tiering, isolation, 17 rules) | invoke **`apex:test-strategy`** |
 | Python testing tooling (pytest stubs vs MagicMock, async fixture typing, .model_dump test data, transaction-rollback fixture, pytest-xdist) | `rules/testing.md`                          |
