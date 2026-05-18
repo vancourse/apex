@@ -16,16 +16,16 @@ created_at timestamp NOT NULL DEFAULT now()
 created_at timestamptz NOT NULL DEFAULT now()
 ```
 
-**Migration:** `ALTER TABLE t ALTER COLUMN created_at TYPE timestamptz USING created_at AT TIME ZONE 'UTC'`. Rewrites the column; size-significant tables need expand/contract (see `rules/migrations.md`).
+**Migration:** `ALTER TABLE t ALTER COLUMN created_at TYPE timestamptz USING created_at AT TIME ZONE '<source-zone>'`. **The source zone must match the timezone the existing `timestamp` values were written as** — `'UTC'` if the application normalized to UTC at write time, otherwise the application's local zone (e.g. `'America/Vancouver'`). Pick the wrong source zone here and every existing row silently shifts by the offset, with no error and no easy rollback. Confirm the write-side intent (read application logs, check the app's `datetime` defaults, ask the team) before running. Rewrites the column; size-significant tables need expand/contract (see `rules/migrations.md`).
 
 ## Use `text`, not `varchar(N)`
 
 **When:** Any string column.
 **Rule:** `text` (or `varchar` without length) by default. Reach for `varchar(N)` only when the length cap is a *business invariant* you intend to enforce — and in that case, prefer a `CHECK (length(col) <= N)` constraint, which is easier to relax later.
-**Why:** Postgres stores `varchar(N)` and `text` identically; there is no performance difference. The length cap on `varchar(N)` is enforced as an error on insert, which means widening the cap requires a full table rewrite on some versions. A CHECK constraint can be dropped and added (and validated NOT VALID then VALIDATEd) without a rewrite. The Postgres docs explicitly recommend `text`.
+**Why:** Postgres stores `varchar(N)` and `text` identically internally; there is no performance difference. The length cap on `varchar(N)` is enforced at insert. *Widening* the cap (e.g. `varchar(120) → varchar(240)`) is a metadata-only catalog update since Postgres 9.2 — fast, no rewrite. *Narrowing* it requires a full table rewrite and re-validation of every row. CHECK constraints can be both relaxed and tightened with `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT`, avoiding the rewrite in either direction. The Postgres docs explicitly recommend `text`.
 
 ```sql
--- ❌ BAD: length cap baked into the type; widening requires rewrite
+-- ❌ BAD: length cap baked into the type; narrowing the cap requires rewrite
 name varchar(120) NOT NULL
 
 -- ✅ GOOD: type is text; cap (if any) lives in a constraint you can change
@@ -113,7 +113,7 @@ CREATE TABLE transactions (
 
 **When:** Declaring a foreign key.
 **Rule:** Always specify `ON DELETE …` (and `ON UPDATE …` if relevant). Never accept the default by omission.
-**Why:** The default is `NO ACTION` (deferred to commit), which gives different behavior from `RESTRICT` (immediate) and is easy to confuse with `CASCADE`. Reading a schema where every FK omits the clause means every reviewer has to remember the default. Naming it explicitly makes the intent reviewable.
+**Why:** The default is `NO ACTION`. For NOT DEFERRABLE constraints (the default for FKs) `NO ACTION` behaves like `RESTRICT` — violations are detected at end of statement and the statement is rejected. The two differ only for DEFERRABLE constraints: `NO ACTION` defers the check to commit, `RESTRICT` does not. Both differ sharply from `CASCADE` (deletes/updates referencing rows), `SET NULL`, and `SET DEFAULT`. Reading a schema where every FK omits the clause means every reviewer has to remember the default *and* the deferrability state; naming the action explicitly makes the intent reviewable.
 
 ```sql
 -- ❌ BAD: defaults invisible to the reader
