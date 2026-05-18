@@ -65,6 +65,6 @@ Project-specific multi-tenancy rules — the project's chosen non-privileged
 role name, the canonical `tenant_db()` helper signature, the explicit
 RLS-protected table list, the composite-FK patterns that are load-bearing
 in *your* schema — belong in a per-repo overlay loaded **in addition** to
-this skill. In BookBridge:
-`.claude/skills/bookbridge-pre-pr-check/rules/multi-tenancy-bb-specifics.md`
-(see `bookbridge-pre-pr-check`).
+this skill. Example path:
+`.claude/skills/<project>-pre-pr-check/rules/multi-tenancy-specifics.md`
+(see your project's pre-PR skill).

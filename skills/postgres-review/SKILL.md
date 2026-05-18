@@ -63,6 +63,6 @@ For RLS and multi-tenant isolation, invoke **`apex:multi-tenancy`** directly.
 Project-specific Postgres rules — tenant role names, GUC names, the canonical
 session helper, the explicit RLS-protected table list, the composite-FK
 patterns that are load-bearing in *your* schema — belong in a per-repo
-overlay loaded **in addition** to this skill. In BookBridge:
-`.claude/skills/bookbridge-pre-pr-check/rules/postgres-bb-specifics.md`
-(see `bookbridge-pre-pr-check`).
+overlay loaded **in addition** to this skill. Example path:
+`.claude/skills/<project>-pre-pr-check/rules/postgres-specifics.md`
+(see your project's pre-PR skill).
