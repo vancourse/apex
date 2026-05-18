@@ -88,7 +88,16 @@ from contextlib import asynccontextmanager
 async def tenant_db(pool, tenant_id: int):
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.tenant_id = $1", str(tenant_id))
+            # Use set_config(..., is_local=true), NOT `SET LOCAL` — the latter
+            # is a Postgres utility command and does NOT accept bind
+            # parameters in prepared statements (would raise a syntax error).
+            # set_config('app.tenant_id', $1, true) is semantically identical
+            # to `SET LOCAL` (scoped to the current transaction) AND accepts
+            # parameter binding, so the tenant_id value is safely cast/escaped.
+            await conn.execute(
+                "SELECT set_config('app.tenant_id', $1, true)",
+                str(tenant_id),
+            )
             yield conn
 
 # Usage at the request handler boundary:
@@ -96,11 +105,24 @@ async def tenant_db(pool, tenant_id: int):
 #     rows = await conn.fetch("SELECT * FROM app.invoices")
 ```
 
-The `@asynccontextmanager` decorator is load-bearing — without it, the bare
-`async def … yield` is an async generator and `async with` against it raises
-`TypeError: 'async_generator' object does not support the asynchronous
-context manager protocol`. Every request handler opens a `tenant_db` block;
-no direct pool acquisition outside it. Reviewers grep for `pool.acquire` and `conn.execute("SET …app.tenant_id…")` to confirm the discipline.
+Two load-bearing details:
+
+- **`@asynccontextmanager`** — without it, the bare `async def … yield` is an
+  async generator and `async with` against it raises `TypeError:
+  'async_generator' object does not support the asynchronous context manager
+  protocol`.
+- **`set_config(name, value, is_local)` over `SET LOCAL name = value`** —
+  `SET` / `SET LOCAL` are Postgres utility commands and do not accept bind
+  parameters in prepared statements. Writing
+  `await conn.execute("SET LOCAL app.tenant_id = $1", ...)` raises a syntax
+  error at runtime. `set_config(...)` is the parameterizable equivalent;
+  with `is_local=true` it has identical transaction-scoped semantics. Use it
+  in any client-driven setter; the bare `SET LOCAL` form remains correct
+  inside hand-written psql sessions or migrations where the value is a
+  literal, not a bind variable.
+
+Every request handler opens a `tenant_db` block; no direct pool acquisition
+outside it. Reviewers grep for `pool.acquire` and `conn.execute("SET …app.tenant_id…")` to confirm the discipline.
 
 ## RLS does not prevent cross-tenant foreign-key references — composite FKs do
 
@@ -197,7 +219,12 @@ CREATE POLICY invoices_tenant_isolation ON app.invoices
   USING       (tenant_id = current_setting('app.tenant_id')::bigint)
   WITH CHECK  (tenant_id = current_setting('app.tenant_id')::bigint);
 
--- 4. (Application code) — every query lives inside SET LOCAL app.tenant_id = $1;
+-- 4. (Application code) — every query lives inside a `tenant_db` block that
+--    calls `SELECT set_config('app.tenant_id', $1, true)` at transaction
+--    start. Plain `SET LOCAL app.tenant_id = $1` does NOT work — `SET` /
+--    `SET LOCAL` are utility commands and reject bind parameters. The
+--    `set_config(..., true)` form is the parameterizable equivalent and has
+--    identical transaction-local scoping. See the wrapper pattern above.
 ```
 
 **Reviewer checklist** for any PR touching a tenant-scoped table:

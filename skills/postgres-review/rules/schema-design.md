@@ -16,7 +16,7 @@ created_at timestamp NOT NULL DEFAULT now()
 created_at timestamptz NOT NULL DEFAULT now()
 ```
 
-**Migration:** `ALTER TABLE t ALTER COLUMN created_at TYPE timestamptz USING created_at AT TIME ZONE '<source-zone>'`. **The source zone must match the timezone the existing `timestamp` values were written as** — `'UTC'` if the application normalized to UTC at write time, otherwise the application's local zone (e.g. `'America/Vancouver'`). Pick the wrong source zone here and every existing row silently shifts by the offset, with no error and no easy rollback. Confirm the write-side intent (read application logs, check the app's `datetime` defaults, ask the team) before running. Rewrites the column; size-significant tables need expand/contract (see `rules/migrations.md`).
+**Migration:** `ALTER TABLE t ALTER COLUMN created_at TYPE timestamptz USING created_at AT TIME ZONE '<source-zone>'`. **The source zone must match the timezone the existing `timestamp` values were written as** — `'UTC'` if the application normalized to UTC at write time, otherwise the application's local zone (e.g. `'America/Vancouver'`). Pick the wrong source zone here and every existing row silently shifts by the offset, with no error and no easy rollback. Confirm the write-side intent (read application logs, check the app's `datetime` defaults, ask the team) before running. Rewrites the column; size-significant tables need an expand/contract migration: add a new `_v2 timestamptz` column with the `AT TIME ZONE` cast, dual-write, backfill in batches, swap reads, drop the old. (Full pattern coming in `rules/migrations.md` — planned for a follow-up PR.)
 
 ## Use `text`, not `varchar(N)`
 
@@ -74,7 +74,7 @@ CREATE TABLE invoices (
 );
 ```
 
-Add new CHECKs to a populated table with `ALTER TABLE … ADD CONSTRAINT … NOT VALID;` (cheap, doesn't scan), then `ALTER TABLE … VALIDATE CONSTRAINT …;` (scans, but doesn't block writes). See `rules/migrations.md`.
+Add new CHECKs to a populated table with `ALTER TABLE … ADD CONSTRAINT … NOT VALID;` (cheap, doesn't scan), then `ALTER TABLE … VALIDATE CONSTRAINT …;` (scans, but doesn't block writes). The full expand/contract migration patterns will land in `rules/migrations.md` (planned for a follow-up PR).
 
 ## Native `enum` is rarely worth it
 
