@@ -18,14 +18,20 @@ CREATE ROLE app_user  LOGIN;   -- application connects as this
 -- Schema-level USAGE is required before any per-table grant takes effect.
 GRANT USAGE ON SCHEMA app TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO app_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA app
+
+-- `FOR ROLE app_owner` is load-bearing. `ALTER DEFAULT PRIVILEGES` applies
+-- to the *current* role's future objects by default — so if this migration
+-- is executed by a DBA / superuser session instead of `app_owner`, tables
+-- later created by `app_owner` will NOT inherit the grants. Naming the role
+-- explicitly makes the rule independent of whoever runs the migration.
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
 
 -- Note: IDENTITY columns (`GENERATED … AS IDENTITY`) do NOT require explicit
 -- sequence grants — the table grant is sufficient. If you use legacy
 -- `serial`/`bigserial`, also grant on the owned sequences:
 --   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app TO app_user;
---   ALTER DEFAULT PRIVILEGES IN SCHEMA app
+--   ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
 --     GRANT USAGE, SELECT ON SEQUENCES TO app_user;
 ```
 
@@ -39,7 +45,7 @@ ALTER TABLE app.invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.invoices FORCE  ROW LEVEL SECURITY;
 ```
 
-**Why:** `ENABLE` turns RLS on for *non-owner* roles. `FORCE` extends enforcement to the table owner too. Without `FORCE`, any maintenance script or migration that runs as `app_owner` bypasses every policy — which means a backfill written to a single tenant can silently write across all tenants if the predicate has a typo. `FORCE` makes the owner explicitly opt out per session via `SET row_security = off` (which requires superuser or a deliberate grant), making the bypass visible.
+**Why:** `ENABLE` turns RLS on for *non-owner* roles. `FORCE` extends enforcement to the table owner too. Without `FORCE`, any maintenance script or migration that runs as `app_owner` bypasses every policy — which means a backfill written to a single tenant can silently write across all tenants if the predicate has a typo. With `FORCE` on, the only ways to bypass RLS are (a) connect as a Postgres superuser, or (b) connect as a role that carries the `BYPASSRLS` attribute (`ALTER ROLE someone BYPASSRLS`). There is no per-table grant for this — `SET row_security = off` only takes effect for superusers or `BYPASSRLS` roles; for everyone else it's a no-op. Both bypass paths are exceptional maintenance affordances and neither should ever belong to the application's runtime role. The structural property is: **the application can never escape RLS, because the role it runs as has neither superuser nor `BYPASSRLS`.**
 
 **Anti-pattern:** Enabling RLS on a table without `FORCE` and trusting that "the migration tool connects as a different role." The migration tool *is* the table owner in most setups.
 
@@ -190,6 +196,11 @@ DO $$ BEGIN
 END $$;
 
 CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION app_owner;
+-- `CREATE SCHEMA IF NOT EXISTS` is idempotent only for existence — if the
+-- schema already exists with a different owner, the AUTHORIZATION clause
+-- is silently ignored. Always follow up with an explicit ownership
+-- correction so the owner / app-role split can't silently drift.
+ALTER SCHEMA app OWNER TO app_owner;
 GRANT USAGE ON SCHEMA app TO app_user;   -- required before per-table grants
 
 -- 2. Table with tenant_id and composite UNIQUEs
