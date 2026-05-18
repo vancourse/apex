@@ -31,8 +31,11 @@ gh api graphql -f query='mutation($prId: ID!) {
 **Verify the request landed** via direct GraphQL query (`gh pr view --json reviewRequests` filters bots from output, so you'd be flying blind):
 
 ```bash
+# Derive owner/repo from the current git remote automatically
+REPO_OWNER=$(gh repo view --json owner -q '.owner.login')
+REPO_NAME=$(gh repo view --json name -q '.name')
 gh api graphql -F prNumber="$PR_NUMBER" -f query='query($prNumber: Int!) {
-  repository(owner: "vancourse", name: "apex") {
+  repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
     pullRequest(number: $prNumber) {
       reviewRequests(first: 10) {
         nodes { requestedReviewer { __typename ... on Bot { login } } }
@@ -79,7 +82,7 @@ apex's hooks (`scan-secrets-on-edit`, `guard-destructive`, `format-on-save`, etc
 
 ## Commit message convention
 
-apex doesn't use the status-doc trailer ritual (that's a BookBridge-specific convention in that repo's `CLAUDE.md`). For apex commits, use a short imperative subject line + body explaining *why*. Examples:
+apex doesn't use a status-doc trailer ritual. For apex commits, use a short imperative subject line + body explaining *why*. Examples:
 
 - `Add apex:foo skill`
 - `Strengthen api-surface-review with consumer-tracing pass`
@@ -99,7 +102,7 @@ There aren't any carve-outs. Even a typo fix opens a PR.
 The argument against carve-outs:
 
 - Carve-outs require deciding "is this trivial?" — moving the decision to a per-change human judgment that drifts over time
-- Trivial-feeling changes have shipped real bugs (apex's own `bookbridge-pre-pr-check` was promoted *because* "trivial-looking" diffs missed RLS / idempotency / FK violations)
+- Trivial-feeling changes have shipped real bugs (project-specific pre-PR skills get promoted *because* "trivial-looking" diffs missed RLS / idempotency / FK violations)
 - The PR ceremony cost on a typo is ~30 seconds; the cost of one missed regression is hours
 
 The argument for carve-outs (rejected here):

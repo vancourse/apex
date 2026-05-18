@@ -1,6 +1,6 @@
 ---
 name: ai-pre-review-checklist
-description: 8-step pre-review robustness gate for any AI-assisted branch — force branch explanation, layering, state ownership, concurrency, success/failure/fallback, test quality, reviewer simulation, unvalidated gaps. Run this BEFORE you reach `git push` — by the time the BookBridge pre-push hook prints the checklist titles, the gate is already closing. The skill walks each step's full prompt against an assistant; the hook just confirms you remember the 8 titles. Fires when a feature branch is ready for review and AI wrote or refactored code. Keywords: pre-review, ai-assisted, pr readiness, reviewer simulation, robustness gate, before push.
+description: 9-step pre-PR robustness gate for any AI-assisted branch — force branch explanation, layering, state ownership, concurrency, success/failure/fallback, test quality, consumer-tracing, reviewer simulation, unvalidated gaps. Run this BEFORE you reach `git push`. The skill walks each step's full prompt against an assistant. Fires when a feature branch is ready for review and AI wrote or refactored code. Keywords: pre-review, ai-assisted, pr readiness, reviewer simulation, robustness gate, before push.
 ---
 
 # AI-Assisted Pre-Review Checklist

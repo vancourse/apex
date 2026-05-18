@@ -2,8 +2,7 @@
   "name": "apex",
   "description": "Single-plugin marketplace for apex — an opinionated SDLC framework for Claude Code.",
   "owner": {
-    "name": "vancourse",
-    "email": "vancourse@users.noreply.github.com"
+    "name": "apex maintainers"
   },
   "plugins": [
     {
@@ -12,7 +11,7 @@
       "version": "0.1.0",
       "source": "./",
       "author": {
-        "name": "vancourse"
+        "name": "apex maintainers"
       }
     }
   ]
