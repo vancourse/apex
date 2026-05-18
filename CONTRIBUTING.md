@@ -19,7 +19,8 @@ Every change opens a draft PR. No direct push to `main`, regardless of how trivi
 After opening the PR, request Copilot via the **GraphQL `requestReviews` mutation**. The REST API and `gh pr edit --add-reviewer <bot>` both silently no-op on bot reviewers — must use GraphQL throughout.
 
 ```bash
-PR_ID=$(gh pr view <PR-NUMBER> --json id -q .id)
+PR_NUMBER=123   # ← set to the PR you're requesting Copilot on
+PR_ID=$(gh pr view "$PR_NUMBER" --json id -q .id)
 gh api graphql -f query='mutation($prId: ID!) {
   requestReviews(input: { pullRequestId: $prId, botIds: ["BOT_kgDOCnlnWA"] }) {
     pullRequest { number }
@@ -30,9 +31,9 @@ gh api graphql -f query='mutation($prId: ID!) {
 **Verify the request landed** via direct GraphQL query (`gh pr view --json reviewRequests` filters bots from output, so you'd be flying blind):
 
 ```bash
-gh api graphql -f query='query {
+gh api graphql -F prNumber="$PR_NUMBER" -f query='query($prNumber: Int!) {
   repository(owner: "vancourse", name: "apex") {
-    pullRequest(number: <PR-NUMBER>) {
+    pullRequest(number: $prNumber) {
       reviewRequests(first: 10) {
         nodes { requestedReviewer { __typename ... on Bot { login } } }
       }
@@ -40,6 +41,8 @@ gh api graphql -f query='query {
   }
 }'
 ```
+
+(`gh api -F` typecasts the value to an integer for the GraphQL `Int!` argument, in contrast to `-f` which passes a string.)
 
 Look for `{"__typename": "Bot", "login": "copilot-pull-request-reviewer"}` in the response.
 
@@ -122,8 +125,16 @@ If you change your mind on this later, this file is the right place to document 
 12. Mark ready-for-review (yourself, in the role of "the second cognitive pass")
 13. Squash-merge to `main`
 14. Pull `main` into the marketplace clone (`git -C ~/.claude/plugins/marketplaces/apex pull`)
-15. Resync the plugin cache (`rsync -a --delete --exclude='.git' --exclude='.in_use' ~/.claude/plugins/marketplaces/apex/ ~/.claude/plugins/cache/apex/apex/0.1.0/`)
-16. Bump `gitCommitSha` in `~/.claude/plugins/installed_plugins.json`
+15. Resync the plugin cache. The destination path includes the plugin version from `.claude-plugin/plugin.json`; derive it rather than hard-coding so the command keeps working across version bumps:
+
+    ```bash
+    APEX_VERSION=$(jq -r .version ~/.claude/plugins/marketplaces/apex/.claude-plugin/plugin.json)
+    rsync -a --delete --exclude='.git' --exclude='.in_use' \
+      ~/.claude/plugins/marketplaces/apex/ \
+      ~/.claude/plugins/cache/apex/apex/"$APEX_VERSION"/
+    ```
+
+16. Bump `gitCommitSha` in `~/.claude/plugins/installed_plugins.json` to the SHA of the just-pulled marketplace HEAD
 17. Restart Claude.app to surface skill changes
 
 Steps 14–17 are the local-install sync; they're separate from the merge itself and can be batched after multiple merges.
