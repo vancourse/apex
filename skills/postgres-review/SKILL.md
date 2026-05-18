@@ -1,6 +1,6 @@
 ---
 name: postgres-review
-description: Generic PostgreSQL review rules — schema design, multi-tenant RLS, indexing, query performance, migrations, transactions + locking, observability. Routing table inside; load only the rule file matching the current task. Fires when designing or reviewing a Postgres schema change, RLS policy, migration, index addition, or hand-rolled SQL beyond ORM convenience methods. Pairs with apex:python-review/rules/db-and-sql.md (ORM/Python-side concerns) — load THIS skill for Postgres-internal topics. Keywords: postgres, postgresql, sql review, rls, row level security, multi-tenant, schema, index, migration, transaction, isolation, locking, explain, pg_stat_statements, vacuum.
+description: Generic PostgreSQL review rules — schema design, indexing, query performance, migrations, transactions + locking, observability. Routing table inside; load only the rule file matching the current task. Fires when designing or reviewing a Postgres schema change, migration, index addition, or hand-rolled SQL beyond ORM convenience methods. Pairs with apex:python-review/rules/db-and-sql.md (ORM/Python-side concerns) — load THIS skill for Postgres-internal topics. For multi-tenant isolation strategies (RLS, schema-per-tenant, DB-per-tenant, app-layer filtering), invoke apex:multi-tenancy. Keywords: postgres, postgresql, sql review, schema, index, migration, transaction, isolation, locking, explain, pg_stat_statements, vacuum.
 ---
 
 # Postgres Review Rules
@@ -16,10 +16,10 @@ skills are designed to be loaded together when a change crosses the boundary.
 
 ## Routing table
 
-| Task touches…                                                                                                              | Read                                              |
+| Task touches...                                                                                                              | Read                                              |
 | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | Column data types, constraints, generated columns, JSONB strategy, primary keys, composite-UNIQUE-as-FK-enforcer pattern   | `rules/schema-design.md`                          |
-| RLS policies, non-privileged role pattern, `SET LOCAL app.tenant_id`, `FORCE ROW LEVEL SECURITY`, cross-tenant FK enforcement | `rules/multi-tenancy-rls.md`                      |
+| **Multi-tenant isolation** (Postgres RLS policies, schema-per-tenant, DB-per-tenant, app-layer filtering, tenant-context propagation, cross-tenant FK enforcement) | invoke **`apex:multi-tenancy`**                   |
 | **PR-time security audit** (secrets / authn+authz / input val + output enc / dep vuln + supply chain / audit log)          | invoke **`apex:security-review`**                 |
 | **Design-phase threat modeling** (STRIDE against the feature's attack surface)                                             | invoke **`apex:threat-model`**                    |
 | **Architecture-level persistence + tenancy decision** (which role model, which RLS strategy, which migration tool)         | invoke **`apex:architecture-design`** Pass 2      |

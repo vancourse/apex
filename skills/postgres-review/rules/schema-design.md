@@ -86,13 +86,13 @@ Add new CHECKs to a populated table with `ALTER TABLE … ADD CONSTRAINT … NOT
 
 **When:** Designing or reviewing a UNIQUE constraint on a multi-tenant table.
 **Rule:** Treat every `UNIQUE (tenant_id, …)` as *load-bearing for cross-tenant integrity*. Do **not** drop it as "redundant" with a per-column UNIQUE — the composite is what makes downstream `FOREIGN KEY (tenant_id, x) REFERENCES … (tenant_id, x)` enforceable.
-**Why:** A `UNIQUE (x)` on the parent table allows a child to FK on `x` alone — which means a row in tenant A can reference a parent row in tenant B. The composite `UNIQUE (tenant_id, x)` is what allows the child to FK on `(tenant_id, x)`, which is the only thing that prevents cross-tenant references at the schema layer. RLS keeps tenants from *reading* each other, but does **not** prevent cross-tenant FK references unless your FKs include the tenant column. (See `rules/multi-tenancy-rls.md`.) Drop the composite UNIQUE and you've silently turned off cross-tenant FK enforcement for every child of that parent — the breakage is invisible until a query joins across tenants and gets one too many rows.
+**Why:** A `UNIQUE (x)` on the parent table allows a child to FK on `x` alone — which means a row in tenant A can reference a parent row in tenant B. The composite `UNIQUE (tenant_id, x)` is what allows the child to FK on `(tenant_id, x)`, which is the only thing that prevents cross-tenant references at the schema layer. RLS keeps tenants from *reading* each other, but does **not** prevent cross-tenant FK references unless your FKs include the tenant column. (See `apex:multi-tenancy/rules/postgres-rls.md`.) Drop the composite UNIQUE and you've silently turned off cross-tenant FK enforcement for every child of that parent — the breakage is invisible until a query joins across tenants and gets one too many rows.
 
 ```sql
 -- ✅ GOOD: composite UNIQUE on parent + composite FK on child = cross-tenant integrity
 CREATE TABLE accounts (
   tenant_id bigint NOT NULL,
-  id        bigserial,
+  id        bigint GENERATED ALWAYS AS IDENTITY,
   code      text NOT NULL,
   PRIMARY KEY (id),
   UNIQUE (tenant_id, code),    -- LOAD-BEARING: enables composite FK below
@@ -101,7 +101,7 @@ CREATE TABLE accounts (
 
 CREATE TABLE transactions (
   tenant_id  bigint NOT NULL,
-  id         bigserial PRIMARY KEY,
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   account_id bigint NOT NULL,
   FOREIGN KEY (tenant_id, account_id) REFERENCES accounts (tenant_id, id)
 );
@@ -171,4 +171,4 @@ Before approving a schema change, the reviewer asks:
 8. Are generated columns used instead of triggers where possible?
 9. Is the primary key an identity column (or UUIDv7 with a stated reason)?
 
-Cross-references: see `rules/multi-tenancy-rls.md` for RLS-policy-side enforcement, `rules/migrations.md` (coming PR2) for the safe-change recipes, and `apex:architecture-design` Pass 2 for the foundational persistence + tenancy decision.
+Cross-references: see `apex:multi-tenancy/rules/postgres-rls.md` for RLS-policy-side enforcement, `rules/migrations.md` (planned for a follow-up PR) for the safe-change recipes, and `apex:architecture-design` Pass 2 for the foundational persistence + tenancy decision.

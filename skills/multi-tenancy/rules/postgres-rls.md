@@ -74,7 +74,12 @@ CREATE POLICY invoices_tenant_isolation ON app.invoices
 ## Propagate `app.tenant_id` via `SET LOCAL` inside a transaction
 
 **When:** Telling Postgres which tenant the current request is for.
-**Rule:** Open a transaction, `SET LOCAL app.tenant_id = '<id>'`, run the application query, commit. Never use `SET` (session-wide); never set it outside a transaction.
+**Rule:** Inside a transaction, set the tenant GUC at the start. The exact statement depends on whether you're in psql/migration text or application code:
+
+- **psql / hand-written migrations** (value is a literal): `SET LOCAL app.tenant_id = '<id>'`. Concise and ergonomic for human-typed SQL.
+- **Application client code** (value comes from a request / bind variable): `SELECT set_config('app.tenant_id', $1, true)`. The `is_local=true` third argument gives identical transaction-scoped semantics to `SET LOCAL`, but unlike `SET` / `SET LOCAL` (which are utility commands), `set_config(...)` accepts bind parameters in prepared statements. Writing `SET LOCAL app.tenant_id = $1` against a prepared statement raises a syntax error at runtime — see the wrapper pattern below.
+
+Never use `SET` (session-wide); never set it outside a transaction.
 
 ```sql
 BEGIN;
@@ -133,7 +138,7 @@ outside it. Reviewers grep for `pool.acquire` and `conn.execute("SET …app.tena
 ## RLS does not prevent cross-tenant foreign-key references — composite FKs do
 
 **When:** Adding a foreign key on a tenant-scoped table.
-**Rule:** Use a *composite* FK that includes `tenant_id` on both sides. The parent table needs a matching `UNIQUE (tenant_id, …)` (which is why the composite UNIQUE in `rules/schema-design.md` is load-bearing).
+**Rule:** Use a *composite* FK that includes `tenant_id` on both sides. The parent table needs a matching `UNIQUE (tenant_id, …)` (which is why the composite UNIQUE in `apex:postgres-review/rules/schema-design.md` is load-bearing).
 
 ```sql
 -- ❌ BAD: child can reference any parent row regardless of tenant
@@ -152,7 +157,7 @@ CREATE TABLE app.line_items (
 );
 ```
 
-**Why:** RLS filters which rows a *query* sees, but FK constraints are checked by the system without regard to the session role. A malicious or buggy INSERT into `line_items` that names an `invoice_id` from another tenant will succeed if the FK is on `invoice_id` alone, even with RLS enabled. The composite FK makes the cross-tenant reference structurally impossible. (Stripping a composite UNIQUE on `invoices(tenant_id, id)` as "redundant with PRIMARY KEY (id)" is the canonical way to silently turn this off — see `rules/schema-design.md`.)
+**Why:** RLS filters which rows a *query* sees, but FK constraints are checked by the system without regard to the session role. A malicious or buggy INSERT into `line_items` that names an `invoice_id` from another tenant will succeed if the FK is on `invoice_id` alone, even with RLS enabled. The composite FK makes the cross-tenant reference structurally impossible. (Stripping a composite UNIQUE on `invoices(tenant_id, id)` as "redundant with PRIMARY KEY (id)" is the canonical way to silently turn this off — see `apex:postgres-review/rules/schema-design.md`.)
 
 ## Test RLS by connecting as `app_user` with a deliberately wrong tenant_id
 
@@ -248,4 +253,4 @@ CREATE POLICY invoices_tenant_isolation ON app.invoices
 6. Every FK on this table includes `tenant_id` on both sides?
 7. Integration test connects as `app_user` and verifies cross-tenant isolation in both directions (read and write)?
 
-Cross-references: schema-side details in `rules/schema-design.md`; the architecture-level RLS-vs-alternatives decision in `apex:architecture-design` Pass 2; the security-audit version of these checks in `apex:security-review` Pass 2 (authn + authz).
+Cross-references: schema-side details in `apex:postgres-review/rules/schema-design.md`; the architecture-level decision across multi-tenant strategies (RLS / schema-per-tenant / DB-per-tenant / app-layer filtering) in `apex:architecture-design` Pass 2; the security-audit version of these checks in `apex:security-review` Pass 2 (authn + authz).
