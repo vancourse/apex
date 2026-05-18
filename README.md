@@ -34,6 +34,8 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `protocol-first-workflow` | Python Protocol-first TDD with mock-count limits and stub generation |
 | `python-review` | Generic cross-project Python rules with a routing table to 11 topic files |
 | `typescript-review` | Generic TS/React rules with a routing table to 13 topic files |
+| `postgres-review` | Generic PostgreSQL review rules — schema design, indexing, migrations, transactions + locking, observability. Routing table inside. Multi-tenant isolation has its own skill: `multi-tenancy`. |
+| `multi-tenancy` | Multi-tenant isolation strategies and per-strategy review rules — Postgres RLS today; schema-per-tenant, DB-per-tenant, app-layer filtering, tenant-context propagation, tenant-data-export, billing-aware isolation planned. For the *strategy-choice* (which model to use) see `architecture-design` Pass 2; this skill is the per-strategy detail. |
 | `summarize-changes` | Branch / working-tree summary with risks and likely verification commands |
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
 

@@ -116,6 +116,14 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                                — routes the test-writing)     │
    │    python-review              (Python — routes to topic file) │
    │    typescript-review          (TS / React — same)             │
+   │    postgres-review            (Postgres-internal — schema     │
+   │                                 design today; indexing,       │
+   │                                 migrations, transactions +    │
+   │                                 locking, observability        │
+   │                                 planned)                      │
+   │    multi-tenancy              (tenant-scoped tables, RLS      │
+   │                                 policies, cross-tenant FKs — │
+   │                                 Postgres RLS ships today)     │
    │    frontend-design            (UI change)                     │
    │    polymorphic-type-modeling  (new variant / event-type)      │
    │    api-surface-review         (re-run on actual code, not     │
@@ -228,6 +236,8 @@ test-strategy                               ✓         ✓
 api-surface-review                   ✓                ✓                ✓                                  ✓¹
 python-review                                         ✓                ✓                                  ✓
 typescript-review                                     ✓                ✓                                  ✓
+postgres-review                                       ✓                ✓                                  ✓
+multi-tenancy                        ✓                ✓                ✓                                  ✓¹⁰
 frontend-design                                       ✓²
 protocol-first-workflow              ✓³               ✓³
 polymorphic-type-modeling            ✓⁴               ✓⁴
@@ -257,6 +267,7 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 ⁷ NEW feature design (not fix) — distinct from `apex-flow` §1b which covers fixes + refactors generically
 ⁸ when the feature accepts external input, handles classified data, or changes a privilege transition
 ⁹ for any PR touching auth / data access / external input / cryptography / sensitive paths
+¹⁰ when touching tenant-scoped tables, RLS policies, or cross-tenant FK enforcement
 (architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
 ## Eight principles overlaid on the pipeline
