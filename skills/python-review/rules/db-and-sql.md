@@ -1,6 +1,13 @@
 # Database & SQL
 
-Rules for SQL queries, ORM usage, migrations, and connection management.
+Rules for the **Python / ORM side** of database access: query shape, retry
+discipline, connection pooling, cache deduplication, idempotency, pagination.
+
+For **Postgres-internal** topics — schema design, RLS policy authorship,
+indexing strategy, `EXPLAIN ANALYZE` reading, migration safety patterns,
+transactions + locking, vacuum/autovacuum, observability — invoke
+**`apex:postgres-review`**. The two skills are designed to be loaded
+together when a change crosses the boundary.
 
 ## Move Computation to the Data (SQL > Python)
 
