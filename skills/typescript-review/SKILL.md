@@ -1,6 +1,6 @@
 ---
 name: typescript-review
-description: Generic TypeScript/React code review rules — types, control flow, hooks, components, stores, testing, error handling, hygiene, AI code smells. Routing table inside; load only the rule file matching the current task. Fires when investigating a specific TS/React anti-pattern, auditing a diff for review, or planning a refactor — NOT for every TS/TSX edit. In BookBridge, prefer `bookbridge-pre-pr-check` as the entry point; it cross-references rule files here. Keywords: typescript anti-pattern, react review, code review, refactor, frontend review, hooks, zod, zustand, playwright.
+description: Generic TypeScript/React code review rules — types, control flow, hooks, components, stores, testing, error handling, hygiene, AI code smells. Routing table inside; load only the rule file matching the current task. Fires when investigating a specific TS/React anti-pattern, auditing a diff for review, or planning a refactor — NOT for every TS/TSX edit. In projects that have a project-specific pre-PR skill, prefer that as the entry point; it cross-references rule files here. Keywords: typescript anti-pattern, react review, code review, refactor, frontend review, hooks, zod, zustand, playwright.
 ---
 
 # TypeScript & React Review Rules

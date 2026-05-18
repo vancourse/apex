@@ -1,6 +1,6 @@
 ---
 name: python-review
-description: Generic Python code review rules — architecture, types, SQL, async, testing, error handling, logging, security, APIs, hygiene, PR discipline, AI code smells. Routing table inside; load only the rule file matching the current task. Fires when investigating a specific Python anti-pattern, auditing a diff for review, or planning a refactor — NOT for every Python edit. In BookBridge, prefer `bookbridge-pre-pr-check` as the entry point; it cross-references rule files here. Keywords: python anti-pattern, python review, code review, refactor, pytest, pyright, asyncio, pydantic, fastapi, sqlalchemy.
+description: Generic Python code review rules — architecture, types, SQL, async, testing, error handling, logging, security, APIs, hygiene, PR discipline, AI code smells. Routing table inside; load only the rule file matching the current task. Fires when investigating a specific Python anti-pattern, auditing a diff for review, or planning a refactor — NOT for every Python edit. In projects that have a project-specific pre-PR skill, prefer that as the entry point; it cross-references rule files here. Keywords: python anti-pattern, python review, code review, refactor, pytest, pyright, asyncio, pydantic, fastapi, sqlalchemy.
 ---
 
 # Python Review Rules
