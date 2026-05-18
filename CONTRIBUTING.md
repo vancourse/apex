@@ -31,8 +31,11 @@ gh api graphql -f query='mutation($prId: ID!) {
 **Verify the request landed** via direct GraphQL query (`gh pr view --json reviewRequests` filters bots from output, so you'd be flying blind):
 
 ```bash
+# Derive owner/repo from the current git remote automatically
+REPO_OWNER=$(gh repo view --json owner -q '.owner.login')
+REPO_NAME=$(gh repo view --json name -q '.name')
 gh api graphql -F prNumber="$PR_NUMBER" -f query='query($prNumber: Int!) {
-  repository(owner: "<your-org>", name: "apex") {
+  repository(owner: "'"$REPO_OWNER"'", name: "'"$REPO_NAME"'") {
     pullRequest(number: $prNumber) {
       reviewRequests(first: 10) {
         nodes { requestedReviewer { __typename ... on Bot { login } } }
