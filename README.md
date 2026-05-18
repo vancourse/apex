@@ -121,39 +121,50 @@ Read the relevant file at the start of any session that touches that project.
 
 ## Install
 
-### Local development (recommended while iterating)
-
 ```bash
-claude --plugin-dir /Users/ravi/devenv/apex
+claude /plugin install github:vancourse/apex
 ```
 
-This loads the plugin from disk for a single session. Edit files, reload Claude Code, see changes.
+Restart Claude Code after installing. The skills and hooks activate immediately in the next session.
 
-### Distribute via git
+### Quickstart
 
-```bash
-# In the plugin directory
-git init && git add -A && git commit -m "Initial commit"
-git remote add origin git@github.com:<you>/apex.git
-git push -u origin main
+After installing, add the skill-gate stubs from the "Suggested additions" section above to your `~/.claude/CLAUDE.md`. Then try your first skill — e.g. before starting any non-trivial change:
+
+```
+/apex:apex-flow
 ```
 
-Then on any machine:
+Other common entry points:
+
+| When you're... | Run |
+|---|---|
+| About to write Python | `/apex:python-review` |
+| About to write TypeScript/React | `/apex:typescript-review` |
+| Touching a Postgres schema or SQL | `/apex:postgres-review` |
+| Touching tenant-scoped tables or RLS | `/apex:multi-tenancy` |
+| Pre-PR on an AI-assisted branch | `/apex:ai-pre-review-checklist` |
+| Opening a PR | `/apex:pr-discipline` then `/apex:pr-review-primer` |
+
+See [FLOW.md](FLOW.md) for the full phase-by-phase routing map.
+
+### Fork and customize
 
 ```bash
-claude /plugin install <github-url-or-marketplace-name>
+git clone https://github.com/vancourse/apex
+# Edit skills/, hooks/, rules/ as needed
+claude --plugin-dir ./apex   # load from disk for the current session
 ```
 
-## Customizing
+- **Add a skill** — drop `skills/<name>/SKILL.md` (frontmatter + body). Picked up automatically via the `description` field.
+- **Add a hook** — write the script in `hooks/`, register it in `hooks/hooks.json`.
+- **Add a command alias** — drop `commands/<name>.md`.
 
-- **Add a skill** — drop a new `skills/<name>/SKILL.md` (frontmatter + body). The model picks it up automatically based on the `description` field.
-- **Add a hook** — write the script in `hooks/`, then register it in `hooks/hooks.json` under the right event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, etc.).
-- **Add a dependency** — edit the `dependencies` array in `.claude-plugin/plugin.json`.
-- **Strip a dependency** — remove from `dependencies`; users without the corresponding marketplace will install cleanly.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR loop apex uses on itself.
 
 ## Contributing
 
-apex itself follows the discipline it prescribes — every change opens a draft PR, requests Copilot review via the GraphQL mutation, addresses findings until NITs-only OR 5 rounds, and squash-merges to `main`. **No direct-to-main pushes.** See [CONTRIBUTING.md](CONTRIBUTING.md) for the full rules and the typical PR flow including local-install sync after merge.
+apex eats its own cooking — every change opens a draft PR, runs the Copilot review loop, and squash-merges to `main`. **No direct-to-main pushes.** See [CONTRIBUTING.md](CONTRIBUTING.md) for the full rules.
 
 ## Why this plugin exists
 
