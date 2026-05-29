@@ -2,7 +2,7 @@
 
 An opinionated Claude Code plugin that bundles a personal SDLC framework — planning gates, code-review skills, PR workflow discipline, and workflow-automation hooks. Designed to make AI-assisted coding survive a strict reviewer.
 
-**See [FLOW.md](FLOW.md)** for the phase-by-phase flowchart and skill × phase matrix.
+**New to apex?** Start with **[WALKTHROUGH.md](WALKTHROUGH.md)** — the idea → shipped product/feature path in order (which ~6 commands you type, which gates fire automatically, where to freeze). **See [FLOW.md](FLOW.md)** for the phase-by-phase flowchart and skill × phase matrix.
 
 ## What's in the box
 
@@ -18,7 +18,9 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `apex-flow` | Umbrella planning gates: §1a reconnaissance + §1b adversarial design checklist + §1c verify ask vs raw quotes + phase-routing pointer |
 | `design-feature` | Feature-design-from-scratch gate (NEW features, not fixes) — scenarios + MVP cut + deferral list + integration with existing surface + failure modes + **§6 attack surface (invokes apex:threat-model)**, with product-overlap + OSS-alternatives + adversarial counter-pass. Distinct from `apex-flow` §1b which is generic. |
 | `threat-model` | Per-feature STRIDE threat model at design time — Spoofing / Tampering / Repudiation / Information disclosure / Denial of service / Elevation of privilege, against the feature's attack surface anchored on `architecture-design` Passes 3 + 7. Outputs a "Threat Model" section appended to the design doc that `security-review` audits at PR time. |
+| `design-review` | **6-pass adversarial re-pass + design-freeze ceremony** for a design produced by `design-feature` — re-walks scenarios / MVP cut / deferral list / integration / failure modes / attack surface from the *attack* lens, run cold in a separate cognitive step so the steelman author voice and the attack review voice don't blur. Adds explicit design-freeze (the gate between "design drafted" and "impl plan may begin"). The author/review split for the design phase, mirroring PRD, ADR, and impl-plan. 2-agent cooperative+adversarial pair is the default for non-trivial designs. |
 | `impl-plan-review` | 5-pass review of the implementation plan (how to BUILD it, not what to build) — layered PR stack + sequencing + test plan per layer (PRD scenarios → integration tests 1:1) + rollout strategy + reversibility. Plus adversarial counter-pass + plan-freeze readiness gate. |
+| `spec-view` | Renders a frozen (or freeze-candidate) PRD / ADR set / design doc as a **disposable, fully-offline rich-HTML view** for human freeze-review — color-coded freeze-readiness dashboard, inline-SVG data-flow / STRIDE / MVP-vs-deferred diagrams, collapsible review passes, severity badges, syntax-highlighted code. The Markdown stays canonical; the HTML is a throwaway view written to `tmp/apex-views/` (gitignored, never re-ingested by downstream skills). A human-judgment aid at the freeze gates, not a substitute for `prd-review` / `adr-review` / `design-review`. |
 | `test-strategy` | The methodology layer for HOW to test — 8-layer model (Unit / Service-real-DB / Router-contract / Backend-scenario / FE-component / Spine-E2E / Visual-E2E / Drift) + mocking policy per layer + CI tiering (PR / 4h / nightly / weekly drift) + isolation patterns (transaction rollback, per-test runtime budget) + pre-seeded data (static / golden / per-test) + recorded fixtures (VCR-style) + anti-goals + 17 language-agnostic test design rules. Language-specific tooling lives in `python-review/rules/testing.md` and `typescript-review/rules/testing.md`. |
 | `test-coverage-audit` | Pre-PR audit (5 passes) — PRD↔integration test 1:1 mirror, layer discipline, CI tier discipline, mock budget, failure-mode coverage. Distinct from `ai-pre-review-checklist` Step 6 (which audits test QUALITY); this audits test COVERAGE and architecture. |
 | `security-review` | **PR-time security audit (5 passes)** — secrets management, authentication + authorization (per-layer + fail-closed), input validation + output encoding, dependency vulnerability + supply-chain integrity, audit log + observability for security events. Verifies implementation against the feature's threat model output. Plus adversarial counter-pass. |
@@ -39,7 +41,23 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `summarize-changes` | Branch / working-tree summary with risks and likely verification commands |
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
 
-**Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, `superpowers:dispatching-parallel-agents` for the two-agent adversarial pair pattern referenced by `prd-review` and `design-feature`.
+**Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, `superpowers:dispatching-parallel-agents` for the two-agent cooperative+adversarial pair pattern referenced by `prd-review`, `design-feature`, `design-review`, and `impl-plan-review` (the default for non-trivial designs / impl plans), and `superpowers:test-driven-development` for the red-green loop (write the failing test first) that `test-strategy` assumes — apex owns scenario sourcing + layer placement + mock budget *around* that loop but does not re-implement it.
+
+### Commands
+
+Slash commands are thin entry points. Most map 1:1 to a skill of the same name; the orchestration commands below chain several skills (and, for two of them, agents from companion plugins). Every command's `description` carries a **`[USER]`** or **`[AUTO]`** tag so the slash menu signals whether *you* type it at a phase boundary or the model fires it automatically based on phase + file paths.
+
+| Command | Tag | What it does |
+|---|---|---|
+| `/apex:create-prd` | `[USER]` | Author a new PRD — chains `superpowers:brainstorming` (explore intent) → `superpowers:writing-plans` (draft the spec). Suggests `/apex:prd-review` afterward to audit + freeze. |
+| `/apex:create-impl-plan` | `[USER]` | Author an implementation plan against the frozen design — chains `superpowers:writing-plans`. Suggests `/apex:impl-plan-review` afterward. |
+| `/apex:design-review` | `[AUTO]` | Backs the `design-review` skill — the adversarial re-pass + freeze ceremony for the design phase. |
+| `/apex:spec-view` | `[USER]` | Backs the `spec-view` skill — renders a PRD / ADR set / design doc as a disposable offline rich-HTML view for human freeze-review. |
+| `/apex:review-pr` | `[USER]` | Heavy multi-agent pre-PR review — dispatches 6 cooperating specialist agents (`code-reviewer`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`, `code-simplifier`) from the `pr-review-toolkit` plugin in parallel. Optional, for non-trivial branches. |
+| `/apex:help` | `[USER]` | Prints the command cheat sheet — which commands you type vs. which the model fires automatically, plus the SDLC workflow at a glance. |
+| `/apex:test` | `[USER]` | Focuses `test-strategy` on one layer — maps an industry term (`unit` / `integration` / `smoke` / `e2e` / `component` / `visual` / `drift`) or an apex layer name to the 8-layer model, then surfaces what to test there, what to mock, and which CI tier. Advisory router; **does not run the suite** (the runner is project-specific). No argument → the 8-layer menu. |
+
+`design-review` and `spec-view` are full skills (see the Skills table); the other five are command-only orchestrators/routers with no standalone skill body (`/apex:test` routes to the `test-strategy` skill). All remaining skills are also invocable as `/apex:<skill-name>`.
 
 ### Hooks
 

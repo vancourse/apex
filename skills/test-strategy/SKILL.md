@@ -17,6 +17,8 @@ The methodology layer for how to test. This skill answers:
 
 What this skill is **not**: language-specific tooling guidance. For Python tooling (pytest, MagicMock vs stubs, async fixture typing) → `apex:python-review/rules/testing.md`. For TS tooling (Vitest, MSW, RTL, TanStack Query test helpers) → `apex:typescript-review/rules/testing.md`. For Playwright specifics → `apex:typescript-review/rules/playwright-e2e.md`. For per-PR test coverage audit → `apex:test-coverage-audit`.
 
+This skill is also **not the red-green TDD loop**. It decides *what* to test (scenarios), *which layer* each test lives at, and *what to mock* — but the iterative discipline of **write a failing test first → watch it fail → write the minimal code to pass → refactor** lives in **`superpowers:test-driven-development`** (a side-path companion plugin; apex defers the loop rather than re-implementing it). Use that loop *while implementing*; use this skill to decide where each resulting test belongs and at which CI tier it runs. The two compose: `superpowers:test-driven-development` gives you the cadence, `apex:test-strategy` gives you the layering.
+
 ## When to invoke
 
 - During **IMPL PLAN** phase — `apex:impl-plan-review` Pass 3 (test plan per layer) routes here for the layer model
@@ -288,6 +290,7 @@ For language-specific examples, see the language-review testing rule files.
 - `apex:prd-review` Pass 2 — PRD owns the testable scenarios list (input to Rule 3)
 - `apex:impl-plan-review` Pass 3 — test plan per layer (uses the 8-layer model from this skill)
 - `apex:test-coverage-audit` — per-PR audit that this strategy's rules are met
+- `superpowers:test-driven-development` — the red-green loop apex defers to (write the failing test first, watch it fail, minimal code to pass). apex owns scenario sourcing (Rule 1, 3) + layer placement (8-layer model) + mock budget (Rule 5) *around* that loop; it does not re-implement the loop itself
 - `apex:ai-pre-review-checklist` Step 6 (test quality) + Step 7 (consumer tracing) — pairs with this skill at PRE-PR phase
 - `apex:python-review/rules/testing.md` — Python-specific tooling (pytest, MagicMock, async fixtures)
 - `apex:typescript-review/rules/testing.md` — TypeScript-specific tooling (Vitest, MSW, RTL)
