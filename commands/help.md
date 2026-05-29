@@ -50,8 +50,8 @@ DESCRIPTION TAGS in the slash menu:
   [AUTO]  — I fire it automatically; you can also invoke if you want a manual pass
 
 DEEPER DOCS:
-  ~/.claude/plugins/cache/apex/apex/0.1.0/WALKTHROUGH.md  (idea→feature, in order — start here)
-  ~/.claude/plugins/cache/apex/apex/0.1.0/README.md   (full plugin docs)
-  ~/.claude/plugins/cache/apex/apex/0.1.0/FLOW.md     (canonical phase routing)
+  ~/.claude/plugins/cache/apex/apex/<version>/WALKTHROUGH.md  (idea→feature, in order — start here)
+  ~/.claude/plugins/cache/apex/apex/<version>/README.md   (full plugin docs)
+  ~/.claude/plugins/cache/apex/apex/<version>/FLOW.md     (canonical phase routing)
   ~/.claude/CLAUDE.md §6                              (your personal skill gates)
 ```
