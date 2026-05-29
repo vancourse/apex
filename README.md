@@ -2,7 +2,7 @@
 
 An opinionated Claude Code plugin that bundles a personal SDLC framework — planning gates, code-review skills, PR workflow discipline, and workflow-automation hooks. Designed to make AI-assisted coding survive a strict reviewer.
 
-**New to apex?** Start with **[WALKTHROUGH.md](WALKTHROUGH.md)** — the idea → shipped product/feature path in order (which ~6 commands you type, which gates fire automatically, where to freeze). **See [FLOW.md](FLOW.md)** for the phase-by-phase flowchart and skill × phase matrix.
+**New to apex?** Start with **[HOWTO.md](HOWTO.md)** for install + the 6-command quickstart, then **[WALKTHROUGH.md](WALKTHROUGH.md)** for the idea → shipped product/feature path in order. **See [FLOW.md](FLOW.md)** for the phase-by-phase flowchart and skill × phase matrix.
 
 ## What's in the box
 
