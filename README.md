@@ -4,6 +4,8 @@ An opinionated Claude Code plugin that bundles a personal SDLC framework — pla
 
 **New to apex?** Start with **[HOWTO.md](HOWTO.md)** for install + the 6-command quickstart, then **[WALKTHROUGH.md](WALKTHROUGH.md)** for the idea → shipped product/feature path in order. **See [FLOW.md](FLOW.md)** for the phase-by-phase flowchart and skill × phase matrix.
 
+**Already using a spec-driven tool?** apex composes with [GitHub Spec Kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD) — author specs with them, then run apex's adversarial review/freeze gates on their artifacts. See **[INTEROP.md](INTEROP.md)**.
+
 ## What's in the box
 
 ### Skills

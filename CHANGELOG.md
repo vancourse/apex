@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`INTEROP.md` — Spec Kit / BMAD interop guide.** apex composes with [GitHub Spec Kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD): author specs with them, then run apex's adversarial review/freeze gates on their artifacts. Includes the phase→gate mapping (their `spec.md`/`plan.md`/`tasks.md` / `docs/prd.md`/`docs/architecture.md` → apex's `prd-review`/`design-review`/`impl-plan-review`/`adr-review`/`threat-model`), the interleaved workflow, and a "don't double-author" rule. Linked from the README header.
+
+---
+
 ## [0.3.1] — 2026-05-31
 
 ### Added
