@@ -70,12 +70,12 @@ move to the next row.
 
 | # | Phase | You type (`[USER]`) | Fires automatically (`[AUTO]`) | Freeze gate before moving on |
 |---|---|---|---|---|
-| 1 | **PRD** | `/apex:create-prd` — chains `superpowers:brainstorming` → `superpowers:writing-plans` | `/apex:prd-review` — 7-pass audit + overlap/OSS scans + adversarial counter-pass | PRD frozen: acceptance criteria, testable scenarios, out-of-scope, success metric all settled |
-| 2 | **Architecture** *(greenfield only, once)* | `/apex:architecture-design` — authors 7 ADRs | `/apex:adr-review` — 5-element audit per ADR | All 7 ADRs accepted → architecture frozen |
-| 3 | **Design** | `/apex:design-feature` — scenarios + MVP + deferrals + integration + failure modes + §6 attack surface | `/apex:design-review` (adversarial re-pass + freeze) · `/apex:threat-model` · `/apex:api-surface-review` (if endpoints) | Design frozen: the buildable shape is locked |
-| 4 | **Impl plan** | `/apex:create-impl-plan` — chains `superpowers:writing-plans` against the frozen design | `/apex:impl-plan-review` — 5-pass (layered PR stack ≤400 LOC, sequencing, test-plan-per-layer, rollout, reversibility) | Plan frozen: PR stack + per-layer test plan locked |
+| 1 | **PRD** | `/apex:create-prd` — chains `superpowers:brainstorming` → `superpowers:writing-plans` | `prd-review` — 7-pass audit + overlap/OSS scans + adversarial counter-pass | PRD frozen: acceptance criteria, testable scenarios, out-of-scope, success metric all settled |
+| 2 | **Architecture** *(greenfield only, once)* | `/apex:architecture-design` — authors 7 ADRs | `adr-review` — 5-element audit per ADR | All 7 ADRs accepted → architecture frozen |
+| 3 | **Design** | `/apex:design-feature` — scenarios + MVP + deferrals + integration + failure modes + §6 attack surface | `design-review` (adversarial re-pass + freeze) · `threat-model` · `api-surface-review` (if endpoints) | Design frozen: the buildable shape is locked |
+| 4 | **Impl plan** | `/apex:create-impl-plan` — chains `superpowers:writing-plans` against the frozen design | `impl-plan-review` — 5-pass (layered PR stack ≤400 LOC, sequencing, test-plan-per-layer, rollout, reversibility) | Plan frozen: PR stack + per-layer test plan locked |
 | 5 | **Build** | *(just describe the task)* | language reviews (`python-review` / `typescript-review`), `api-surface-review`, `postgres-review`, `multi-tenancy`, `protocol-first-workflow`, `polymorphic-type-modeling`, `verify-ports`, `test-strategy` — fired by file paths | Each PR in the stack builds + its tests pass |
-| 6 | **Verify** | *(describe, or say "verify")* | `/apex:verification-before-completion` — tests + logs + browser for UI | Change is proven to work, not just written |
+| 6 | **Verify** | *(describe, or say "verify")* | `verification-before-completion` — tests + logs + browser for UI | Change is proven to work, not just written |
 | 7 | **Pre-PR** | `/apex:review-pr` *(optional, heavy — 6 specialists in parallel)* | `ai-pre-review-checklist` · `test-coverage-audit` · language review · `security-review` (if security-touched) | Self-review clean before a human sees it |
 | 8 | **Open PR** | *(say "open the PR")* | `pr-discipline` (draft + ask before push) · `pr-review-primer` · `summarize-changes` | Draft PR open with a reviewer-facing description |
 | 9 | **Review** | `/apex:copilot-review-loop` | `responding-to-review` — every blocker → a concrete artifact + diff | NITs-only OR 5 rounds → squash-merge |
@@ -85,13 +85,13 @@ move to the next row.
 
 **Why some rows have no command in the "You type" column.** Build, Verify, and Open PR are
 phases where you just describe the work and the `[AUTO]` skills fire — there's nothing to
-*author*, so there's no `[USER]` entry point. Two of them still have typeable commands you
-rarely need: `/apex:verification-before-completion` (Verify) and `/apex:pr-discipline` +
-`/apex:pr-review-primer` + `/apex:summarize-changes` (Open PR). **Build** has none on
-purpose: it's the *absence* of a gate (you write code; the language / api-surface /
-postgres review skills fire by file path), so a `/apex:build` would be an empty wrapper.
-Every apex skill is also invocable as `/apex:<skill-name>` if you ever want to fire one by
-hand.
+*author*, so there's no `[USER]` entry point. Their gates (`verification-before-completion`
+for Verify; `pr-discipline` + `pr-review-primer` + `summarize-changes` for Open PR) are
+**skills, not commands** — they fire automatically and are deliberately kept out of the
+slash menu. **Build** has none on purpose: it's the *absence* of a gate (you write code;
+the language / api-surface / postgres review skills fire by file path). The slash menu is
+limited to the ~11 entry-point commands you actually drive by hand; to fire any auto skill
+manually, just ask for it by name (e.g. "run `verify-ports` on this").
 
 ---
 
@@ -106,7 +106,7 @@ hand.
   re-ingested). It's a sign-off aid, **not** a substitute for the review skills.
 
 - **The 2-agent pair is the *default* on hard reviews, not an escalation.** For
-  `/apex:design-review` and `/apex:impl-plan-review` on a non-trivial artifact (an impl
+  the `design-review` and `impl-plan-review` skills on a non-trivial artifact (an impl
   plan with ≥3 PRs or any production-data migration; a design touching auth, payments,
   multi-tenant data, crypto, or any trust-boundary crossing), the cooperative+adversarial
   **pair** (`superpowers:dispatching-parallel-agents` — one agent runs the passes in

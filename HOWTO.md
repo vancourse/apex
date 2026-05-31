@@ -31,10 +31,10 @@ apex is designed so you type ~6 commands across an entire feature; everything el
 
 | Phase | You type | What fires automatically after |
 |---|---|---|
-| **Spec** — author + freeze a PRD | `/apex:create-prd` | `/apex:prd-review` (audit + freeze) |
-| **Architecture** — one-time at project start | `/apex:architecture-design` | `/apex:adr-review` per ADR |
-| **Design** — design a feature against the frozen PRD | `/apex:design-feature` | `/apex:design-review` (adversarial re-pass + freeze) |
-| **Plan** — implementation plan against the frozen design | `/apex:create-impl-plan` | `/apex:impl-plan-review` (layered stack + sequencing + tests + rollout + reversibility) |
+| **Spec** — author + freeze a PRD | `/apex:create-prd` | `prd-review` skill (audit + freeze) |
+| **Architecture** — one-time at project start | `/apex:architecture-design` | `adr-review` skill per ADR |
+| **Design** — design a feature against the frozen PRD | `/apex:design-feature` | `design-review` skill (adversarial re-pass + freeze) |
+| **Plan** — implementation plan against the frozen design | `/apex:create-impl-plan` | `impl-plan-review` skill (layered stack + sequencing + tests + rollout + reversibility) |
 | **Build** — just describe the task | *(no explicit command)* | Language reviews, threat-model triggers, test-strategy, verification-before-completion |
 | **PR** — open + review | `/apex:copilot-review-loop` | `pr-discipline`, `pr-review-primer`, `summarize-changes`, `responding-to-review` |
 
