@@ -13,7 +13,9 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ### Changed
 
-- **`recon` Step 1 now leads with a code graph.** Where a structural index (Graphify / Serena / Claude Context) is available, query it first to enumerate candidates instead of grepping blind — while keeping recon's existing discipline: the graph answers Step 1 (*where it lives*), never Step 2 (*the contract*), and is treated as **ephemeral** (regenerated, never trusted as stored truth). Mirrors apex's structural-ephemeral / semantic-durable split.
+- **`recon` Step 1 now requires a code graph on large/unfamiliar repos** (strengthened from "if present"). The structural index is the precondition for trustworthy enumeration: build/refresh one (Graphify / Serena / Claude Context; `/apex:setup` if none) before enumerating, then query it instead of grepping blind. Discipline preserved: the graph answers Step 1 (*where it lives*), never Step 2 (*the contract*), and is **ephemeral** (regenerated, never trusted as stored truth) — mirroring apex's structural-ephemeral / semantic-durable split. Small/familiar trees still use plain grep/Explore (no index for a handful of files).
+- **`apex-flow` §1a + the design-entry hook now nudge the graph precondition** — on a large/unfamiliar repo, the "codebase reconnaissance" look should go through an index (built via `/apex:setup` if absent), not blind grep, before design-bearing work.
+- **README licensing note** — clarifies apex **bundles none** of the companions or context tools: they are independent third-party projects under their own licenses, only referenced/recommended; apex itself is MIT.
 - README *Recommended companions* now lists `pr-review-toolkit` explicitly (backs `/apex:review-pr`) and points at `/apex:setup`.
 
 ---

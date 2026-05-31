@@ -103,6 +103,8 @@ These are not declared as `dependencies` in `plugin.json` — Claude Code's depe
 
 Install each separately via `/plugin install <name>@<marketplace>`, or run **`/apex:setup`** — a guided installer that detects what's present, installs what it safely can, and prints the exact commands for the rest.
 
+> **Licensing:** apex **bundles none of these** — the companions and the large-codebase context tools below are independent, third-party projects, each under its own license, installed directly from their own sources. apex only *references* them by name and recommends them; nothing here is redistributed as part of apex (which is MIT — see [LICENSE](LICENSE)). Review each tool's license before use.
+
 ## Large-codebase context tools (optional)
 
 On a big repo, Claude re-reads/greps the tree every session. A structural index fixes that — apex's `recon` (Step 1) and everyday navigation query the index instead of sweeping blind. These are third-party tools, not apex skills; `/apex:setup` will walk you through one. Pick **one** that matches how you work:
