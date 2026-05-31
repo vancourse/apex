@@ -6,7 +6,7 @@ Author an implementation plan for the user's frozen design.
 
 Prerequisites check:
 
-- The design should already be frozen (via `/apex:design-feature` or equivalent). If it isn't, say so and stop — the impl plan is not the place to design.
+- The design must be **FROZEN, not just drafted** — i.e. `apex:design-review` (the cold adversarial re-pass + design-freeze ceremony) has run on the `design-feature` draft and accepted it. A `design-feature` draft alone is authored, not frozen. If `design-review` hasn't run, **stop and run it first** — the impl plan is not the place to design, and an un-reviewed design is not a contract you can plan against.
 - The PRD should already be frozen (via the `prd-review` skill). If it isn't, say so and stop.
 
 Run this sequence:

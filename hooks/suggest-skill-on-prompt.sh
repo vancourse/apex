@@ -32,6 +32,14 @@ if echo "$input" | grep -qiE '\bshrink\b|\bbloated\b|\bslim(mer)?\b|make .*small
   context="${context:+$context }Invoke the apex:recon skill BEFORE choosing a design shape — surface the existing primitive that already answers this (apex-flow §1a-Q2) and run the pure-addition / subtractive check (§1b-5) before adding new fields/enums/guards."
 fi
 
+# Design-freeze gate — moving from a design toward implementation planning / building.
+# A design-feature draft is authored, not frozen; design-review (the cold adversarial re-pass)
+# must run + freeze it before create-impl-plan or coding begins. Backstops the mandatory hand-off
+# in skills/design-feature/SKILL.md for the case where the move happens in a later prompt.
+if echo "$input" | grep -qiE 'impl(ementation)?[- ]?plan|create-impl-plan|start (implement|build|cod)(ing)?|begin (implement|cod)(ing)?|ready to (implement|build|code)|design (is )?(done|finished|complete|frozen)'; then
+  context="${context:+$context }Before apex:create-impl-plan or any implementation, ensure apex:design-review has run on the design (the cold adversarial re-pass + design-freeze ceremony, separate from design-feature's inline counter-passes) and FROZEN it. A design-feature draft is authored, not frozen — do not plan or code against an un-reviewed design."
+fi
+
 [ -n "$context" ] && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
 
 exit 0

@@ -145,9 +145,24 @@ The design passes if:
 
 Fail any → the design isn't ready for implementation. Reshape before writing code.
 
+## Mandatory next step — `apex:design-review` (do NOT skip)
+
+A `design-feature` draft is **authored, not frozen.** The inline adversarial
+counter-passes above are the *cheap* version — a single agent attacking the
+design it just authored, with the attack voice contaminated by the just-spent
+author voice. The **load-bearing** review is a separate, cold pass:
+
+**Before `apex:create-impl-plan` or any implementation, run `apex:design-review`.**
+It re-walks these 5+1 passes from the attack lens in a separate cognitive step
+(ideally a parallel adversarial agent for non-trivial designs) and runs the
+**design-freeze ceremony**. Do **not** treat this design as a contract — and do
+**not** proceed to impl planning or coding — until `design-review` has run and
+**frozen** the design. Skipping it on a non-trivial design is a deviation to
+justify explicitly, not a silent default.
+
 ## Hand-off to implementation
 
-Once the design passes, route to the appropriate implementation skills:
+Once `apex:design-review` has frozen the design, route to the appropriate implementation skills:
 
 - If it exposes an API surface → run `apex:api-surface-review` against the proposed shape before implementing
 - If it adds a new variant to an existing union → run `apex:polymorphic-type-modeling`
