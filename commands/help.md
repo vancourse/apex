@@ -7,10 +7,11 @@ Display the following cheat sheet to the user verbatim, as a code block. Do NOT 
 ```
 APEX — Which command should I type?
 
-YOU TYPE THESE — the entire /apex: slash menu (11 entry-point commands):
+YOU TYPE THESE — the entire /apex: slash menu (12 entry-point commands):
   /apex:apex-flow              Unsure which gate? This routes you (catch-all)
   /apex:create-prd             Start a new feature → brainstorm + draft PRD
   /apex:architecture-design    System architecture (once at project start)
+  /apex:recon                  Reconnaissance brief before design (surface existing primitives + invariants)
   /apex:design-feature         Design a feature (after PRD frozen)
   /apex:create-impl-plan       Write impl plan (after design frozen)
   /apex:review-pr              Multi-agent pre-PR review (cooperating specialists)
@@ -34,6 +35,7 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
 WORKFLOW AT A GLANCE:
   PRD       → /apex:create-prd         → prd-review (auto)   [→ /apex:spec-view for human HTML review]
   Arch      → /apex:architecture-design  → adr-review (auto, per ADR)  [→ /apex:spec-view]
+  Recon     → /apex:recon              (surface existing primitives + invariants before designing)
   Design    → /apex:design-feature     → design-review (auto)  [→ /apex:spec-view]
   Plan      → /apex:create-impl-plan   → impl-plan-review (auto)
   Build     → (just describe the task)    (auto: language reviews, etc.)
@@ -47,7 +49,7 @@ WORKFLOW AT A GLANCE:
   Review    → /apex:copilot-review-loop    (auto: responding-to-review)
 
 THE SLASH MENU IS INTENTIONALLY SMALL:
-  Only the 11 entry-point commands above appear under /apex: — the ones you drive by hand.
+  Only the 12 entry-point commands above appear under /apex: — the ones you drive by hand.
   Every review gate (prd-review, design-review, security-review, …) is a SKILL that fires
   automatically by phase + file path; it has no slash command, by design. Ask for any of
   them by name to run a manual pass.
