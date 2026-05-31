@@ -27,7 +27,7 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
   - **Architecture → `adr-review` → freeze:** `skills/architecture-design/SKILL.md` freeze-readiness now **mandates each of the 7 ADRs pass `adr-review`** before the architecture freezes (ADRs are authored, not frozen, until audited).
   - **Design → `design-review` → impl-plan:** `skills/design-feature/SKILL.md` mandatory "next step — `apex:design-review`" section (the cold adversarial re-pass + freeze, distinct from the cheap inline counter-passes); `commands/impl-plan.md` prerequisite requires the design **FROZEN via `design-review`**, not just drafted.
   - **Impl plan → `impl-plan-review` → build:** `commands/impl-plan.md` now requires `impl-plan-review` + freeze before any implementation (was "suggest, don't auto-invoke").
-  - `hooks/suggest-skill-on-prompt.sh` gains **three phase-freeze gates** — entering design (→ `prd-review`), entering impl-planning (→ `design-review`), entering build/code (→ `impl-plan-review`) — each firing on the prompt that signals the transition.
+  - `hooks/suggest-skill-on-prompt.sh` gains **three phase-freeze gates** — entering design (→ `prd-review`, plus a **conditional `recon` nudge** for non-trivial / unfamiliar work, beyond the existing subtractive-trap nudge), entering impl-planning (→ `design-review`), entering build/code (→ `impl-plan-review`) — each firing on the prompt that signals the transition. `skills/design-feature/SKILL.md` "When to invoke" also prompts `recon` first for non-trivial / unfamiliar changes (skip for trivial/familiar — its own YAGNI guard).
 
 ### Added
 

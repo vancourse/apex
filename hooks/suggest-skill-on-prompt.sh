@@ -37,8 +37,8 @@ fi
 # backstop the mandatory hand-offs in the author skills/commands for the cross-prompt case.
 
 # -> entering DESIGN: the PRD must be prd-reviewed + frozen.
-if echo "$input" | grep -qiE 'design (a|an|the|this) (new )?feature|/apex:design|time to design'; then
-  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. Don't design against an un-reviewed PRD."
+if echo "$input" | grep -qiE '/apex:design\b|\bdesign(ing)? (a|an|the|this|our|my|new)\b|let.?s design|time to design|start(ing)? (the )?design'; then
+  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. AND if this change is non-trivial or in an unfamiliar / scope-heavy area, run apex:recon first to put existing primitives, contracts, and invariants on the table (skip recon for trivial or familiar work)."
 fi
 
 # -> entering IMPL-PLANNING: the design must be design-reviewed + frozen.

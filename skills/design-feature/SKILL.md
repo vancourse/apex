@@ -11,6 +11,8 @@ The design gate for a NEW feature where the PRD is solid and now you need to tra
 
 **Prerequisite (hard gate):** the PRD must be **FROZEN** — i.e. `apex:prd-review` has run and accepted it. A drafted PRD alone is authored, not frozen. If `prd-review` hasn't run, **stop and run it first** — designing against an un-reviewed PRD bakes its gaps (missing scenarios, unstated scope, an ungated success metric) straight into the design.
 
+**Recon first (conditional):** for a **non-trivial** change or an **unfamiliar / scope-heavy** part of the tree, run **`apex:recon`** before designing — it puts the existing primitives, contracts, and invariants on the table so the design reuses what exists instead of reconstructing it. **Skip** recon for trivial or familiar work (its own YAGNI guard). This is the heavy, artifact-producing version of the §1a reconnaissance `apex-flow` already prescribes.
+
 - The PRD passed `apex:prd-review` and now needs a design
 - You're proposing a new service, model, UI surface, or workflow that doesn't already exist
 - "Let's design feature X" — that's this skill's signal
