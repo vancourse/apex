@@ -2,7 +2,8 @@
   "name": "apex",
   "description": "Single-plugin marketplace for apex — an opinionated SDLC framework for Claude Code.",
   "owner": {
-    "name": "apex maintainers"
+    "name": "shadowhunter99",
+    "email": "shadowhunter99@gmail.com"
   },
   "plugins": [
     {
@@ -11,7 +12,8 @@
       "version": "0.3.1",
       "source": "./",
       "author": {
-        "name": "apex maintainers"
+        "name": "shadowhunter99",
+        "email": "shadowhunter99@gmail.com"
       }
     }
   ]
