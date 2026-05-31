@@ -8,12 +8,12 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ### Changed
 
-- **`design-review` is now enforced after `design-feature`, not merely flow-prescribed.** Defense-in-depth so the load-bearing adversarial re-pass actually runs before implementation planning:
-  - `skills/design-feature/SKILL.md` gains a **mandatory "next step — `apex:design-review`"** section: a `design-feature` draft is *authored, not frozen*; the inline counter-passes are the cheap (contaminated-voice) version, and `design-review` (the cold, separate adversarial re-pass + freeze ceremony) must run before `create-impl-plan` or coding.
-  - `hooks/suggest-skill-on-prompt.sh` gains a **design-freeze-gate** block that, when a prompt signals moving toward implementation planning / building (`impl plan`, `start implementing`, `design is done`, …), reminds that `design-review` must have run and frozen the design first — backstopping the case where the move happens in a later prompt.
-  - `commands/create-impl-plan.md` hardens its prerequisite: the design must be **FROZEN via `apex:design-review`**, not just drafted, or it stops.
-
-  No new slash command — `design-review` stays a skill (`[AUTO]`), consistent with `prd-review` / `impl-plan-review`; the menu remains 12 commands.
+- **Every author → review → freeze handoff in the SDLC chain is now enforced, not merely flow-prescribed.** Previously a drafted artifact (PRD, ADR set, design, impl plan) could slide into the next phase without its load-bearing cold review actually running. Now each gate is enforced with defense-in-depth — a mandatory hand-off in the author step, a downstream hard-gate in the next phase, and a cross-prompt backstop in the `suggest-skill-on-prompt` hook — with **no new slash commands** (the reviews stay `[AUTO]` skills; the menu remains 12).
+  - **PRD → `prd-review` → design:** `commands/create-prd.md` now requires `prd-review` + freeze before `design-feature` (was "suggest, don't auto-invoke"); `skills/design-feature/SKILL.md` adds a **hard prerequisite** — stop if the PRD isn't frozen via `prd-review`.
+  - **Architecture → `adr-review` → freeze:** `skills/architecture-design/SKILL.md` freeze-readiness now **mandates each of the 7 ADRs pass `adr-review`** before the architecture freezes (ADRs are authored, not frozen, until audited).
+  - **Design → `design-review` → impl-plan:** `skills/design-feature/SKILL.md` mandatory "next step — `apex:design-review`" section (the cold adversarial re-pass + freeze, distinct from the cheap inline counter-passes); `commands/create-impl-plan.md` prerequisite requires the design **FROZEN via `design-review`**, not just drafted.
+  - **Impl plan → `impl-plan-review` → build:** `commands/create-impl-plan.md` now requires `impl-plan-review` + freeze before any implementation (was "suggest, don't auto-invoke").
+  - `hooks/suggest-skill-on-prompt.sh` gains **three phase-freeze gates** — entering design (→ `prd-review`), entering impl-planning (→ `design-review`), entering build/code (→ `impl-plan-review`) — each firing on the prompt that signals the transition.
 
 ---
 

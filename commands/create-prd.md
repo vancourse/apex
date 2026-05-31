@@ -10,6 +10,6 @@ Run this sequence:
 
 2. **Invoke the `writing-plans` skill from the superpowers plugin** to translate the agreed intent into a written PRD. Read its SKILL.md and follow it. Save the draft to the project's PRD location (ask the user if unclear).
 
-3. After the draft exists, **suggest the user run `prd-review`** to run the 7-pass audit (acceptance criteria, scenarios, scope, unknowns, metric, sequencing, freeze) plus product-overlap + OSS-alternatives scans + adversarial counter-pass. Do not invoke `prd-review` automatically — let the user choose when to lock the spec.
+3. After the draft exists, **the PRD must pass `prd-review` and be FROZEN before `apex:design-feature` may begin.** `prd-review` runs the 7-pass audit (acceptance criteria, scenarios, scope, unknowns, metric, sequencing, freeze) plus product-overlap + OSS-alternatives scans + adversarial counter-pass. Don't auto-invoke it mid-authoring — the *timing* of the freeze is the user's call — but a `create-prd` draft is **authored, not frozen**, and design may not start against an un-reviewed PRD.
 
-Stop after step 2 with the draft saved and the `prd-review` suggestion. Do not start designing or implementing.
+Stop after step 2 with the draft saved. The next gate is `prd-review` → freeze, before any design. Do not start designing or implementing.

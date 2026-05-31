@@ -9,6 +9,8 @@ The design gate for a NEW feature where the PRD is solid and now you need to tra
 
 ## When to invoke
 
+**Prerequisite (hard gate):** the PRD must be **FROZEN** — i.e. `apex:prd-review` has run and accepted it. A `create-prd` draft alone is authored, not frozen. If `prd-review` hasn't run, **stop and run it first** — designing against an un-reviewed PRD bakes its gaps (missing scenarios, unstated scope, an ungated success metric) straight into the design.
+
 - The PRD passed `apex:prd-review` and now needs a design
 - You're proposing a new service, model, UI surface, or workflow that doesn't already exist
 - "Let's design feature X" — that's this skill's signal

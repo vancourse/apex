@@ -158,7 +158,7 @@ And **tenancy** — the single most consequential decision:
 
 ## Architecture freeze readiness
 
-After all 7 passes + adversarial counter-passes + the 7 ADRs are written, **freeze the architecture**. From this moment:
+After all 7 passes + adversarial counter-passes + the 7 ADRs are written, **each ADR must pass `apex:adr-review`, and then freeze the architecture**. The ADRs are authored, not frozen, until `adr-review` has audited each (context / decision / ≥2 real alternatives / consequences incl. security + reversibility / status field). Don't freeze — or scope feature PRDs against — an un-reviewed ADR set. From this moment:
 
 - Feature PRDs are scoped against this architecture
 - `apex:design-feature` Pass 4 (integration with existing surface) checks each feature for fit

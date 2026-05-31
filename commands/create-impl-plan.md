@@ -13,6 +13,6 @@ Run this sequence:
 
 1. **Invoke the `writing-plans` skill from the superpowers plugin** to translate the frozen design into a buildable, bite-sized implementation plan. Read its SKILL.md and follow it. The plan must include: which files to touch per task, test plan per layer, docs to consult, how to verify each step. Save the plan to the project's plan location (ask the user if unclear).
 
-2. After the draft plan exists, **suggest the user run `impl-plan-review`** to run the 5-pass review: layered PR stack (≤400 LOC per PR, tests with their layer), sequencing / dependency order, test-plan-per-layer (PRD scenarios → integration tests 1:1), rollout strategy (flag / direct / migration-first / compat window), reversibility (rollback story). Do not invoke `impl-plan-review` automatically — let the user choose when to freeze the plan.
+2. After the draft plan exists, **the plan must pass `impl-plan-review` and be FROZEN before any implementation/coding begins.** `impl-plan-review` runs the 5-pass review: layered PR stack (≤400 LOC per PR, tests with their layer), sequencing / dependency order, test-plan-per-layer (PRD scenarios → integration tests 1:1), rollout strategy (flag / direct / migration-first / compat window), reversibility (rollback story). Don't auto-invoke it mid-authoring — the *timing* of the freeze is the user's call — but a draft plan is **authored, not frozen**, and coding may not start against an un-reviewed plan.
 
-Stop after step 1 with the draft saved and the `impl-plan-review` suggestion. Do not start implementing.
+Stop after step 1 with the draft saved. The next gate is `impl-plan-review` → freeze, before any implementation. Do not start implementing.
