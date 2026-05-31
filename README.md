@@ -137,6 +137,33 @@ Long-lived project-specific facts live in `~/.claude/domain-knowledge/<project>.
 Read the relevant file at the start of any session that touches that project.
 ```
 
+## Optional: the `apex-terse` output style
+
+apex's gates are deliberately verbose where it matters — but the *conversational
+prose around* a gate (preamble, transitions, restating the task, post-hoc
+summaries) carries no review signal and still costs tokens. The `apex-terse`
+output style cuts that wrapper **without** dulling the gate.
+
+It is **scoped**, not a blanket "be brief" instruction. It exempts apex's
+load-bearing zones — the adversarial counter-passes, per-finding `file:line`
+evidence, and freeze-decision rationale — which expand to whatever the argument
+needs. A terse adversarial counter-pass would collapse a *review* back into a
+*checklist* (the exact failure mode apex exists to prevent), so those stay
+full-fidelity. The savings come only from words that carry no review signal.
+
+Output styles are a Claude Code user-level setting; a plugin can't ship one as
+active context, so install it by copying the file:
+
+```bash
+# from a clone of this repo:
+mkdir -p ~/.claude/output-styles
+cp output-styles/apex-terse.md ~/.claude/output-styles/
+```
+
+Then switch to it with `/output-style apex-terse` (and back with
+`/output-style default`). It composes with the skill gates — flip it on for a
+token-lean session; the gates keep their full fidelity.
+
 ## Install
 
 ```bash
