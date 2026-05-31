@@ -136,6 +136,12 @@ The inline adversarial counter-passes above are the *cheap* version (one agent d
 
 Both agents run in isolated worktrees with the same input design doc. They report independently. Reconcile their findings. Most real design weaknesses surface only when both views are produced and compared.
 
+## Output location
+
+Write the design to **`docs/<feature-slug>/design.md`** — the same per-feature
+folder as its `prd.md` (apex's standard layout; `create-impl-plan` will add
+`impl-plan.md` beside it). Reuse the slug from the feature's PRD.
+
 ## Pass/fail summary
 
 The design passes if:

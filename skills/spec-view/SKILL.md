@@ -28,7 +28,7 @@ Skip it when the only reviewer is an engineer reading in-editor — rendered Mar
 
 ## Input & output
 
-**Input:** the path to the canonical Markdown artifact. If not given, detect the most recent PRD / ADR / design doc in the working set (e.g. `docs/adr/*.md`, a `*-prd.md`, a design doc) or ask which one.
+**Input:** the path to the canonical Markdown artifact. If not given, detect it from apex's standard layout — `docs/<feature-slug>/prd.md` or `design.md` (per-feature) or `docs/adr/*.md` (project-wide architecture) — preferring the most recently modified; ask only if ambiguous.
 
 **Output:** a single self-contained file at:
 

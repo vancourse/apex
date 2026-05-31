@@ -6,6 +6,10 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ## [0.2.2] — 2026-05-31
 
+### Added
+
+- **Standard `docs/` layout for SDLC artifacts** (was: "ask the user where to save"). Architecture stays project-wide at `docs/adr/000N-*.md`; per-feature artifacts live in one folder per feature — `docs/<feature-slug>/prd.md` → `design.md` → `impl-plan.md` — keeping a feature's whole freeze-chain together in lineage order. `create-prd` / `design-feature` / `create-impl-plan` write to these paths by default (asking for the slug only when ambiguous), `spec-view` reads from them, and `FLOW.md` documents the convention canonically.
+
 ### Changed
 
 - **Every author → review → freeze handoff in the SDLC chain is now enforced, not merely flow-prescribed.** Previously a drafted artifact (PRD, ADR set, design, impl plan) could slide into the next phase without its load-bearing cold review actually running. Now each gate is enforced with defense-in-depth — a mandatory hand-off in the author step, a downstream hard-gate in the next phase, and a cross-prompt backstop in the `suggest-skill-on-prompt` hook — with **no new slash commands** (the reviews stay `[AUTO]` skills; the menu remains 12).
