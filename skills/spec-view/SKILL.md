@@ -11,7 +11,7 @@ Renders a PRD, ADR set, or design doc into a single self-contained HTML page so 
 
 This HTML is a **VIEW, never the source of truth.**
 
-- The canonical artifact is always the **Markdown** file. Downstream apex skills (`create-impl-plan`, `impl-plan-review`, etc.) read the `.md`, never this `.html`.
+- The canonical artifact is always the **Markdown** file. Downstream apex steps (`impl-plan`, `impl-plan-review`, etc.) read the `.md`, never this `.html`.
 - The HTML is **gitignored and throwaway.** Never commit it. Never re-ingest it. Never diff it.
 - It is **regenerated on demand.** If the Markdown changes during review, re-run this skill — do not hand-edit the HTML.
 - Every page carries a banner stating this (see scaffold).
@@ -28,7 +28,7 @@ Skip it when the only reviewer is an engineer reading in-editor — rendered Mar
 
 ## Input & output
 
-**Input:** the path to the canonical Markdown artifact. If not given, detect the most recent PRD / ADR / design doc in the working set (e.g. `docs/adr/*.md`, a `*-prd.md`, a design doc) or ask which one.
+**Input:** the path to the canonical Markdown artifact. If not given, detect it from apex's standard layout — `docs/<feature-slug>/prd.md` or `design.md` (per-feature) or `docs/adr/*.md` (project-wide architecture) — preferring the most recently modified; ask only if ambiguous.
 
 **Output:** a single self-contained file at:
 
@@ -228,4 +228,4 @@ Run the review skill first, then render:
 1. `apex:prd-review` / `apex:adr-review` / `apex:design-review` — run the passes, surface findings.
 2. `apex:spec-view` — render the (possibly still-failing) artifact so a human can see the freeze-readiness dashboard and approve or send back.
 3. Human approves → freeze the **Markdown** (the freeze is a commit to the `.md`, never to the `.html`).
-4. Proceed to `apex:create-impl-plan` against the frozen Markdown.
+4. Proceed to `apex:impl-plan` against the frozen Markdown.

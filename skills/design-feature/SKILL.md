@@ -9,6 +9,10 @@ The design gate for a NEW feature where the PRD is solid and now you need to tra
 
 ## When to invoke
 
+**Prerequisite (hard gate):** the PRD must be **FROZEN** — i.e. `apex:prd-review` has run and accepted it. A drafted PRD alone is authored, not frozen. If `prd-review` hasn't run, **stop and run it first** — designing against an un-reviewed PRD bakes its gaps (missing scenarios, unstated scope, an ungated success metric) straight into the design.
+
+**Recon first (conditional):** for a **non-trivial** change or an **unfamiliar / scope-heavy** part of the tree, run **`apex:recon`** before designing — it puts the existing primitives, contracts, and invariants on the table so the design reuses what exists instead of reconstructing it. **Skip** recon for trivial or familiar work (its own YAGNI guard). This is the heavy, artifact-producing version of the §1a reconnaissance `apex-flow` already prescribes.
+
 - The PRD passed `apex:prd-review` and now needs a design
 - You're proposing a new service, model, UI surface, or workflow that doesn't already exist
 - "Let's design feature X" — that's this skill's signal
@@ -134,6 +138,12 @@ The inline adversarial counter-passes above are the *cheap* version (one agent d
 
 Both agents run in isolated worktrees with the same input design doc. They report independently. Reconcile their findings. Most real design weaknesses surface only when both views are produced and compared.
 
+## Output location
+
+Write the design to **`docs/<feature-slug>/design.md`** — the same per-feature
+folder as its `prd.md` (apex's standard layout; the `impl-plan` step will add
+`impl-plan.md` beside it). Reuse the slug from the feature's PRD.
+
 ## Pass/fail summary
 
 The design passes if:
@@ -145,9 +155,24 @@ The design passes if:
 
 Fail any → the design isn't ready for implementation. Reshape before writing code.
 
+## Mandatory next step — `apex:design-review` (do NOT skip)
+
+A `design-feature` draft is **authored, not frozen.** The inline adversarial
+counter-passes above are the *cheap* version — a single agent attacking the
+design it just authored, with the attack voice contaminated by the just-spent
+author voice. The **load-bearing** review is a separate, cold pass:
+
+**Before `apex:impl-plan` or any implementation, run `apex:design-review`.**
+It re-walks these 5+1 passes from the attack lens in a separate cognitive step
+(ideally a parallel adversarial agent for non-trivial designs) and runs the
+**design-freeze ceremony**. Do **not** treat this design as a contract — and do
+**not** proceed to impl planning or coding — until `design-review` has run and
+**frozen** the design. Skipping it on a non-trivial design is a deviation to
+justify explicitly, not a silent default.
+
 ## Hand-off to implementation
 
-Once the design passes, route to the appropriate implementation skills:
+Once `apex:design-review` has frozen the design, route to the appropriate implementation skills:
 
 - If it exposes an API surface → run `apex:api-surface-review` against the proposed shape before implementing
 - If it adds a new variant to an existing union → run `apex:polymorphic-type-modeling`

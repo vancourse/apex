@@ -70,17 +70,17 @@ move to the next row.
 
 | # | Phase | You type (`[USER]`) | Fires automatically (`[AUTO]`) | Freeze gate before moving on |
 |---|---|---|---|---|
-| 1 | **PRD** | `/apex:create-prd` — chains `superpowers:brainstorming` → `superpowers:writing-plans` | `prd-review` — 7-pass audit + overlap/OSS scans + adversarial counter-pass | PRD frozen: acceptance criteria, testable scenarios, out-of-scope, success metric all settled |
-| 2 | **Architecture** *(greenfield only, once)* | `/apex:architecture-design` — authors 7 ADRs | `adr-review` — 5-element audit per ADR | All 7 ADRs accepted → architecture frozen |
-| 3 | **Design** | `/apex:design-feature` — scenarios + MVP + deferrals + integration + failure modes + §6 attack surface | `design-review` (adversarial re-pass + freeze) · `threat-model` · `api-surface-review` (if endpoints) | Design frozen: the buildable shape is locked |
-| 4 | **Impl plan** | `/apex:create-impl-plan` — chains `superpowers:writing-plans` against the frozen design | `impl-plan-review` — 5-pass (layered PR stack ≤400 LOC, sequencing, test-plan-per-layer, rollout, reversibility) | Plan frozen: PR stack + per-layer test plan locked |
+| 1 | **PRD** | `/apex:prd` — chains `superpowers:brainstorming` → `superpowers:writing-plans` | `prd-review` — 7-pass audit + overlap/OSS scans + adversarial counter-pass | PRD frozen: acceptance criteria, testable scenarios, out-of-scope, success metric all settled |
+| 2 | **Architecture** *(greenfield only, once)* | `/apex:arch` — authors 7 ADRs | `adr-review` — 5-element audit per ADR | All 7 ADRs accepted → architecture frozen |
+| 3 | **Design** | `/apex:design` — scenarios + MVP + deferrals + integration + failure modes + §6 attack surface | `design-review` (adversarial re-pass + freeze) · `threat-model` · `api-surface-review` (if endpoints) | Design frozen: the buildable shape is locked |
+| 4 | **Impl plan** | `/apex:impl-plan` — chains `superpowers:writing-plans` against the frozen design | `impl-plan-review` — 5-pass (layered PR stack ≤400 LOC, sequencing, test-plan-per-layer, rollout, reversibility) | Plan frozen: PR stack + per-layer test plan locked |
 | 5 | **Build** | *(just describe the task)* | language reviews (`python-review` / `typescript-review`), `api-surface-review`, `postgres-review`, `multi-tenancy`, `protocol-first-workflow`, `polymorphic-type-modeling`, `verify-ports`, `test-strategy` — fired by file paths | Each PR in the stack builds + its tests pass |
 | 6 | **Verify** | *(describe, or say "verify")* | `verification-before-completion` — tests + logs + browser for UI | Change is proven to work, not just written |
 | 7 | **Pre-PR** | `/apex:review-pr` *(optional, heavy — 6 specialists in parallel)* | `ai-pre-review-checklist` · `test-coverage-audit` · language review · `security-review` (if security-touched) | Self-review clean before a human sees it |
 | 8 | **Open PR** | *(say "open the PR")* | `pr-discipline` (draft + ask before push) · `pr-review-primer` · `summarize-changes` | Draft PR open with a reviewer-facing description |
-| 9 | **Review** | `/apex:copilot-review-loop` | `responding-to-review` — every blocker → a concrete artifact + diff | NITs-only OR 5 rounds → squash-merge |
+| 9 | **Review** | `/apex:copilot-review` | `responding-to-review` — every blocker → a concrete artifact + diff | NITs-only OR 5 rounds → squash-merge |
 
-> **Catch-all:** unsure which row you're on? Type `/apex:apex-flow` — it carries the
+> **Catch-all:** unsure which row you're on? Type `/apex:flow` — it carries the
 > reconnaissance + adversarial checklist and routes you to the right gate.
 
 **Why some rows have no command in the "You type" column.** Build, Verify, and Open PR are

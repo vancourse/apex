@@ -1,6 +1,6 @@
 ---
 name: design-review
-description: Adversarial re-pass + freeze ceremony for a design produced by apex:design-feature. Walks the 5+1 passes from the attack lens, cold, in a separate cognitive step from authoring — so the steelman voice of design and the attack voice of review don't blur into a self-congratulatory pass. Adds explicit design-freeze readiness — the gate between "design drafted" and "implementation plan may begin." Pairs with apex:design-feature (upstream — authors the design) and apex:create-impl-plan (downstream — frozen design enters impl-plan author step). Fires after design-feature completes, before invoking create-impl-plan. Keywords: design review, design freeze, adversarial design, design audit, design pair review.
+description: Adversarial re-pass + freeze ceremony for a design produced by apex:design-feature. Walks the 5+1 passes from the attack lens, cold, in a separate cognitive step from authoring — so the steelman voice of design and the attack voice of review don't blur into a self-congratulatory pass. Adds explicit design-freeze readiness — the gate between "design drafted" and "implementation plan may begin." Pairs with apex:design-feature (upstream — authors the design) and apex:impl-plan (downstream — frozen design enters impl-plan author step). Fires after design-feature completes, before invoking impl-plan. Keywords: design review, design freeze, adversarial design, design audit, design pair review.
 ---
 
 # Design Review
@@ -10,7 +10,7 @@ The gate between "we have a design" and "we have a FROZEN design." Re-walks desi
 ## When to invoke
 
 - `apex:design-feature` just produced a design draft and you're about to move to implementation planning
-- Before invoking `apex:create-impl-plan` — impl plans against an un-frozen design are wasted work
+- Before invoking `apex:impl-plan` — impl plans against an un-frozen design are wasted work
 - A frozen design needs re-validation (architecture amendment landed; PRD changed)
 
 Pairs with:
@@ -18,7 +18,7 @@ Pairs with:
 - **`apex:design-feature`** (upstream) — authored the design (the steelman pass)
 - **`apex:prd-review`** (further upstream) — owns the scenarios this design must satisfy
 - **`apex:threat-model`** — owns Pass 6's STRIDE output if the feature has attack surface
-- **`apex:create-impl-plan`** (downstream) — implementation plan against the frozen design
+- **`apex:impl-plan`** (downstream) — implementation plan against the frozen design
 - **`apex:impl-plan-review`** (further downstream) — review of that plan
 
 Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass, ideally dispatched as a parallel adversarial agent for non-trivial designs.
@@ -95,7 +95,7 @@ Audit, don't re-run. If either is absent or perfunctory, fail and return to desi
 
 ## Design freeze readiness
 
-After all 6 passes' adversarial findings are addressed (or explicitly accepted with rationale) + scans audited — **mark the design FROZEN.** From this moment on, design changes require a delta amendment (a commit to the design doc), just like PRD amendments. The freeze is what makes `apex:create-impl-plan` a tractable exercise rather than a moving target.
+After all 6 passes' adversarial findings are addressed (or explicitly accepted with rationale) + scans audited — **mark the design FROZEN.** From this moment on, design changes require a delta amendment (a commit to the design doc), just like PRD amendments. The freeze is what makes `apex:impl-plan` a tractable exercise rather than a moving target.
 
 A frozen design tells the impl-plan author what to build, the test-strategy author what scenarios to mirror, and the threat-model author what surface to defend. None of those downstream skills should be reinventing those decisions.
 
@@ -124,13 +124,13 @@ The design is frozen-ready if:
 - Pass 6 STRIDE output present (or "no attack surface" justified in one line)
 - The adversarial pair (now the default for non-trivial designs) was dispatched — or its omission is explicitly justified in the design doc
 
-Fail any → don't freeze. Reshape via `apex:design-feature` before invoking `apex:create-impl-plan`.
+Fail any → don't freeze. Reshape via `apex:design-feature` before invoking `apex:impl-plan`.
 
 ## Hand-off
 
 Once frozen:
 
-- **`apex:create-impl-plan`** — write the implementation plan against the frozen design
+- **`apex:impl-plan`** — write the implementation plan against the frozen design
 - **`apex:impl-plan-review`** — review of that plan (structurally parallel to this skill)
 - **`apex:api-surface-review`** — run against the proposed API shape before the impl plan locks endpoint shapes, if the feature exposes an API
 - **`apex:polymorphic-type-modeling`** — run if the design adds a new variant to an existing discriminated union

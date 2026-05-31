@@ -32,6 +32,25 @@ if echo "$input" | grep -qiE '\bshrink\b|\bbloated\b|\bslim(mer)?\b|make .*small
   context="${context:+$context }Invoke the apex:recon skill BEFORE choosing a design shape — surface the existing primitive that already answers this (apex-flow §1a-Q2) and run the pure-addition / subtractive check (§1b-5) before adding new fields/enums/guards."
 fi
 
+# Phase-freeze gates — each author->review->freeze handoff must complete before the NEXT phase.
+# A drafted artifact is authored, not frozen; the cold review must run + freeze it first. These
+# backstop the mandatory hand-offs in the author skills/commands for the cross-prompt case.
+
+# -> entering DESIGN: the PRD must be prd-reviewed + frozen.
+if echo "$input" | grep -qiE '/apex:design\b|\bdesign(ing)? (a|an|the|this|our|my|new)\b|let.?s design|time to design|start(ing)? (the )?design'; then
+  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. AND if this change is non-trivial or in an unfamiliar / scope-heavy area, run apex:recon first to put existing primitives, contracts, and invariants on the table (skip recon for trivial or familiar work)."
+fi
+
+# -> entering IMPL-PLANNING: the design must be design-reviewed + frozen.
+if echo "$input" | grep -qiE 'impl(ementation)?[- ]?plan|design (is )?(done|finished|complete|frozen)|ready to plan'; then
+  context="${context:+$context }Before apex:impl-plan, ensure apex:design-review has run + FROZEN the design (the cold adversarial re-pass, separate from design-feature's inline counter-passes). A design-feature draft is authored, not frozen."
+fi
+
+# -> entering BUILD/CODE: the impl plan must be impl-plan-reviewed + frozen.
+if echo "$input" | grep -qiE 'start (implement|build|cod)(ing)?|begin (implement|cod)(ing)?|ready to (implement|build|code)|time to (build|code|implement)|write the code|start coding'; then
+  context="${context:+$context }Before implementation/coding, ensure apex:impl-plan-review has run + FROZEN the implementation plan (layered PR stack, sequencing, per-layer tests, rollout, reversibility). A drafted implementation plan is authored, not frozen."
+fi
+
 [ -n "$context" ] && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
 
 exit 0
