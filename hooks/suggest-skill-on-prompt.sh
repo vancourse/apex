@@ -25,6 +25,13 @@ if echo "$input" | grep -qiE '\bendpoint\b|\bpayload\b|\bhandler\b|\broute(s|r)?
   context="${context:+$context }Invoke the apex:api-surface-review skill (runs at planning, implementation, and review — not just review)."
 fi
 
+# Subtractive-design traps — "shrink/bloated PR", "support a new kind/scope/source", "add a flag/field/enum".
+# These framings reliably hide an existing primitive and pull toward additive machinery, so nudge
+# recon BEFORE a shape is chosen (apex-flow §1a-Q2 codebase recon + §1b-5 pure-addition smell).
+if echo "$input" | grep -qiE '\bshrink\b|\bbloated\b|\bslim(mer)?\b|make .*smaller|reduce .*\b(loc|lines)\b|too (big|large)|support (a |an )?new\b|add support for|\bnew (scope|source|kind|variant|field|flag|enum)\b'; then
+  context="${context:+$context }Invoke the apex:recon skill BEFORE choosing a design shape — surface the existing primitive that already answers this (apex-flow §1a-Q2) and run the pure-addition / subtractive check (§1b-5) before adding new fields/enums/guards."
+fi
+
 [ -n "$context" ] && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
 
 exit 0

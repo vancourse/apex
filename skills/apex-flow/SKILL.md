@@ -1,6 +1,6 @@
 ---
 name: apex-flow
-description: Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist with alternatives and critiques, phase-routed skill gates for planning/implementing/reviewing, port-verification discipline. Fires when planning a non-trivial change, designing a new endpoint or service, refactoring across files, opening a PR, or reviewing changes. Keywords: plan, design, refactor, endpoint, payload, review, PR, implement, ship.
+description: Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist with alternatives and critiques, phase-routed skill gates for planning/implementing/reviewing, port-verification discipline. Fires when planning a non-trivial change, designing a new endpoint or service, refactoring across files, shrinking a bloated PR or design, adding support for a new scope/source/kind/variant, opening a PR, or reviewing changes. Keywords: plan, design, refactor, endpoint, payload, review, PR, implement, ship, shrink, bloated, minimal diff, support a new, subtractive design, reconnaissance, recon.
 ---
 
 # SDLC Methodology
@@ -22,6 +22,8 @@ Before naming a fix to a non-trivial problem (especially perf, refactor, or anyt
 
 **Why this matters.** A common failure pattern: a slow-data fix anchors on "fix this broken flag" and grows into a several-hundred-LOC consumer-side workaround (lazy loads, UX guards, hydration maps), when the producer-side fix was a single batch query that already had siblings in the dialect/connector folder — visible from a `grep` away. The diagnosis-to-design handoff skipped reconnaissance and let the first plausible affordance lock the framing.
 
+**Promote §1a to an artifact when the work is design-bearing.** For a non-trivial change, or in an unfamiliar / scope-heavy part of the tree, run **`apex:recon`** to emit these four questions as a written *Recon Brief* — enumerate the authoritative primitives, distill their **contracts (not signatures)**, capture invariants + trust boundaries, then diff against and persist to `~/.claude/domain-knowledge/`. recon **is** §1a, promoted from an in-head checklist to a hand-off artifact that `apex:design-feature` / §1b consume. Keep §1a in-head only for small work.
+
 ### 1b. Adversarial design checklist
 
 For any non-trivial design task (new endpoint, new service, multi-file refactor, anything you'd "design" rather than just patch), run this 5-step adversarial checklist *before* presenting a design:
@@ -33,6 +35,8 @@ For any non-trivial design task (new endpoint, new service, multi-file refactor,
 5. **Justify additions over reuse.** Pure-addition designs are a smell — if your design only adds code (no deletions, no consolidation), explain why no existing path can be extended. See [`rules/principles.md` §3](../../rules/principles.md#3-pure-addition-designs-are-a-smell).
 
 Skip this checklist only for trivial fixes (typo, single-line behavior change, obvious bug). When in doubt, run it — the cost is one extra paragraph in the response, the saving is multiple round-trips of "you should have asked X first."
+
+**Adversarial pair (DEFAULT for non-trivial shape decisions).** The "is this the minimal design?" call is where the subtractive design surfaces — and a single agent grading its own §1b is the contaminated-voice problem. For non-trivial work (auth / payment / multi-tenant / cryptography / any trust-boundary crossing, or anything you'd dispatch `apex:design-review` for), run §1a+§1b as a **2-agent cooperative+adversarial pair** via `superpowers:dispatching-parallel-agents` — one steelman, one attack, reconciled — **before** `apex:impl-plan-review`. Running the pair only at impl-plan-review is too late: by then the shape is already chosen. Skipping the pair on non-trivial work is a deviation to justify explicitly, not a silent default.
 
 ### 1c. Verify the ask against raw quotes, not writeups
 

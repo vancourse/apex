@@ -4,15 +4,18 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.2.1] — 2026-05-31
 
 ### Added
 
+- **`recon` command + skill** (`commands/recon.md`, `skills/recon/SKILL.md`) — "reconnaissance brief before design." Promotes `apex-flow` §1a from an in-head checklist into a first-class, artifact-producing step: scoped to the change's blast radius, it enumerates the authoritative primitives that already answer the design's questions, distills their **contracts (not signatures)**, captures invariants + trust boundaries, runs the producer/consumer + first-affordance checks against that fact base, and persists durable semantic facts to `domain-knowledge`. Output is a short Recon Brief that feeds `design-feature` / §1b. The 12th `[USER]` entry-point command.
+- **Auto-firing of recon on subtractive-design traps** — `hooks/suggest-skill-on-prompt.sh` gains a `UserPromptSubmit` block that nudges `apex:recon` when a prompt matches trap framings (`shrink` / `bloated` / `support a new scope/source/kind/variant` / `add a flag/field/enum`) — the framings that most reliably hide an existing primitive and pull toward additive machinery.
 - **`apex-terse` output style** (`output-styles/apex-terse.md`) — an optional, scoped terse mode. Trims wrapper prose (preamble, transitions, task-restatement, post-hoc summaries) while **exempting** apex's load-bearing zones — adversarial counter-passes, per-finding `file:line` evidence, and freeze/decision rationale — which expand to whatever the argument needs. Ships as a user-level Claude Code output style (copy-installed), since a plugin can't contribute one as active context.
 
 ### Changed
 
-- **Slash menu trimmed to the 11 entry-point commands.** The 22 `[AUTO]` commands were removed as *slash commands* — they are still skills and still fire automatically (driven by their `SKILL.md` description + the `suggest-skill-*` hooks); only the typed `/apex:` alias is gone. This declutters the `/apex:` menu (≈33 → 11) so it surfaces just the commands you drive by hand. To run an auto gate manually, ask for it by name. Remaining commands: `apex-flow`, `create-prd`, `architecture-design`, `design-feature`, `create-impl-plan`, `review-pr`, `copilot-review-loop`, `spec-view`, `test`, `memory-note`, `help`. README / HOWTO / WALKTHROUGH / `help` cheat sheet updated accordingly (auto gates are now referenced by bare skill name, not `/apex:<name>`).
+- **Slash menu trimmed to the entry-point commands.** The 22 `[AUTO]` commands were removed as *slash commands* — they are still skills and still fire automatically (driven by their `SKILL.md` description + the `suggest-skill-*` hooks); only the typed `/apex:` alias is gone. With the new `recon`, the menu is **12** typed entry points: `apex-flow`, `create-prd`, `architecture-design`, `recon`, `design-feature`, `create-impl-plan`, `review-pr`, `copilot-review-loop`, `spec-view`, `test`, `memory-note`, `help`. To run an auto gate manually, ask for it by name. README / HOWTO / WALKTHROUGH / `help` cheat sheet updated accordingly (auto gates are now referenced by bare skill name, not `/apex:<name>`).
+- **`apex-flow` §1b — adversarial pair is now the DEFAULT for non-trivial shape decisions**, run at the design-shape gate (§1a/§1b / `design-feature`) *before* `impl-plan-review`, not only at impl-plan-review (by which point the shape is already locked). §1a also gains a "promote to `apex:recon` when the work is design-bearing" note. `FLOW.md` adds recon to the PLAN box + Skill × Phase matrix + skip-table, and moves the adversarial-pair guidance to the design-shape gate. `rules/principles.md` adds recon to the applied-principles table (producer/consumer dual, first-affordance, pure-addition smell).
 
 ---
 

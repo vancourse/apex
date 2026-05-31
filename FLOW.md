@@ -73,6 +73,11 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                               critiques, reuse-vs-add)        │
    │                            §1c verify ask vs raw quotes       │
    │                              (4-column audit table)           │
+   │    apex:recon              (Recon Brief — promotes §1a to     │
+   │                              an artifact: existing            │
+   │                              primitives, contracts,           │
+   │                              invariants. Esp. on "support     │
+   │                              new X" / "shrink X" framings)    │
    │    apex:design-feature     (if NEW feature, not fix —         │
    │                              scenarios + MVP + deferrals +    │
    │                              integration + failure modes +    │
@@ -219,7 +224,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 
 **DEBUG.** When a bug, test failure, or unexpected behavior interrupts any phase above, drop into `superpowers:systematic-debugging` (root-cause-first / reproduce-first / log-first discipline). Apex deliberately defers — the systematic-debugging skill is a complete discipline and we don't duplicate it. Once the bug is understood, return to whatever phase you were in.
 
-**ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` — one cooperative, one adversarial, both running the same apex skill on the same input. The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
+**ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` — one cooperative, one adversarial, both running the same apex skill on the same input. **Run the pair at the *design-shape* gate (`apex-flow` §1b / `apex:design-feature`), not only at `impl-plan-review`** — the "is this the minimal design?" decision is made at the shape gate, so a pair that first runs at `impl-plan-review` arrives after the shape is already locked (the exact failure mode `apex:recon` + the §1b pair are meant to catch). The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
 
 ## Skill × Phase matrix
 
@@ -229,6 +234,7 @@ Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=
                               SPEC  PLAN  IMPL-PLAN  IMPL  VERIFY  PRE-PR  OPEN  COPILOT  ADDRESS  REVIEW
 prd-review                     ✓
 apex-flow                            ✓
+recon                                ✓¹¹
 design-feature                       ✓⁷
 threat-model                         ✓⁸
 impl-plan-review                            ✓
@@ -268,6 +274,7 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 ⁸ when the feature accepts external input, handles classified data, or changes a privilege transition
 ⁹ for any PR touching auth / data access / external input / cryptography / sensitive paths
 ¹⁰ when touching tenant-scoped tables, RLS policies, or cross-tenant FK enforcement
+¹¹ promotes apex-flow §1a to a written Recon Brief; fires on design-bearing work, esp. "support new X" / "shrink X" framings
 (architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
 ## Eight principles overlaid on the pipeline
@@ -289,7 +296,7 @@ The pipeline assumes a non-trivial NEW-feature change. For trivial or non-featur
 |---|---|
 | Typo / single-line fix / obvious bug | 3, 4, 6 (skip 0 SPEC, 1 PLAN, 2 IMPL-PLAN, 5 PRE-PR) |
 | Internal refactor with no API change | 1 (light), 3, 4, 5, 6, 7 (skip 0 SPEC, 2 IMPL-PLAN, api-surface-review) |
-| Fix / refactor of existing behavior | 1, 3, 4, 5, 6, 7 (skip 0 SPEC — no new spec; skip 2 IMPL-PLAN unless the fix touches >1 layer) |
+| Fix / refactor of existing behavior | 1 (run `apex:recon` first if design-bearing / unfamiliar area), 3, 4, 5, 6, 7 (skip 0 SPEC — no new spec; skip 2 IMPL-PLAN unless the fix touches >1 layer) |
 | NEW endpoint / payload / handler | 0, 1, 2, 3, 4, 5, 6, 6b, 6c, 7 — all phases, all skills |
 | NEW feature from scratch | all phases (0 → 7), full freeze-gate chain (spec → design → plan) |
 | Doc / comment-only update | 6 only (still ask before push; Copilot review optional per `apex:pr-discipline`) |
