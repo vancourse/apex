@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Frontend rules: animation discipline.** `rules/frontend.md` and `apex-flow` §11 (Frontend Hygiene) now require that motion-library animations (Framer Motion / Motion, etc.) be gated behind `prefers-reduced-motion` and reuse the existing animation pattern rather than introducing a parallel one — folding the one durable idea from the "animated website" workflow into apex's existing accessibility discipline.
+
+---
+
 ## [0.3.1] — 2026-05-31
 
 ### Added

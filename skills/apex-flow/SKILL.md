@@ -122,3 +122,4 @@ If yes, include a short risk note and the verification performed.
 - Consider keyboard navigation, focus states, loading states, empty states, and error states.
 - Avoid broad visual refactors in feature PRs unless requested.
 - Do not hardcode copy, colors, spacing, or breakpoints if the repo has tokens or helpers.
+- If using a motion library (Framer Motion / Motion, etc.), gate animations behind `prefers-reduced-motion` and reuse the existing animation pattern — don't introduce a second one alongside it.
