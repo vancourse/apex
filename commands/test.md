@@ -53,5 +53,5 @@ Invoke the `test-strategy` skill from the apex plugin. Read its SKILL.md and, fo
 
 ## Notes
 
-- This is a **router**, not an executor. To actually run tests, use your project's own command (e.g. `make test-unit` from the repo root in your project) — that belongs in the project CLAUDE.md, not in this shareable plugin.
+- This is a **router**, not an executor. To actually run tests, use your project's own command (e.g. `make test-unit` from the repo root) — that belongs in the project CLAUDE.md, not in this shareable plugin.
 - The full methodology (all 17 rules, isolation patterns, recorded fixtures, CI tiering, anti-goals) is the `test-strategy` skill. This command is the per-layer front door to it.
