@@ -46,7 +46,7 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 ### Commands
 
-The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~12 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
+The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~13 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
 
 > Command names are short; the skill they invoke may differ (e.g. `/apex:design` runs the `design-feature` skill, `/apex:flow` runs `apex-flow`). The Skills table above lists skills by their internal name.
 
@@ -64,6 +64,7 @@ The slash menu is intentionally small: **only the entry-point commands you actua
 | `/apex:test` | `test-strategy` | Focuses `test-strategy` on one layer — maps an industry term (`unit` / `integration` / `smoke` / `e2e` / `component` / `visual` / `drift`) or an apex layer name to the 8-layer model, then surfaces what to test there, what to mock, and which CI tier. Advisory router; **does not run the suite**. No argument → the 8-layer menu. |
 | `/apex:remember` | `memory-note` | Capture a high-signal lesson or durable project fact to memory. |
 | `/apex:help` | *(orchestrator)* | Prints the cheat sheet — which commands you type vs. which skills fire automatically, plus the SDLC workflow at a glance. |
+| `/apex:setup` | *(orchestrator)* | Guided installer for the recommended companions (`superpowers`, `pr-review-toolkit`) and an optional large-codebase context tool (Graphify / Serena / Claude Context) — detects what's present, installs what it safely can, prints the rest. |
 
 Everything else listed in the Skills table above is a **skill that fires automatically** at its phase — `prd-review`, `adr-review`, `design-review`, `impl-plan-review`, the language/`api-surface`/`postgres` reviews, `security-review`, `threat-model`, `pr-discipline`, and the rest. They have no slash command by design; the model invokes them, and you can ask for any of them by name.
 
@@ -94,12 +95,25 @@ These are not auto-loaded. Skills reference them by anchor; your own CLAUDE.md c
 
 These are not declared as `dependencies` in `plugin.json` — Claude Code's dependency resolver requires every listed dep to resolve to an installable plugin by name, and a single typo or a name that's actually a skill (rather than a plugin) silently fails the entire install. We keep apex's manifest dependency-free and list its useful companions here instead:
 
-- `superpowers` (in `obra/superpowers` marketplace) — brainstorming, planning, debugging, TDD, parallel-agent skills
+- `superpowers` (in `obra/superpowers` marketplace) — brainstorming, planning, debugging, TDD, parallel-agent skills; backs `/apex:prd`, `/apex:impl-plan`, and the 2-agent adversarial pair
+- `pr-review-toolkit` — the 6 cooperating specialist agents `/apex:review-pr` dispatches
 - `frontend-design` (in `anthropics/claude-plugins-official`) — distinctive, polished frontend interfaces
 - `skill-creator` (in `anthropics/claude-plugins-official`) — create / iterate skills
 - `anthropic-skills` (in `anthropics/claude-plugins-official`) — bundles `consolidate-memory`, `pdf`, `xlsx`, `docx`, `pptx`, `skill-creator`, and others
 
-Install each separately via `/plugin install <name>@<marketplace>` if you want them.
+Install each separately via `/plugin install <name>@<marketplace>`, or run **`/apex:setup`** — a guided installer that detects what's present, installs what it safely can, and prints the exact commands for the rest.
+
+## Large-codebase context tools (optional)
+
+On a big repo, Claude re-reads/greps the tree every session. A structural index fixes that — apex's `recon` (Step 1) and everyday navigation query the index instead of sweeping blind. These are third-party tools, not apex skills; `/apex:setup` will walk you through one. Pick **one** that matches how you work:
+
+| Tool | Approach | Best for | Note |
+|---|---|---|---|
+| **[Graphify](https://github.com/safishamsi/graphify)** | Committed knowledge graph (tree-sitter AST, 33 langs) + a PreToolUse hook so Claude consults it *before* file-search | "Map it once, reuse every session"; team-shared via git | Local extraction. `uv tool install graphifyy && graphify install`, then `/graphify .` |
+| **[Serena](https://github.com/oraios/serena)** | Live LSP symbol navigation + safe symbol-level edits | Always-fresh navigation with **no index to maintain** (never stale) | MCP server; symbolic, not RAG |
+| **[Claude Context](https://github.com/zilliztech/claude-context)** | Semantic vector search (hybrid embeddings + BM25) | "Find the code about X" across millions of LOC | MCP server; needs a Milvus/Zilliz vector DB |
+
+**The staleness rule (matches `recon`):** a committed/cached structural index is a fast *navigation aid, not ground truth* — it answers *where code lives*, not *what it guarantees*. Always read the actual function for its contract (recon Step 2), and keep the index fresh (Graphify's post-commit hook auto-rebuilds; Serena is live by construction). This mirrors apex's split: **structural facts are ephemeral; semantic facts are durable** (persist those via `/apex:remember`).
 
 ## What this plugin does NOT ship
 

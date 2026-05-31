@@ -33,7 +33,7 @@ Name the **specific question(s)** the design must answer: *"what files can a thr
 
 For each question, grep / Explore for the functions, types, and abstractions that already touch it. Look for **sibling abstractions** — per-dialect / per-connector / per-engine folders, similarly-named modules, similar return types (principles.md §3). List candidates with `file:line`.
 
-A code-graph / symbol-index tool can **accelerate** this enumeration on a large tree — but **generate it on demand and treat it as ephemeral**. A cached structural graph rots exactly like a stale memory note; never trust it as stored truth.
+**On a large tree, lead with a code graph.** If a structural index is available — e.g. **Graphify** (`/graphify .`, a committed knowledge graph + PreToolUse hook), **Serena** (live LSP symbol navigation), or **Claude Context** (semantic vector search) — query it **first** to surface the candidate functions, their call sites, and the "god nodes," instead of grepping blind. See the README's *Large-codebase context tools* section for setup, or run `/apex:setup`. **Two rules:** (1) the graph answers Step 1 (*where it lives* + *what touches it*) — it does **not** answer Step 2 (the contract), so you still read the load-bearing functions. (2) Treat the graph as **ephemeral**: regenerate it (Graphify's post-commit hook does this automatically) and never trust a cached structural fact as stored truth — it rots exactly like a stale memory note.
 
 ### Step 2 — Read the load-bearing ones; distill the CONTRACT, not the signature
 

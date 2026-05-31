@@ -4,6 +4,20 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [0.3.1] — 2026-05-31
+
+### Added
+
+- **`/apex:setup` command** — guided installer for apex's recommended companions. Detects what's already present, installs what it safely can via Bash, and prints exact `/plugin` / package-manager commands for the rest: the SDLC companions (`superpowers`, `pr-review-toolkit`, `frontend-design`) that the chaining commands depend on, plus an optional **large-codebase context tool**. The 13th `[USER]` entry-point command.
+- **Large-codebase context tools section (README)** — documents three third-party structural-index options so Claude navigates by structure instead of re-grepping the tree each session: **Graphify** (committed AST knowledge graph + PreToolUse hook), **Serena** (live LSP symbol navigation), **Claude Context** (semantic vector search). Includes the staleness rule (index = navigation aid, not ground truth).
+
+### Changed
+
+- **`recon` Step 1 now leads with a code graph.** Where a structural index (Graphify / Serena / Claude Context) is available, query it first to enumerate candidates instead of grepping blind — while keeping recon's existing discipline: the graph answers Step 1 (*where it lives*), never Step 2 (*the contract*), and is treated as **ephemeral** (regenerated, never trusted as stored truth). Mirrors apex's structural-ephemeral / semantic-durable split.
+- README *Recommended companions* now lists `pr-review-toolkit` explicitly (backs `/apex:review-pr`) and points at `/apex:setup`.
+
+---
+
 ## [0.3.0] — 2026-05-31
 
 ### Changed
