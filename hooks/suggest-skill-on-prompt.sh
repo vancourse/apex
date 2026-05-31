@@ -38,7 +38,7 @@ fi
 
 # -> entering DESIGN: the PRD must be prd-reviewed + frozen.
 if echo "$input" | grep -qiE '/apex:design\b|\bdesign(ing)? (a|an|the|this|our|my|new)\b|let.?s design|time to design|start(ing)? (the )?design'; then
-  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. AND if this change is non-trivial or in an unfamiliar / scope-heavy area, run apex:recon first to put existing primitives, contracts, and invariants on the table (skip recon for trivial or familiar work)."
+  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. AND if this change is non-trivial or in an unfamiliar / scope-heavy area, run apex:recon first to put existing primitives, contracts, and invariants on the table (skip recon for trivial or familiar work). On a large/unfamiliar repo, recon should query a code graph (Graphify / Serena / Claude Context) rather than grep blind — build one via /apex:setup if none exists; treat it as ephemeral, not the source of truth."
 fi
 
 # -> entering IMPL-PLANNING: the design must be design-reviewed + frozen.

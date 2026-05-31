@@ -4,6 +4,22 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [0.3.1] — 2026-05-31
+
+### Added
+
+- **`/apex:setup` command** — guided installer for apex's recommended companions. Detects what's already present, installs what it safely can via Bash, and prints exact `/plugin` / package-manager commands for the rest: the SDLC companions (`superpowers`, `pr-review-toolkit`, `frontend-design`) that the chaining commands depend on, plus an optional **large-codebase context tool**. The 13th `[USER]` entry-point command.
+- **Large-codebase context tools section (README)** — documents three third-party structural-index options so Claude navigates by structure instead of re-grepping the tree each session: **Graphify** (committed AST knowledge graph + PreToolUse hook), **Serena** (live LSP symbol navigation), **Claude Context** (semantic vector search). Includes the staleness rule (index = navigation aid, not ground truth).
+
+### Changed
+
+- **`recon` Step 1 now requires a code graph on large/unfamiliar repos** (strengthened from "if present"). The structural index is the precondition for trustworthy enumeration: build/refresh one (Graphify / Serena / Claude Context; `/apex:setup` if none) before enumerating, then query it instead of grepping blind. Discipline preserved: the graph answers Step 1 (*where it lives*), never Step 2 (*the contract*), and is **ephemeral** (regenerated, never trusted as stored truth) — mirroring apex's structural-ephemeral / semantic-durable split. Small/familiar trees still use plain grep/Explore (no index for a handful of files).
+- **`apex-flow` §1a + the design-entry hook now nudge the graph precondition** — on a large/unfamiliar repo, the "codebase reconnaissance" look should go through an index (built via `/apex:setup` if absent), not blind grep, before design-bearing work.
+- **README licensing note** — clarifies apex **bundles none** of the companions or context tools: they are independent third-party projects under their own licenses, only referenced/recommended; apex itself is MIT.
+- README *Recommended companions* now lists `pr-review-toolkit` explicitly (backs `/apex:review-pr`) and points at `/apex:setup`.
+
+---
+
 ## [0.3.0] — 2026-05-31
 
 ### Changed

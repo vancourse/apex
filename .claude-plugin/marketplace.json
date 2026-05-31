@@ -2,16 +2,18 @@
   "name": "apex",
   "description": "Single-plugin marketplace for apex — an opinionated SDLC framework for Claude Code.",
   "owner": {
-    "name": "apex maintainers"
+    "name": "shadowhunter99",
+    "email": "shadowhunter99@gmail.com"
   },
   "plugins": [
     {
       "name": "apex",
       "description": "Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist, phase-routed skill gates, hooks for workflow automation.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "source": "./",
       "author": {
-        "name": "apex maintainers"
+        "name": "shadowhunter99",
+        "email": "shadowhunter99@gmail.com"
       }
     }
   ]
