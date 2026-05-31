@@ -45,19 +45,23 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 ### Commands
 
-Slash commands are thin entry points. Most map 1:1 to a skill of the same name; the orchestration commands below chain several skills (and, for two of them, agents from companion plugins). Every command's `description` carries a **`[USER]`** or **`[AUTO]`** tag so the slash menu signals whether *you* type it at a phase boundary or the model fires it automatically based on phase + file paths.
+The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~11 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
 
-| Command | Tag | What it does |
-|---|---|---|
-| `/apex:create-prd` | `[USER]` | Author a new PRD — chains `superpowers:brainstorming` (explore intent) → `superpowers:writing-plans` (draft the spec). Suggests `/apex:prd-review` afterward to audit + freeze. |
-| `/apex:create-impl-plan` | `[USER]` | Author an implementation plan against the frozen design — chains `superpowers:writing-plans`. Suggests `/apex:impl-plan-review` afterward. |
-| `/apex:design-review` | `[AUTO]` | Backs the `design-review` skill — the adversarial re-pass + freeze ceremony for the design phase. |
-| `/apex:spec-view` | `[USER]` | Backs the `spec-view` skill — renders a PRD / ADR set / design doc as a disposable offline rich-HTML view for human freeze-review. |
-| `/apex:review-pr` | `[USER]` | Heavy multi-agent pre-PR review — dispatches 6 cooperating specialist agents (`code-reviewer`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`, `code-simplifier`) from the `pr-review-toolkit` plugin in parallel. Optional, for non-trivial branches. |
-| `/apex:help` | `[USER]` | Prints the command cheat sheet — which commands you type vs. which the model fires automatically, plus the SDLC workflow at a glance. |
-| `/apex:test` | `[USER]` | Focuses `test-strategy` on one layer — maps an industry term (`unit` / `integration` / `smoke` / `e2e` / `component` / `visual` / `drift`) or an apex layer name to the 8-layer model, then surfaces what to test there, what to mock, and which CI tier. Advisory router; **does not run the suite** (the runner is project-specific). No argument → the 8-layer menu. |
+| Command (`/apex:…`) | What it does |
+|---|---|
+| `apex-flow` | Catch-all router — loads the planning gates (reconnaissance + adversarial checklist) and points at `FLOW.md`. Type this when unsure which gate you're at. |
+| `create-prd` | Author a new PRD — chains `superpowers:brainstorming` (explore intent) → `superpowers:writing-plans` (draft the spec). The `prd-review` skill then fires to audit + freeze. |
+| `architecture-design` | 7-pass foundational architecture review (one-time at project start). The `adr-review` skill fires per ADR. |
+| `design-feature` | Feature-design-from-scratch gate. The `design-review` skill then fires for the adversarial re-pass + freeze. |
+| `create-impl-plan` | Author an implementation plan against the frozen design — chains `superpowers:writing-plans`. The `impl-plan-review` skill then fires. |
+| `review-pr` | Heavy multi-agent pre-PR review — dispatches 6 cooperating specialist agents (`code-reviewer`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`, `code-simplifier`) from the `pr-review-toolkit` plugin in parallel. Optional, for non-trivial branches. |
+| `copilot-review-loop` | Trigger + iterate the Copilot bot review on an open PR. |
+| `spec-view` | Renders a PRD / ADR set / design doc as a disposable offline rich-HTML view for human freeze-review. |
+| `test` | Focuses `test-strategy` on one layer — maps an industry term (`unit` / `integration` / `smoke` / `e2e` / `component` / `visual` / `drift`) or an apex layer name to the 8-layer model, then surfaces what to test there, what to mock, and which CI tier. Advisory router; **does not run the suite**. No argument → the 8-layer menu. |
+| `memory-note` | Capture a high-signal lesson or durable project fact to memory. |
+| `help` | Prints the cheat sheet — which commands you type vs. which skills fire automatically, plus the SDLC workflow at a glance. |
 
-`design-review` and `spec-view` are full skills (see the Skills table); the other five are command-only orchestrators/routers with no standalone skill body (`/apex:test` routes to the `test-strategy` skill). All remaining skills are also invocable as `/apex:<skill-name>`.
+Everything else listed in the Skills table above is a **skill that fires automatically** at its phase — `prd-review`, `adr-review`, `design-review`, `impl-plan-review`, the language/`api-surface`/`postgres` reviews, `security-review`, `threat-model`, `pr-discipline`, and the rest. They have no slash command by design; the model invokes them, and you can ask for any of them by name.
 
 ### Hooks
 
@@ -137,6 +141,33 @@ Long-lived project-specific facts live in `~/.claude/domain-knowledge/<project>.
 Read the relevant file at the start of any session that touches that project.
 ```
 
+## Optional: the `apex-terse` output style
+
+apex's gates are deliberately verbose where it matters — but the *conversational
+prose around* a gate (preamble, transitions, restating the task, post-hoc
+summaries) carries no review signal and still costs tokens. The `apex-terse`
+output style cuts that wrapper **without** dulling the gate.
+
+It is **scoped**, not a blanket "be brief" instruction. It exempts apex's
+load-bearing zones — the adversarial counter-passes, per-finding `file:line`
+evidence, and freeze-decision rationale — which expand to whatever the argument
+needs. A terse adversarial counter-pass would collapse a *review* back into a
+*checklist* (the exact failure mode apex exists to prevent), so those stay
+full-fidelity. The savings come only from words that carry no review signal.
+
+Output styles are a Claude Code user-level setting; a plugin can't ship one as
+active context, so install it by copying the file:
+
+```bash
+# from a clone of this repo:
+mkdir -p ~/.claude/output-styles
+cp output-styles/apex-terse.md ~/.claude/output-styles/
+```
+
+Then switch to it with `/output-style apex-terse` (and back with
+`/output-style default`). It composes with the skill gates — flip it on for a
+token-lean session; the gates keep their full fidelity.
+
 ## Install
 
 ```bash
@@ -153,20 +184,21 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:apex-flow
 ```
 
-> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). The interactive slash command in Claude Code adds the plugin prefix: `/apex:apex-flow`, `/apex:python-review`, etc.
+> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the ~11 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:apex-flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
 
-Other common entry points:
+The entry-point commands you type:
 
-| When you're... | Run |
+| When you're... | Type |
 |---|---|
-| About to write Python | `/apex:python-review` |
-| About to write TypeScript/React | `/apex:typescript-review` |
-| Touching a Postgres schema or SQL | `/apex:postgres-review` |
-| Touching tenant-scoped tables or RLS | `/apex:multi-tenancy` |
-| Pre-PR on an AI-assisted branch | `/apex:ai-pre-review-checklist` |
-| Opening a PR | `/apex:pr-discipline` then `/apex:pr-review-primer` |
+| Starting any non-trivial change (unsure which gate) | `/apex:apex-flow` |
+| Authoring a PRD | `/apex:create-prd` |
+| Setting up architecture (once, at project start) | `/apex:architecture-design` |
+| Designing a feature | `/apex:design-feature` |
+| Writing the implementation plan | `/apex:create-impl-plan` |
+| Doing a heavy pre-PR review | `/apex:review-pr` |
+| Iterating the Copilot review on a PR | `/apex:copilot-review-loop` |
 
-See [FLOW.md](FLOW.md) for the full phase-by-phase routing map.
+Everything else fires automatically by phase + file path — write Python and `python-review` fires; touch a `routes/` file and `api-surface-review` fires; reach the PR phase and `security-review` / `pr-discipline` fire. You don't type those. See [FLOW.md](FLOW.md) for the full phase-by-phase routing map.
 
 ### Fork and customize
 

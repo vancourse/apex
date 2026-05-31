@@ -4,6 +4,18 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`apex-terse` output style** (`output-styles/apex-terse.md`) — an optional, scoped terse mode. Trims wrapper prose (preamble, transitions, task-restatement, post-hoc summaries) while **exempting** apex's load-bearing zones — adversarial counter-passes, per-finding `file:line` evidence, and freeze/decision rationale — which expand to whatever the argument needs. Ships as a user-level Claude Code output style (copy-installed), since a plugin can't contribute one as active context.
+
+### Changed
+
+- **Slash menu trimmed to the 11 entry-point commands.** The 22 `[AUTO]` commands were removed as *slash commands* — they are still skills and still fire automatically (driven by their `SKILL.md` description + the `suggest-skill-*` hooks); only the typed `/apex:` alias is gone. This declutters the `/apex:` menu (≈33 → 11) so it surfaces just the commands you drive by hand. To run an auto gate manually, ask for it by name. Remaining commands: `apex-flow`, `create-prd`, `architecture-design`, `design-feature`, `create-impl-plan`, `review-pr`, `copilot-review-loop`, `spec-view`, `test`, `memory-note`, `help`. README / HOWTO / WALKTHROUGH / `help` cheat sheet updated accordingly (auto gates are now referenced by bare skill name, not `/apex:<name>`).
+
+---
+
 ## [0.2.0] — 2026-05-29
 
 ### Added

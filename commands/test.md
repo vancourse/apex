@@ -41,7 +41,7 @@ Invoke the `test-strategy` skill from the apex plugin. Read its SKILL.md and, fo
 
 - **Language tooling** to actually write the test: Python → `apex:python-review/rules/testing.md`; TS/React → `apex:typescript-review/rules/testing.md`; Playwright (L6/L7) → `apex:typescript-review/rules/playwright-e2e.md`.
 - **The red-green loop itself** (write the failing test first → watch it fail → minimal code to pass → refactor) lives in **`superpowers:test-driven-development`** — apex defers the loop and owns only the layer placement + mock budget *around* it.
-- **Before the PR**: `/apex:test-coverage-audit` (PRD↔test 1:1 mirror, layer discipline, CI tier discipline, mock budget, failure-mode coverage).
+- **Before the PR**: the `test-coverage-audit` skill (PRD↔test 1:1 mirror, layer discipline, CI tier discipline, mock budget, failure-mode coverage).
 
 ## Usage examples
 
@@ -53,5 +53,5 @@ Invoke the `test-strategy` skill from the apex plugin. Read its SKILL.md and, fo
 
 ## Notes
 
-- This is a **router**, not an executor. To actually run tests, use your project's own command (e.g. `make test-unit` from the repo root in your project) — that belongs in the project CLAUDE.md, not in this shareable plugin.
-- The full methodology (all 17 rules, isolation patterns, recorded fixtures, CI tiering, anti-goals) is `/apex:test-strategy`. This command is the per-layer front door to it.
+- This is a **router**, not an executor. To actually run tests, use your project's own command (e.g. `make test-unit` from the repo root) — that belongs in the project CLAUDE.md, not in this shareable plugin.
+- The full methodology (all 17 rules, isolation patterns, recorded fixtures, CI tiering, anti-goals) is the `test-strategy` skill. This command is the per-layer front door to it.

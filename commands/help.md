@@ -7,7 +7,8 @@ Display the following cheat sheet to the user verbatim, as a code block. Do NOT 
 ```
 APEX — Which command should I type?
 
-YOU TYPE THESE (6 commands cover the whole flow):
+YOU TYPE THESE — the entire /apex: slash menu (11 entry-point commands):
+  /apex:apex-flow              Unsure which gate? This routes you (catch-all)
   /apex:create-prd             Start a new feature → brainstorm + draft PRD
   /apex:architecture-design    System architecture (once at project start)
   /apex:design-feature         Design a feature (after PRD frozen)
@@ -15,29 +16,29 @@ YOU TYPE THESE (6 commands cover the whole flow):
   /apex:review-pr              Multi-agent pre-PR review (cooperating specialists)
   /apex:copilot-review-loop    Trigger Copilot review on an open PR
   /apex:spec-view              Render PRD/ADR/design as disposable rich HTML for human freeze-review (optional)
+  /apex:test [layer]           Focus test-strategy on ONE test layer
+  /apex:memory-note            Capture a lesson / durable project fact
+  /apex:help                   This cheat sheet
 
-CATCH-ALL:
-  /apex:apex-flow              Unsure which gate? This routes you
-
-I FIRE THESE AUTOMATICALLY based on phase + file paths (you don't type them):
+I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu — you don't type them):
   Reviews:    prd-review · adr-review · design-review · impl-plan-review ·
               python-review · typescript-review · api-surface-review ·
               postgres-review · security-review · test-coverage-audit ·
-              ai-pre-review-checklist · verification-before-completion
+              test-strategy · ai-pre-review-checklist · verification-before-completion
   Triggers:   threat-model · multi-tenancy · polymorphic-type-modeling ·
-              protocol-first-workflow · verify-ports · test-strategy
+              protocol-first-workflow · verify-ports
   PR phase:   pr-discipline · pr-review-primer · summarize-changes ·
               responding-to-review
-  Memory:     memory-note (also invokable directly when capturing a lesson)
+  (Want one by hand? Just ask — e.g. "run security-review on this diff".)
 
 WORKFLOW AT A GLANCE:
-  PRD       → /apex:create-prd         → /apex:prd-review (auto)   [→ /apex:spec-view for human HTML review]
-  Arch      → /apex:architecture-design  → /apex:adr-review (auto, per ADR)  [→ /apex:spec-view]
-  Design    → /apex:design-feature     → /apex:design-review (auto)  [→ /apex:spec-view]
-  Plan      → /apex:create-impl-plan   → /apex:impl-plan-review (auto)
+  PRD       → /apex:create-prd         → prd-review (auto)   [→ /apex:spec-view for human HTML review]
+  Arch      → /apex:architecture-design  → adr-review (auto, per ADR)  [→ /apex:spec-view]
+  Design    → /apex:design-feature     → design-review (auto)  [→ /apex:spec-view]
+  Plan      → /apex:create-impl-plan   → impl-plan-review (auto)
   Build     → (just describe the task)    (auto: language reviews, etc.)
   Testing   → /apex:test [unit|integration|smoke|e2e]  (focus ONE layer)
-              → /apex:test-strategy (auto, full)  → /apex:test-coverage-audit (auto, pre-PR)
+              → test-strategy (auto, full)  → test-coverage-audit (auto, pre-PR)
               (apex = what/which-layer/what-to-mock; the red-green TDD loop itself
                lives in superpowers:test-driven-development — install separately)
   Verify    → (describe / "verify")        (auto: verification-before-completion)
@@ -45,9 +46,11 @@ WORKFLOW AT A GLANCE:
   Open PR   → ("open the PR")              (auto: pr-discipline, primer, summarize)
   Review    → /apex:copilot-review-loop    (auto: responding-to-review)
 
-DESCRIPTION TAGS in the slash menu:
-  [USER]  — type this command yourself when the matching phase begins
-  [AUTO]  — I fire it automatically; you can also invoke if you want a manual pass
+THE SLASH MENU IS INTENTIONALLY SMALL:
+  Only the 11 entry-point commands above appear under /apex: — the ones you drive by hand.
+  Every review gate (prd-review, design-review, security-review, …) is a SKILL that fires
+  automatically by phase + file path; it has no slash command, by design. Ask for any of
+  them by name to run a manual pass.
 
 DEEPER DOCS:
   ~/.claude/plugins/cache/apex/apex/<version>/WALKTHROUGH.md  (idea→feature, in order — start here)
