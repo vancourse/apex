@@ -9,7 +9,7 @@ The design gate for a NEW feature where the PRD is solid and now you need to tra
 
 ## When to invoke
 
-**Prerequisite (hard gate):** the PRD must be **FROZEN** — i.e. `apex:prd-review` has run and accepted it. A `create-prd` draft alone is authored, not frozen. If `prd-review` hasn't run, **stop and run it first** — designing against an un-reviewed PRD bakes its gaps (missing scenarios, unstated scope, an ungated success metric) straight into the design.
+**Prerequisite (hard gate):** the PRD must be **FROZEN** — i.e. `apex:prd-review` has run and accepted it. A drafted PRD alone is authored, not frozen. If `prd-review` hasn't run, **stop and run it first** — designing against an un-reviewed PRD bakes its gaps (missing scenarios, unstated scope, an ungated success metric) straight into the design.
 
 - The PRD passed `apex:prd-review` and now needs a design
 - You're proposing a new service, model, UI surface, or workflow that doesn't already exist
@@ -139,7 +139,7 @@ Both agents run in isolated worktrees with the same input design doc. They repor
 ## Output location
 
 Write the design to **`docs/<feature-slug>/design.md`** — the same per-feature
-folder as its `prd.md` (apex's standard layout; `create-impl-plan` will add
+folder as its `prd.md` (apex's standard layout; the `impl-plan` step will add
 `impl-plan.md` beside it). Reuse the slug from the feature's PRD.
 
 ## Pass/fail summary
@@ -160,7 +160,7 @@ counter-passes above are the *cheap* version — a single agent attacking the
 design it just authored, with the attack voice contaminated by the just-spent
 author voice. The **load-bearing** review is a separate, cold pass:
 
-**Before `apex:create-impl-plan` or any implementation, run `apex:design-review`.**
+**Before `apex:impl-plan` or any implementation, run `apex:design-review`.**
 It re-walks these 5+1 passes from the attack lens in a separate cognitive step
 (ideally a parallel adversarial agent for non-trivial designs) and runs the
 **design-freeze ceremony**. Do **not** treat this design as a contract — and do

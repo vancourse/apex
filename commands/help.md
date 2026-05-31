@@ -8,17 +8,17 @@ Display the following cheat sheet to the user verbatim, as a code block. Do NOT 
 APEX — Which command should I type?
 
 YOU TYPE THESE — the entire /apex: slash menu (12 entry-point commands):
-  /apex:apex-flow              Unsure which gate? This routes you (catch-all)
-  /apex:create-prd             Start a new feature → brainstorm + draft PRD
-  /apex:architecture-design    System architecture (once at project start)
+  /apex:flow              Unsure which gate? This routes you (catch-all)
+  /apex:prd             Start a new feature → brainstorm + draft PRD
+  /apex:arch    System architecture (once at project start)
   /apex:recon                  Reconnaissance brief before design (surface existing primitives + invariants)
-  /apex:design-feature         Design a feature (after PRD frozen)
-  /apex:create-impl-plan       Write impl plan (after design frozen)
+  /apex:design         Design a feature (after PRD frozen)
+  /apex:impl-plan       Write impl plan (after design frozen)
   /apex:review-pr              Multi-agent pre-PR review (cooperating specialists)
-  /apex:copilot-review-loop    Trigger Copilot review on an open PR
+  /apex:copilot-review    Trigger Copilot review on an open PR
   /apex:spec-view              Render PRD/ADR/design as disposable rich HTML for human freeze-review (optional)
   /apex:test [layer]           Focus test-strategy on ONE test layer
-  /apex:memory-note            Capture a lesson / durable project fact
+  /apex:remember            Capture a lesson / durable project fact
   /apex:help                   This cheat sheet
 
 I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu — you don't type them):
@@ -33,11 +33,11 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
   (Want one by hand? Just ask — e.g. "run security-review on this diff".)
 
 WORKFLOW AT A GLANCE:
-  PRD       → /apex:create-prd         → prd-review (auto)   [→ /apex:spec-view for human HTML review]
-  Arch      → /apex:architecture-design  → adr-review (auto, per ADR)  [→ /apex:spec-view]
+  PRD       → /apex:prd         → prd-review (auto)   [→ /apex:spec-view for human HTML review]
+  Arch      → /apex:arch  → adr-review (auto, per ADR)  [→ /apex:spec-view]
   Recon     → /apex:recon              (surface existing primitives + invariants before designing)
-  Design    → /apex:design-feature     → design-review (auto)  [→ /apex:spec-view]
-  Plan      → /apex:create-impl-plan   → impl-plan-review (auto)
+  Design    → /apex:design     → design-review (auto)  [→ /apex:spec-view]
+  Plan      → /apex:impl-plan   → impl-plan-review (auto)
   Build     → (just describe the task)    (auto: language reviews, etc.)
   Testing   → /apex:test [unit|integration|smoke|e2e]  (focus ONE layer)
               → test-strategy (auto, full)  → test-coverage-audit (auto, pre-PR)
@@ -46,7 +46,7 @@ WORKFLOW AT A GLANCE:
   Verify    → (describe / "verify")        (auto: verification-before-completion)
   Pre-PR    → /apex:review-pr              (heavy, optional — 6 specialists in parallel)
   Open PR   → ("open the PR")              (auto: pr-discipline, primer, summarize)
-  Review    → /apex:copilot-review-loop    (auto: responding-to-review)
+  Review    → /apex:copilot-review    (auto: responding-to-review)
 
 THE SLASH MENU IS INTENTIONALLY SMALL:
   Only the 12 entry-point commands above appear under /apex: — the ones you drive by hand.

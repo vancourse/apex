@@ -31,21 +31,21 @@ apex is designed so you type ~6 commands across an entire feature; everything el
 
 | Phase | You type | What fires automatically after |
 |---|---|---|
-| **Spec** — author + freeze a PRD | `/apex:create-prd` | `prd-review` skill (audit + freeze) |
-| **Architecture** — one-time at project start | `/apex:architecture-design` | `adr-review` skill per ADR |
-| **Design** — design a feature against the frozen PRD | `/apex:design-feature` | `design-review` skill (adversarial re-pass + freeze) |
-| **Plan** — implementation plan against the frozen design | `/apex:create-impl-plan` | `impl-plan-review` skill (layered stack + sequencing + tests + rollout + reversibility) |
+| **Spec** — author + freeze a PRD | `/apex:prd` | `prd-review` skill (audit + freeze) |
+| **Architecture** — one-time at project start | `/apex:arch` | `adr-review` skill per ADR |
+| **Design** — design a feature against the frozen PRD | `/apex:design` | `design-review` skill (adversarial re-pass + freeze) |
+| **Plan** — implementation plan against the frozen design | `/apex:impl-plan` | `impl-plan-review` skill (layered stack + sequencing + tests + rollout + reversibility) |
 | **Build** — just describe the task | *(no explicit command)* | Language reviews, threat-model triggers, test-strategy, verification-before-completion |
-| **PR** — open + review | `/apex:copilot-review-loop` | `pr-discipline`, `pr-review-primer`, `summarize-changes`, `responding-to-review` |
+| **PR** — open + review | `/apex:copilot-review` | `pr-discipline`, `pr-review-primer`, `summarize-changes`, `responding-to-review` |
 
 **Optional but useful:**
 
 - `/apex:review-pr` — heavy multi-agent pre-PR review, dispatches 6 cooperating specialists in parallel (needs the `pr-review-toolkit` companion plugin — see §3).
 - `/apex:spec-view` — renders a PRD / ADR set / design doc as a disposable offline rich-HTML view for a non-engineer reviewer.
 - `/apex:test [layer]` — focuses test-strategy on one of the 8 test layers; advisory, does not run your suite.
-- `/apex:apex-flow` — catch-all router if you're unsure which gate to enter.
+- `/apex:flow` — catch-all router if you're unsure which gate to enter.
 
-**Skip rule for small work:** a one-file fix or a typo doesn't need the gate chain. Use `/apex:apex-flow` for the reconnaissance + adversarial pass and proceed.
+**Skip rule for small work:** a one-file fix or a typo doesn't need the gate chain. Use `/apex:flow` for the reconnaissance + adversarial pass and proceed.
 
 ---
 
@@ -67,8 +67,8 @@ What apex defers to each:
 
 | Companion | apex uses it for | Without it… |
 |---|---|---|
-| `superpowers:brainstorming` | `/apex:create-prd` step 1 — explore intent before drafting | `/apex:create-prd` will say it's missing |
-| `superpowers:writing-plans` | `/apex:create-prd` step 2 + `/apex:create-impl-plan` | Same |
+| `superpowers:brainstorming` | `/apex:prd` step 1 — explore intent before drafting | `/apex:prd` will say it's missing |
+| `superpowers:writing-plans` | `/apex:prd` step 2 + `/apex:impl-plan` | Same |
 | `superpowers:test-driven-development` | The red-green loop that `test-strategy` assumes | apex still tells you *what* to test + *where* + *what to mock*; you'll write the loop manually |
 | `superpowers:dispatching-parallel-agents` | The 2-agent cooperative+adversarial pair (default for non-trivial designs/plans) | You can still run the single-agent inline adversarial pass |
 | `superpowers:systematic-debugging` | Debug discipline (apex doesn't own debugging) | Use your own approach |

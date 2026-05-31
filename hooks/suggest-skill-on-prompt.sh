@@ -37,18 +37,18 @@ fi
 # backstop the mandatory hand-offs in the author skills/commands for the cross-prompt case.
 
 # -> entering DESIGN: the PRD must be prd-reviewed + frozen.
-if echo "$input" | grep -qiE 'design (a|an|the|this) (new )?feature|/apex:design-feature|time to design'; then
-  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a create-prd draft is authored, not frozen. Don't design against an un-reviewed PRD."
+if echo "$input" | grep -qiE 'design (a|an|the|this) (new )?feature|/apex:design|time to design'; then
+  context="${context:+$context }Before apex:design-feature, ensure the PRD is FROZEN via apex:prd-review — a drafted PRD is authored, not frozen. Don't design against an un-reviewed PRD."
 fi
 
 # -> entering IMPL-PLANNING: the design must be design-reviewed + frozen.
-if echo "$input" | grep -qiE 'impl(ementation)?[- ]?plan|create-impl-plan|design (is )?(done|finished|complete|frozen)|ready to plan'; then
-  context="${context:+$context }Before apex:create-impl-plan, ensure apex:design-review has run + FROZEN the design (the cold adversarial re-pass, separate from design-feature's inline counter-passes). A design-feature draft is authored, not frozen."
+if echo "$input" | grep -qiE 'impl(ementation)?[- ]?plan|design (is )?(done|finished|complete|frozen)|ready to plan'; then
+  context="${context:+$context }Before apex:impl-plan, ensure apex:design-review has run + FROZEN the design (the cold adversarial re-pass, separate from design-feature's inline counter-passes). A design-feature draft is authored, not frozen."
 fi
 
 # -> entering BUILD/CODE: the impl plan must be impl-plan-reviewed + frozen.
 if echo "$input" | grep -qiE 'start (implement|build|cod)(ing)?|begin (implement|cod)(ing)?|ready to (implement|build|code)|time to (build|code|implement)|write the code|start coding'; then
-  context="${context:+$context }Before implementation/coding, ensure apex:impl-plan-review has run + FROZEN the implementation plan (layered PR stack, sequencing, per-layer tests, rollout, reversibility). A create-impl-plan draft is authored, not frozen."
+  context="${context:+$context }Before implementation/coding, ensure apex:impl-plan-review has run + FROZEN the implementation plan (layered PR stack, sequencing, per-layer tests, rollout, reversibility). A drafted implementation plan is authored, not frozen."
 fi
 
 [ -n "$context" ] && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"

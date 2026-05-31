@@ -9,7 +9,7 @@ apex's SDLC artifacts have a standard home so each phase knows where to read its
 - **Architecture** (project-wide): `docs/adr/000N-*.md` — one ADR per `architecture-design` pass.
 - **Per-feature** (one folder per feature, kebab-case slug): `docs/<feature-slug>/prd.md` → `design.md` → `impl-plan.md`. The folder holds the feature's whole freeze-chain in lineage order.
 
-The author steps (`create-prd`, `design-feature`, `create-impl-plan`) write to these paths by default and ask for the slug only when the feature name is ambiguous; `spec-view` reads from them.
+The author steps (`/apex:prd`, `/apex:design`, `/apex:impl-plan`) write to these paths by default and ask for the slug only when the feature name is ambiguous; `spec-view` reads from them.
 
 ## Architecture phase (one-time, or amendment-triggered)
 
