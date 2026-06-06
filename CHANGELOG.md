@@ -4,6 +4,15 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`docs/research/sdlc-frameworks-survey.md`** — a 5-angle deep-research survey of other SDLC frameworks, AI-coding harnesses, and methodologies, filtered against apex's lean/adversarial thesis: ranked adopts (cross-artifact consistency, expand-contract migrations, incident-retro, pre-mortem, AI-code supply-chain checks, Shape Up appetite/circuit-breaker, observability/privacy gates, WCAG 2.2 a11y), cheap tightenings, and an explicit "tempting but reject" list (BMAD persona-swarm, ECC's 249-skill catalog, SBOM/Sigstore tooling, DORA measurement, SAFe/WSJF, full ASVS/PASTA).
+- **`docs/cross-artifact-consistency/` + `docs/incident-retro/` — two dogfooded PRDs (PRD → prd-review, frozen-candidate).** The top two *structural* gaps the survey found, run through apex's own gates: a read-only **cross-artifact consistency analyzer** (does the frozen PRD↔design↔impl-plan still agree? — apex's "horizontal" blind spot) and **`incident-retro`** (the missing *post-release* learning loop — map a resolved incident to the apex gate that should have caught it, feed the lesson to `domain-knowledge`). Spec only — not yet built; design phase pending. Both PRDs dogfood the new scenario-tagging + use-case-decomposition features.
+
+---
+
 ## [0.3.2] — 2026-06-06
 
 ### Added
