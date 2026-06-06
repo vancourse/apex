@@ -15,6 +15,11 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 ### Changed
 
 - **Docs: clarify `apex-flow` as the umbrella gate + where tests get written.** WALKTHROUGH's `/apex:flow` catch-all note now explains that `apex-flow` is the **umbrella gate for any non-trivial change** (the home for fixes/refactors that aren't a clean new feature), running §1a reconnaissance + §1b adversarial design checklist + §1c verify-the-ask, then routing to the specialist gate. FLOW.md's IMPLEMENT box now reads "write the tests here: scenarios/use-cases → tests 1:1, E2E-tagged → Playwright" — closing the drift left after the scenario→test-layer traceability change (the box still said "PRD scenarios → integration tests 1:1"). Also fixes a stale entry-point command count in WALKTHROUGH (~11 → 13).
+- **Survey-driven gate amendments (4 cheap tightenings from `docs/research/sdlc-frameworks-survey.md`; no new skills).**
+  - **`impl-plan-review` Pass 4/5 — expand → migrate → contract migration discipline.** A destructive schema change (drop / rename / retype a column, drop a table) must decompose across **separate PRs** (Expand → Migrate → Contract), each phase independently revertible with old+new code coexisting; the reversibility question is reframed from "is the migration reversible?" to "is each *phase* reversible?". A single-PR destructive migration fails the pass. (gh-ost / Fowler's *Parallel Change*.)
+  - **`impl-plan-review` freeze — a circuit-breaker (cancel-by-default).** A plan that runs materially past the layered stack it projected STOPs and re-bets rather than silently extending — the project-level analog of the 5-round Copilot cap (Shape Up).
+  - **`guard-dependency-bump` hook — a slopsquatting check.** Newly-added packages (not just version bumps) must be verified to actually exist with the exact name on the official registry — AI hallucinates plausible package names and attackers pre-register the recurring ones as malware (OWASP LLM03).
+  - **`rules/frontend.md` — WCAG 2.2 AA as testable acceptance criteria.** Replaces the vague "consider keyboard nav / focus states" with a Definition-of-Done bar: keyboard-operable, visible/un-obscured focus, **≥24×24px targets**, no drag-only interactions.
 
 ---
 

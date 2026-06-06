@@ -20,7 +20,7 @@ case "$basename" in
   package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|npm-shrinkwrap.json|\
   uv.lock|Pipfile|Pipfile.lock|poetry.lock|pyproject.toml|requirements.txt|requirements-*.txt|\
   Cargo.toml|Cargo.lock|go.mod|go.sum|Gemfile|Gemfile.lock|composer.json|composer.lock)
-    msg="Dependency / lockfile change detected (${basename}). Review against rules/review-risk.md (large dependency or lockfile changes). Verify: (1) only the intended deps changed — no transitive surprises, (2) lockfile matches the manifest after the change, (3) full build + test + type-check still pass, (4) no new high-severity audit warnings, (5) for major version bumps, check the upstream changelog for breaking changes."
+    msg="Dependency / lockfile change detected (${basename}). Review against rules/review-risk.md (large dependency or lockfile changes). Verify: (1) only the intended deps changed — no transitive surprises, (2) lockfile matches the manifest after the change, (3) full build + test + type-check still pass, (4) no new high-severity audit warnings, (5) for major version bumps, check the upstream changelog for breaking changes, (6) for any NEWLY-ADDED package (not just a version bump): verify the package actually EXISTS and the name is EXACTLY correct on the official registry before adding it — AI-generated code routinely hallucinates plausible-but-nonexistent package names, and attackers pre-register the recurring hallucinations as malware ('slopsquatting' / OWASP LLM03). A typo'd or invented dependency is a supply-chain attack vector."
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$msg"
     ;;
 esac
