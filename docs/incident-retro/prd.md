@@ -1,6 +1,6 @@
 # PRD — `incident-retro` (post-release learning loop)
 
-**Status:** frozen-candidate (post `prd-review`; awaiting user freeze) · **Slug:** `incident-retro`
+**Status:** FROZEN as of 2026-06-06 (user sign-off) · **Slug:** `incident-retro`
 Dogfood: authored then cold-audited (`prd-review.md` beside this file). Source: `docs/research/sdlc-frameworks-survey.md` #3.
 
 ---
@@ -80,4 +80,4 @@ Adversarial miss check: the heavy platforms all bundle the learning retro *with*
 
 ## Freeze marker
 
-**Frozen as of:** _pending user sign-off._ Frozen-candidate: passed `prd-review` (`prd-review.md`); adversarial findings resolved or recorded as U1–U3. Authored, not frozen, until the user marks it — then `apex:design-feature` may begin.
+**Frozen as of 2026-06-06** (user sign-off). Passed `prd-review` (`prd-review.md`); adversarial findings resolved or recorded as U1–U3. Scope changes now require an explicit amendment. `apex:design-feature` may begin (see `design.md`).

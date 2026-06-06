@@ -1,6 +1,6 @@
 # PRD — Cross-artifact consistency analysis
 
-**Status:** frozen-candidate (post `prd-review`; awaiting user freeze) · **Slug:** `cross-artifact-consistency`
+**Status:** FROZEN as of 2026-06-06 (user sign-off) · **Slug:** `cross-artifact-consistency`
 Dogfood: authored then cold-audited in a separate pass (`prd-review.md` beside this file). Source: `docs/research/sdlc-frameworks-survey.md` #1.
 
 ---
@@ -80,4 +80,4 @@ Adversarial miss check: no widely-adopted lightweight "cross-artifact consistenc
 
 ## Freeze marker
 
-**Frozen as of:** _pending user sign-off._ Frozen-candidate: passed `prd-review` (`prd-review.md`); adversarial findings resolved here or recorded as U1–U3. Authored, not frozen, until the user marks it — then `apex:design-feature` may begin.
+**Frozen as of 2026-06-06** (user sign-off). Passed `prd-review` (`prd-review.md`); adversarial findings resolved here or recorded as U1–U3. Scope changes now require an explicit amendment. `apex:design-feature` may begin (see `design.md`).
