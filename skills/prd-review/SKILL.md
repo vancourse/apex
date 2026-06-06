@@ -50,6 +50,8 @@ The adversarial half asks *"what is this PRD getting away with?"*
 
 **Pass condition:** At least 3 testable scenarios written. Each names a user action, a system response, and at least one edge case (empty / error / boundary / permission-denied / partial-state). Scenarios are numbered or labeled so impl-time tests can reference them by ID.
 
+**Each scenario is tagged with its highest verification layer.** Default is **integration** (`apex:test-strategy` Layer 4 — one test per scenario through `/api/*`). The **critical-path subset** is additionally tagged **E2E** (Layer 6 spine, browser-driven — Playwright per `apex:typescript-review/rules/playwright-e2e.md`). This makes E2E coverage *traceable to scenarios* rather than chosen ad hoc at implementation time — it's the input to `apex:impl-plan-review` Pass 3 (which assigns an owner PR per scenario *and* per E2E tag) and `apex:test-coverage-audit` Pass 1 (which verifies the E2E-tagged scenarios actually got a browser test, not just an integration test). Tag conservatively: most scenarios are integration-only; reserve E2E for the flows whose break would be a launch-blocking, user-visible failure.
+
 **Adversarial counter-pass:** For each scenario, name a user-visible behavior the scenario doesn't cover but the criteria seem to imply. If 2+ found, the scenario list is missing flows the criteria assume. Also: name a "happy path" scenario that has no paired failure-path counterpart — most happy paths need at least one failure-path companion scenario.
 
 ### Pass 3 — Out-of-scope statement

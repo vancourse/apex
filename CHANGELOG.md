@@ -4,6 +4,17 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Scenario → test-layer traceability (closes the E2E seam).** The PRD↔test 1:1 mirror was enforced only at the integration layer; which scenarios got promoted to browser E2E was left to implementation-time judgment. Now it's traced end-to-end with no new artifact or command:
+  - **`prd-review` Pass 2** — each PRD scenario is **tagged with its highest verification layer**: default *integration* (`test-strategy` Layer 4); the critical-path subset additionally tagged **E2E** (Layer 6 spine, Playwright). Tag conservatively.
+  - **`impl-plan-review` Pass 3** — each layer/PR now names **the PRD scenario(s) it serves** (layer→scenario lineage), and every **E2E-tagged** scenario gets an owner PR for its spine-E2E (Playwright) test *in addition to* its integration test. New adversarial check for an E2E-tagged scenario whose only owner is an integration test.
+  - **`test-coverage-audit` Pass 1** — adds an **E2E-tag check**: an E2E-tagged scenario with only an integration test is a coverage gap; plus an adversarial check for an "integration test wearing an E2E costume" (asserts the API result but never drives the UI flow).
+
+---
+
 ## [0.3.1] — 2026-05-31
 
 ### Added
