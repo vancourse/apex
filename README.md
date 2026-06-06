@@ -198,6 +198,21 @@ claude /plugin install github:vancourse/apex
 
 Restart Claude Code after installing. The skills and hooks activate immediately in the next session.
 
+### Install by asking Claude (paste-to-install)
+
+Prefer to let Claude do the work? Paste the block below into any Claude Code session and Claude will run the install for you. apex is public (MIT) — no GitHub auth or org membership required.
+
+```text
+Please install the apex Claude Code plugin from https://github.com/vancourse/apex — an opinionated SDLC framework: planning gates, adversarial review skills, PR workflow discipline, and workflow-automation hooks.
+
+Run these in order, and stop and ask me if any step fails:
+1. `claude plugin marketplace add vancourse/apex` — register the marketplace. If it says it already exists, that's fine, continue.
+2. `claude plugin install apex@apex` — install the plugin. If it's already installed, run `claude plugin update apex@apex` instead.
+3. `claude plugin list | grep apex` — show me the output so I can confirm.
+
+When done, remind me to start a NEW Claude Code session (slash commands only register at session start) and type `/apex:help` — I should see the 13-command cheat sheet (`/apex:flow`, `/apex:prd`, `/apex:design`, `/apex:impl-plan`, …). Optionally, run `/apex:setup` to install the recommended companion plugins.
+```
+
 ### Quickstart
 
 After installing, add the skill-gate stubs from the "Suggested additions" section above to your `~/.claude/CLAUDE.md`. Then try your first skill — e.g. before starting any non-trivial change:
@@ -206,7 +221,7 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:flow
 ```
 
-> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the ~11 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
+> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the 13 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
 
 The entry-point commands you type:
 

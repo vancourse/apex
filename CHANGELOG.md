@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **README "Install by asking Claude" subsection.** A copy-paste paste-to-install block: drop it into any Claude Code session and Claude runs the `claude plugin marketplace add vancourse/apex` → `install apex@apex` → confirm sequence, then reminds you to restart and `/apex:help`. apex is public/MIT, so no auth or org membership is required (unlike a private plugin). Also corrects a stale entry-point command count (~11 → 13).
+
+---
+
 ## [0.3.2] — 2026-06-06
 
 ### Added
