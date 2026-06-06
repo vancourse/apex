@@ -271,6 +271,9 @@ superpowers:systematic-debugging   — side path; fires on bug discovery (any ph
 superpowers:brainstorming          — upstream of SPEC (intent exploration)
 superpowers:writing-plans          — upstream of IMPL-PLAN (writes the plan; review with apex:impl-plan-review)
 superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent adversarial pair pattern (see Side paths)
+
+apex:cross-artifact-consistency    — fires at the impl-plan-freeze boundary (after IMPL-PLAN, before IMPL): checks the frozen PRD↔design↔plan still agree (DROPPED / ORPHAN / CONFLICT)
+apex:incident-retro                — side path; post-release, on a RESOLVED incident — maps the miss to the gate that should have caught it, feeds domain-knowledge via memory-note
 ```
 
 ¹ if API surface in diff
