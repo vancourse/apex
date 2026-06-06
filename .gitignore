@@ -2,3 +2,8 @@
 __MACOSX/
 ._*
 tmp/
+graphify-out/
+
+# local Claude Code settings (machine-specific, never ship in the plugin)
+.claude/settings.json
+.claude/settings.local.json

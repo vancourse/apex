@@ -1,6 +1,6 @@
 {
   "name": "apex",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist, phase-routed skill gates, hooks for workflow automation. Pairs custom review skills with curated third-party plugin dependencies.",
   "author": {
     "name": "shadowhunter99",
