@@ -4,11 +4,22 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.3.2] — 2026-06-06
 
 ### Added
 
 - **`INTEROP.md` — Spec Kit / BMAD interop guide.** apex composes with [GitHub Spec Kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD): author specs with them, then run apex's adversarial review/freeze gates on their artifacts. Includes the phase→gate mapping (their `spec.md`/`plan.md`/`tasks.md` / `docs/prd.md`/`docs/architecture.md` → apex's `prd-review`/`design-review`/`impl-plan-review`/`adr-review`/`threat-model`), the interleaved workflow, and a "don't double-author" rule. Linked from the README header.
+- **`docs/execution-tiers/` — apex × Gastown handoff design (design docs).** A dogfooded PRD → design (authored *and* reviewed through apex's own gates) for a thin, executor-agnostic handoff: tier-select an executor (Gastown fleet → superpowers → baseline single-agent), keep apex's review gates **tier-invariant** (gate each unit before the Refinery merges it), and optionally project the frozen impl-plan into a bead lineage graph so "nothing lost" becomes a checkable coverage audit. Design only — not yet built.
+
+### Changed
+
+- **Scenario → test-layer traceability (closes the E2E seam).** The PRD↔test 1:1 mirror was enforced only at the integration layer; which scenarios got promoted to browser E2E was left to implementation-time judgment. Now it's traced end-to-end with no new artifact or command:
+  - **`prd-review` Pass 2** — each PRD scenario is **tagged with its highest verification layer**: default *integration* (`test-strategy` Layer 4); the critical-path subset additionally tagged **E2E** (Layer 6 spine, Playwright). Tag conservatively.
+  - **`impl-plan-review` Pass 3** — each layer/PR now names **the PRD scenario(s) it serves** (layer→scenario lineage), and every **E2E-tagged** scenario gets an owner PR for its spine-E2E (Playwright) test *in addition to* its integration test. New adversarial check for an E2E-tagged scenario whose only owner is an integration test.
+  - **`test-coverage-audit` Pass 1** — adds an **E2E-tag check**: an E2E-tagged scenario with only an integration test is a coverage gap; plus an adversarial check for an "integration test wearing an E2E costume" (asserts the API result but never drives the UI flow).
+- **Conditional use-case decomposition.** A *compound* PRD scenario (one that does more than one user-visible thing) may break into **sub-numbered one-liner use-cases** (`S2` → `S2.1`, `S2.2`…) — the finer, vertical cross-reference anchor between scenarios and the horizontal impl-plan layers. Simple scenarios stay atomic (YAGNI guard — no `S-dot` busywork). `impl-plan-review` Pass 3 cites layers at use-case granularity (`serves S2.1, S2.3`); `test-coverage-audit` Pass 1 mirrors each use-case to ≥1 named assertion. One-liners only — not a full use-case spec (actors/preconditions/alternate flows stay out of scope). Doubles as the natural bead-task granularity for the `docs/execution-tiers` handoff.
+- **`FLOW.md` — "Scenario → test traceability: where each part is validated."** A new subsection (after the Skill × Phase matrix) mapping each part of the chain to the gate + phase that validates it (`prd-review` → `impl-plan-review` → `test-coverage-audit` → `verification-before-completion`), the artifact-review vs. execution-proof split, the convergence point (`test-coverage-audit` Pass 1), and the execution-time link (the `docs/execution-tiers` bead-coverage audit). The canonical home for "where does each part get checked?"
+- **README + WALKTHROUGH** — the `prd-review` / `impl-plan-review` / `test-coverage-audit` skill-table rows and the WALKTHROUGH phase table now reflect scenario tagging, use-case one-liners, the layer→scenario lineage, and the E2E/Playwright owner requirement.
 
 ---
 

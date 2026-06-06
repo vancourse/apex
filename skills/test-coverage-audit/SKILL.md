@@ -35,7 +35,11 @@ Then the reverse: list every integration test in the PR / stack diff. For each:
 
 **Pass condition:** 1:1 correspondence between PRD scenarios and integration tests (with the understanding that one scenario can have multiple tests for different edges, but every scenario has at least one).
 
-**Adversarial counter-pass:** Find a PRD scenario that the test set "almost" covers — the test exists but exercises a slightly different path. That's phantom coverage; flag it.
+**E2E-tag check:** For every scenario tagged **E2E** in `apex:prd-review` Pass 2, confirm a **spine-E2E browser test** (Playwright, Layer 6/7 — see `apex:typescript-review/rules/playwright-e2e.md`) exists and names the scenario — *in addition to* its integration test. An E2E-tagged scenario with only an integration test is a coverage gap: the PRD called for browser-layer proof of that flow and it isn't there.
+
+**Use-case assertion check:** Where a scenario was decomposed into sub-numbered use-case one-liners (`apex:prd-review` Pass 2), confirm each use-case has **≥1 named assertion** inside the scenario's test(s) — a scenario test that exercises the flow but never asserts `S2.2`'s rejection path leaves that use-case unverified even though the scenario "has a test." This is the assertion-level floor of the mirror; it only applies to scenarios that were actually decomposed (simple atomic scenarios have nothing to check here).
+
+**Adversarial counter-pass:** Find a PRD scenario that the test set "almost" covers — the test exists but exercises a slightly different path. That's phantom coverage; flag it. Also: find an **E2E-tagged scenario** whose browser test asserts the API result but never drives the actual UI flow — that's an integration test wearing an E2E costume; the user-visible path is still unverified.
 
 ### Pass 2 — Layer discipline
 
