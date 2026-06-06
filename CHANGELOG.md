@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **`/apex:setup` now installs for real instead of mostly printing commands.** The command previously assumed `/plugin` couldn't be invoked and just printed copy-paste commands for the SDLC companions (only Graphify was Bash-installed; beads was never mentioned). It now (1) **detects the `claude` CLI** and installs plugins headlessly via `claude plugin marketplace add` + `claude plugin install … --scope user` (falling back to printing `/plugin` commands only when the CLI isn't on PATH — so it works from both the desktop app and the terminal), (2) **asks the user which groups they want** (companions / context tool / beads) via a choices prompt, and (3) adds **optional gastown-ecosystem installs** — beads (`bd`, issue tracker; brew or curl) and gastown (`gt`, multi-agent orchestrator; brew, pulls beads in) — both flagged as advanced/orthogonal to apex's gates. Uses `--scope user` to avoid writing a project-local `.claude/settings.json`.
+
+---
+
 ## [0.3.4] — 2026-06-06
 
 ### Changed

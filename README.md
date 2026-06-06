@@ -68,7 +68,7 @@ The slash menu is intentionally small: **only the entry-point commands you actua
 | `/apex:test` | `test-strategy` | Focuses `test-strategy` on one layer — maps an industry term (`unit` / `integration` / `smoke` / `e2e` / `component` / `visual` / `drift`) or an apex layer name to the 8-layer model, then surfaces what to test there, what to mock, and which CI tier. Advisory router; **does not run the suite**. No argument → the 8-layer menu. |
 | `/apex:remember` | `memory-note` | Capture a high-signal lesson or durable project fact to memory. |
 | `/apex:help` | *(orchestrator)* | Prints the cheat sheet — which commands you type vs. which skills fire automatically, plus the SDLC workflow at a glance. |
-| `/apex:setup` | *(orchestrator)* | Guided installer for the recommended companions (`superpowers`, `pr-review-toolkit`) and an optional large-codebase context tool (Graphify / Serena / Claude Context) — detects what's present, installs what it safely can, prints the rest. |
+| `/apex:setup` | *(orchestrator)* | Guided installer for apex's companions (`superpowers`, `pr-review-toolkit`, `frontend-design`), an optional large-codebase context tool (Graphify / Serena / Claude Context), and optional gastown-ecosystem tooling (beads `bd` + gastown `gt`) — asks what you want, then **installs for real via the `claude` CLI** (falls back to printing `/plugin` commands when the CLI isn't available). |
 
 Everything else listed in the Skills table above is a **skill that fires automatically** at its phase — `prd-review`, `adr-review`, `design-review`, `impl-plan-review`, the language/`api-surface`/`postgres` reviews, `security-review`, `threat-model`, `pr-discipline`, and the rest. They have no slash command by design; the model invokes them, and you can ask for any of them by name.
 
@@ -105,7 +105,7 @@ These are not declared as `dependencies` in `plugin.json` — Claude Code's depe
 - `skill-creator` (in `anthropics/claude-plugins-official`) — create / iterate skills
 - `anthropic-skills` (in `anthropics/claude-plugins-official`) — bundles `consolidate-memory`, `pdf`, `xlsx`, `docx`, `pptx`, `skill-creator`, and others
 
-Install each separately via `/plugin install <name>@<marketplace>`, or run **`/apex:setup`** — a guided installer that detects what's present, installs what it safely can, and prints the exact commands for the rest.
+Install each separately via `/plugin install <name>@<marketplace>`, or run **`/apex:setup`** — a guided installer that detects your environment, asks which companions you want, and **installs them for real** via the `claude` CLI (`claude plugin install … --scope user`), falling back to printing the exact `/plugin` commands when the CLI isn't on PATH.
 
 > **Licensing:** apex **bundles none of these** — the companions and the large-codebase context tools below are independent, third-party projects, each under its own license, installed directly from their own sources. apex only *references* them by name and recommends them; nothing here is redistributed as part of apex (which is MIT — see [LICENSE](LICENSE)). Review each tool's license before use.
 

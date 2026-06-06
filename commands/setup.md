@@ -1,95 +1,144 @@
 ---
-description: "[USER] Install apex's recommended companions — superpowers / pr-review-toolkit (skills apex chains) and an optional large-codebase context tool (Graphify / Serena / Claude Context). Runs what it can, prints exact commands for the rest."
+description: "[USER] Install apex's companions — superpowers / pr-review-toolkit / frontend-design (via the claude CLI), an optional large-codebase context tool (Graphify / Serena / Claude Context), and optional gastown-ecosystem tooling (beads issue tracking, gastown orchestrator). Installs for real when the claude CLI is available; falls back to printing exact commands."
 ---
 
-Guided installer for apex's recommended companion plugins and large-codebase
-context tooling. **You are an assistant following these steps**, not a shell
-script — run what you safely can via Bash, and for anything that needs
-`/plugin` (a Claude Code built-in you cannot invoke from here) or a host
-package manager, print the **exact** command for the user to run and tell them
-to restart Claude Code afterward.
+Guided installer for apex's companion plugins and optional tooling. **You are an
+assistant following these steps**, not a shell script. Prefer to *actually
+install* via the `claude` CLI and host package managers; only fall back to
+printing commands when a tool genuinely cannot be driven from here. Always
+remind the user to **restart Claude Code** at the end — plugins register at
+session start.
 
-## Step 0 — Detect what's already present
+## Step 0 — Detect the environment
 
-- Check installed plugins / skills: look for `superpowers`, `pr-review-toolkit`,
-  `frontend-design` (e.g. inspect `~/.claude/plugins/`), and report which are
-  already present so you don't re-install.
-- Check host tooling for the codebase-graph option: `command -v uv pipx graphify serena` — record what exists.
-- Ask the user which groups they want (default: the SDLC companions; the
-  codebase-graph tool is opt-in). Don't install anything not chosen.
+Run these and record the results; they decide *how* you install, not just *what*:
 
-## Step 1 — SDLC companions (skills apex chains)
+```bash
+command -v claude && claude --version        # can we install plugins headlessly?
+command -v brew uv pipx                       # host package managers available?
+command -v graphify serena bd                 # context tool / beads already present?
+claude plugin list 2>/dev/null                # which plugins are already installed (CLI view)
+```
 
-These back apex commands directly — **without them, the chaining commands degrade
-or print a missing-dep message** (see README → *Recommended companions* and
-*Companion plugins* in HOWTO):
+- **If `claude` is on PATH** (true in the CLI/terminal, and in desktop when the
+  binary is installed): you can install plugins **directly** with
+  `claude plugin …` — this is the happy path.
+- **If `claude` is NOT on PATH**: fall back to printing the `/plugin …` commands
+  for the user to run in-app.
 
-| Plugin | apex uses it for |
-|---|---|
-| `superpowers` (`obra/superpowers`) | `/apex:prd` (brainstorming → writing-plans), `/apex:impl-plan` (writing-plans), the 2-agent adversarial pair (dispatching-parallel-agents), the TDD red-green loop `test-strategy` assumes, and `systematic-debugging` |
-| `pr-review-toolkit` | `/apex:review-pr`'s 6 cooperating specialist agents |
-| `frontend-design` (`anthropics/claude-plugins-official`) | polished UI work (optional) |
+Then **ask the user which groups they want** with a choices prompt
+(AskUserQuestion) — don't install anything not chosen:
+1. SDLC companions: superpowers + pr-review-toolkit (recommended), frontend-design (optional, UI work).
+2. Large-codebase context tool: Graphify / Serena / Claude Context / skip (pick one).
+3. Gastown-ecosystem tooling (optional, orthogonal to apex's gates): beads (`bd`, issue tracker) and/or gastown (`gt`, multi-agent orchestrator — advanced; installing it pulls beads in).
 
-Print these for the user to run (they require the `/plugin` built-in), then
-**restart Claude Code**:
+## Step 1 — SDLC companion plugins
+
+These back apex commands directly — **without them the chaining commands degrade**
+(superpowers powers `/apex:prd`, `/apex:impl-plan`, the adversarial pair, the TDD
+loop, and `systematic-debugging`; pr-review-toolkit powers `/apex:review-pr`'s 6
+specialist agents; frontend-design is optional polish).
+
+**If the `claude` CLI is present**, install for real (use `--scope user` so they
+are available everywhere and never write a project-local `.claude/settings.json`):
+
+```bash
+claude plugin marketplace add obra/superpowers
+claude plugin marketplace add anthropics/claude-plugins-official
+claude plugin install superpowers@superpowers-dev      --scope user
+claude plugin install pr-review-toolkit@claude-plugins-official --scope user
+claude plugin install frontend-design@claude-plugins-official   --scope user   # only if chosen
+```
+
+Run only the lines for groups the user chose. `claude plugin install` is
+non-interactive (no confirmation flag needed). Skip any plugin already shown by
+`claude plugin list`.
+
+**If the `claude` CLI is absent**, print the in-app equivalents instead and tell
+the user to run them, then restart:
 
 ```text
 /plugin marketplace add obra/superpowers
 /plugin install superpowers@superpowers-dev
-
-/plugin marketplace add pr-review-toolkit      # or its official marketplace entry
-/plugin install pr-review-toolkit
-
 /plugin marketplace add anthropics/claude-plugins-official
+/plugin install pr-review-toolkit@claude-plugins-official
 /plugin install frontend-design@claude-plugins-official   # optional
 ```
 
 ## Step 2 — Large-codebase context tool (optional, pick ONE)
 
-For big repos, a structural index lets apex's `recon` (Step 1) and everyday
-navigation skip blind grepping. Pick the one that matches how you work — see
-README → *Large-codebase context tools* for the trade-offs:
+A structural index lets `apex:recon` (Step 1) and everyday navigation skip blind
+grepping. apex only **installs** the tool here; the tool then **maintains its own
+freshness** (recon queries it, the tool keeps it current). See README →
+*Large-codebase context tools* for trade-offs.
 
-**A) Graphify** — committed knowledge graph + a PreToolUse hook (closest to
-"map it once, reuse every session"). Local AST extraction, 33 languages. You
-*can* run the install via Bash:
+**A) Graphify** — committed knowledge graph + auto-rebuild hook ("map once, reuse
+every session"). Installable via Bash:
 
 ```bash
 uv tool install graphifyy      # or: pipx install graphifyy
-graphify install               # registers the /graphify skill + CLAUDE.md directive + hook
+graphify install               # registers the /graphify skill + CLAUDE.md directive
 ```
 
-Then have the user run `/graphify .` in the repo, add the auto-rebuild hook, and
-commit the output:
+Then, in the target repo: `/graphify .` to build the graph, and
+`graphify hook install` so each commit refreshes it (code-only, no API key).
+**Gitignore the output** — `graph.json` is large and per-machine:
+`echo '/graphify-out/' >> .gitignore`.
+
+> **Ephemeral rule** (matches recon): the graph is a navigation aid, *not the
+> source of truth* — the hook keeps it fresh; you still read the actual functions
+> for their contracts. Presence is not freshness.
+
+**B) Serena** (`oraios/serena`) — live LSP symbol navigation, never stale. Install
+as an MCP server per its README.
+
+**C) Claude Context** (`zilliztech/claude-context`) — semantic vector search;
+needs a Milvus/Zilliz vector DB. Install as an MCP server per its README.
+
+## Step 3 — Gastown-ecosystem tooling (optional)
+
+Only the pieces the user chose. Both are **orthogonal to apex's gates** —
+work-tracking / orchestration, not part of the SDLC methodology.
+
+**Beads (`bd`)** — issue tracker (local Dolt DB, hash-based IDs that survive
+parallel-agent merges). Install globally:
 
 ```bash
-graphify hook install
-git add graphify-out/ && git commit -m "chore: add codebase knowledge graph"
+brew install beads                                                        # macOS (pulls dolt)
+# or, cross-platform:
+curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
 ```
 
-> Note the **ephemeral** rule (recon Step 1): the committed graph is a fast
-> navigation aid, not ground truth — the post-commit hook keeps it fresh, and
-> you still read the actual functions for their contracts.
+Then tell the user it is **per-repo**: in each project, run `bd init --stealth`
+(keeps `.beads/` local) and optionally `bd setup claude` to wire SessionStart
+context. Do not run `bd init` for them without knowing the target repo.
 
-**B) Serena** (`oraios/serena`) — live LSP symbol navigation + safe edits, no
-index to maintain (never stale). Install as an MCP server per its README.
+**Gastown (`gt`)** — multi-agent workspace orchestrator (polecats / refinery /
+merge-queue). **Heavier and advanced** — worth it for broad parallel work across
+many work-items, overkill for a single focused change. Installing it **pulls
+beads + dolt as dependencies**, so choosing Gastown gives you Beads too:
 
-**C) Claude Context** (`zilliztech/claude-context`) — semantic vector search
-over millions of LOC; requires a Milvus/Zilliz vector DB. Install as an MCP
-server per its README.
+```bash
+brew install gastown      # macOS; pulls beads + dolt
+```
 
-## Step 3 — Verify + report
+Then `gt install ~/gastown` once (creates the HQ workspace), and `gt init` inside
+each git repo you want it to manage. See the gastown README for non-macOS install.
+Don't run `gt install` / `gt init` for the user without confirming the location/repo.
 
-- Re-check `command -v` for any host tools you installed.
-- Remind the user that **plugins only register after a Claude Code restart**.
-- Print a short checklist of what's installed vs. what's left for the user to
-  run manually, with the exact remaining commands.
+## Step 4 — Verify + report
+
+- Re-run `claude plugin list` and `command -v graphify bd` for what you installed.
+- Print a checklist: ✅ installed vs 🔲 left for the user, with exact remaining commands.
+- **Remind the user to restart Claude Code** — newly installed plugins/skills
+  only register at session start.
 
 ## Notes
 
-- This command **never** declares these as `plugin.json` dependencies — apex's
-  manifest stays dependency-free on purpose (a single unresolved name silently
-  fails the whole install; see README). This is a guided installer, not a
-  dependency manifest.
+- apex's `plugin.json` **never** declares these as dependencies — the manifest
+  stays dependency-free on purpose (one unresolved name fails the whole install).
+  This is a guided installer, not a dependency manifest.
 - Everything here is optional. apex works without any of it; the companions just
-  make the chaining commands and large-repo navigation better.
+  make the chaining commands, large-repo navigation, and work-tracking better.
+- Prefer `--scope user` for plugins. Project scope writes a tracked
+  `.claude/settings.json`, which is rarely what you want for global tooling.
