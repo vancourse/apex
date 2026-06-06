@@ -4,7 +4,12 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.3.2] — 2026-06-06
+
+### Added
+
+- **`INTEROP.md` — Spec Kit / BMAD interop guide.** apex composes with [GitHub Spec Kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD): author specs with them, then run apex's adversarial review/freeze gates on their artifacts. Includes the phase→gate mapping (their `spec.md`/`plan.md`/`tasks.md` / `docs/prd.md`/`docs/architecture.md` → apex's `prd-review`/`design-review`/`impl-plan-review`/`adr-review`/`threat-model`), the interleaved workflow, and a "don't double-author" rule. Linked from the README header.
+- **`docs/execution-tiers/` — apex × Gastown handoff design (design docs).** A dogfooded PRD → design (authored *and* reviewed through apex's own gates) for a thin, executor-agnostic handoff: tier-select an executor (Gastown fleet → superpowers → baseline single-agent), keep apex's review gates **tier-invariant** (gate each unit before the Refinery merges it), and optionally project the frozen impl-plan into a bead lineage graph so "nothing lost" becomes a checkable coverage audit. Design only — not yet built.
 
 ### Changed
 
