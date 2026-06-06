@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [0.3.4] — 2026-06-06
+
+### Changed
+
+- **`recon` / `apex-flow` §1a / README — code-graph guidance hardened from presence to freshness.** Recon Step 1 now resolves the structural index to an explicit **NONE → install (`/apex:setup`) / STALE → refresh / FRESH → query** decision, and separates *installing* (one-time, `/apex:setup`) from *maintaining* (the tool's own job — Graphify's post-commit hook, Serena live, Claude Context re-index). Adds the **"presence is not freshness"** rule (a confidently-stale index is *worse* than none — it reads as authoritative while pointing at moved/deleted primitives) and a new behavioral guard: **an absent, declined, or possibly-stale index must surface a *"structural coverage: best-effort, sibling-miss risk"* caveat in the Recon Brief rather than a silent clean bill of health.** README's staleness rule gains the matching **"apex queries the index; the tool maintains it"** division of labor. Tool-neutral throughout (Graphify / Serena / Claude Context stay coequal).
+
+---
+
 ## [0.3.3] — 2026-06-06
 
 ### Added
