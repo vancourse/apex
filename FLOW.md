@@ -286,6 +286,30 @@ superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent 
 ¹¹ promotes apex-flow §1a to a written Recon Brief; fires on design-bearing work, esp. "support new X" / "shrink X" framings
 (architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
+## Scenario → test traceability: where each part is validated
+
+Validation is **distributed across the freeze gates, one link per phase** — each part is checked at the gate of the phase that *owns* it. There is no single "validate everything" step; the chain converges at PRE-PR.
+
+| Part | Validated at | Phase | Asserts |
+|---|---|---|---|
+| Scenarios exist (≥3, edge cases) | `prd-review` Pass 2 | SPEC | PRD owns a testable scenario list |
+| Each scenario **tagged** (integration / E2E) | `prd-review` Pass 2 | SPEC | Highest verification layer declared (tag conservatively) |
+| Compound scenarios **decomposed** into use-case one-liners | `prd-review` Pass 2 | SPEC | Only when compound; simple scenarios stay atomic |
+| Each layer cites **the scenario(s)/use-case(s) it serves** | `impl-plan-review` Pass 3 | IMPL-PLAN | layer→scenario lineage present |
+| Every scenario has an **owner PR**; every E2E tag has a **spine-E2E owner** | `impl-plan-review` Pass 3 | IMPL-PLAN | The plan *covers* the spec, browser layer included |
+| Tests **mirror scenarios 1:1** | `test-coverage-audit` Pass 1 | PRE-PR | Tests exist and name their scenario |
+| E2E-tagged scenario has a **real Playwright test** | `test-coverage-audit` Pass 1 | PRE-PR | Not "an integration test wearing an E2E costume" |
+| Each **use-case → ≥1 named assertion** | `test-coverage-audit` Pass 1 | PRE-PR | Assertion-level floor of the mirror |
+| Right layer / mock budget / CI tier / failure modes | `test-coverage-audit` Pass 2–5 | PRE-PR | Test architecture is sound |
+| Per-test **quality** | `ai-pre-review-checklist` Step 6 | PRE-PR | Tests are meaningful, not boilerplate |
+| **It actually works** (tests run green, behavior proven) | `verification-before-completion` + CI | VERIFY | Execution proof, not just artifact review |
+
+**Two kinds of validation, kept separate:** gates above the VERIFY row are **artifact reviews** (*does the doc/plan/test-set claim the right coverage?* — cold reads at the freeze gates). The VERIFY row is **execution proof** (*does it run green?*). A test that mirrors a scenario (PRE-PR) is not the same as a test that passes (VERIFY).
+
+**Convergence point:** `test-coverage-audit` Pass 1 is the single place the whole spec→test mirror is walked in both directions (no orphan scenario, no gold-plated test). Upstream gates validate the *plan* will satisfy it; this validates the *code* did.
+
+**The execution-time link (designed, not yet built):** that the chain also holds at *runtime* — every scenario/use-case actually built and merged, nothing lost to an executor — is the **bead-coverage audit + Witness gate** from `docs/execution-tiers/` (apex × Gastown). Pre-execution validation = the freeze gates above; execution-time validation = the bead audit.
+
 ## Eight principles overlaid on the pipeline
 
 1. **Plan before coding** — never skip phase 1; re-enter it mid-task if the design breaks. For NEW features, phase 0 (SPEC) + phase 2 (IMPL-PLAN) are both required upstream gates.
