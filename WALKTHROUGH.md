@@ -80,8 +80,15 @@ move to the next row.
 | 8 | **Open PR** | *(say "open the PR")* | `pr-discipline` (draft + ask before push) · `pr-review-primer` · `summarize-changes` | Draft PR open with a reviewer-facing description |
 | 9 | **Review** | `/apex:copilot-review` | `responding-to-review` — every blocker → a concrete artifact + diff | NITs-only OR 5 rounds → squash-merge |
 
-> **Catch-all:** unsure which row you're on? Type `/apex:flow` — it carries the
-> reconnaissance + adversarial checklist and routes you to the right gate.
+> **Catch-all (and the home for fixes / refactors):** unsure which row you're on — or doing
+> a fix / refactor / "shrink this" that isn't a clean *new feature*? Type `/apex:flow`. It's
+> the **umbrella gate for any non-trivial change**, and it runs three sub-gates: **§1a
+> reconnaissance** (find the primitives that already exist before designing), **§1b adversarial
+> design checklist** (minimum change + cite assumptions + 2–3 alternatives + self-critique +
+> justify-additions-over-reuse), and **§1c verify-the-ask** (audit against raw quotes, not
+> writeup interpretations). It then routes you to the right specialist gate. The full detail
+> lives in `skills/apex-flow/SKILL.md`; the new-feature path above is the specialized version
+> of the same discipline.
 
 **Why some rows have no command in the "You type" column.** Build, Verify, and Open PR are
 phases where you just describe the work and the `[AUTO]` skills fire — there's nothing to
@@ -90,7 +97,7 @@ for Verify; `pr-discipline` + `pr-review-primer` + `summarize-changes` for Open 
 **skills, not commands** — they fire automatically and are deliberately kept out of the
 slash menu. **Build** has none on purpose: it's the *absence* of a gate (you write code;
 the language / api-surface / postgres review skills fire by file path). The slash menu is
-limited to the ~11 entry-point commands you actually drive by hand; to fire any auto skill
+limited to the 13 entry-point commands you actually drive by hand; to fire any auto skill
 manually, just ask for it by name (e.g. "run `verify-ports` on this").
 
 ---

@@ -123,8 +123,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
-   │ 3. IMPLEMENT (+ tests-per-layer; PRD scenarios → integration  │
-   │               tests 1:1 — methodology: apex:test-strategy)    │
+   │ 3. IMPLEMENT — write the tests here: scenarios/use-cases →    │
+   │    tests 1:1, E2E-tagged → Playwright (apex:test-strategy)    │
    │    test-strategy              (8-layer model, mocking policy, │
    │                                CI tiering, isolation, 17 rules│
    │                                — routes the test-writing)     │
