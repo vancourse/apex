@@ -4,6 +4,14 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Docs: clarify `apex-flow` as the umbrella gate + where tests get written.** WALKTHROUGH's `/apex:flow` catch-all note now explains that `apex-flow` is the **umbrella gate for any non-trivial change** (the home for fixes/refactors that aren't a clean new feature), running §1a reconnaissance + §1b adversarial design checklist + §1c verify-the-ask, then routing to the specialist gate. FLOW.md's IMPLEMENT box now reads "write the tests here: scenarios/use-cases → tests 1:1, E2E-tagged → Playwright" — closing the drift left after the scenario→test-layer traceability change (the box still said "PRD scenarios → integration tests 1:1"). Also fixes a stale entry-point command count in WALKTHROUGH (~11 → 13).
+
+---
+
 ## [0.3.2] — 2026-06-06
 
 ### Added
