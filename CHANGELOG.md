@@ -4,7 +4,7 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.3.3] — 2026-06-06
 
 ### Added
 
