@@ -1,6 +1,6 @@
 # PRD — Execution-tier handoff + optional bead lineage
 
-**Status:** frozen-candidate (post `prd-review`; awaiting user freeze) · **Slug:** `execution-tiers`
+**Status:** FROZEN as of 2026-06-06 (user sign-off) · **Slug:** `execution-tiers`
 **Author role / Review role:** drafted then audited in a separate cognitive pass (see `prd-review.md` beside this file).
 
 ---
@@ -84,4 +84,4 @@ Adversarial OSS miss check: the commonly-missed categories (retries, queueing, r
 
 ## Freeze marker
 
-**Frozen as of:** _pending user sign-off._ This PRD is a **frozen-candidate**: it has passed `prd-review` (see `prd-review.md`), and all adversarial findings are either resolved here or recorded as named unknowns (U1–U4) for the design phase. It is **authored, not frozen** until the user marks it frozen — at which point `apex:design-feature` may begin.
+**Frozen as of: 2026-06-06** (user sign-off). This PRD passed `prd-review` (see `prd-review.md`); all adversarial findings are resolved here or recorded as named unknowns (U1–U4) for the design phase. From this point, scope changes require an explicit PRD amendment (a delta commit), not a silent re-interpretation. `apex:design-feature` may now begin against this fixed acceptance surface.
