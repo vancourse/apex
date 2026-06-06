@@ -77,10 +77,11 @@ The adversarial half asks *"what does this plan defer that will bite us?"*
 - **Migration first, code next?** (so old code can still read while new schema is being added)
 - **Backwards-compat window?** (for API shape changes that mobile / cached clients will see)
 - **Dual-write / read-then-write transition?** (for schema migrations that move data)
+- **Expand → migrate → contract** (the discipline for ANY destructive schema change — drop / rename / retype a column, drop a table): split it across **separate PRs** — (1) *Expand*: add the new column/table; app dual-writes old+new, reads old. (2) *Migrate*: backfill as its own step. (3) *Contract*: cut reads to new, then drop the old once nothing references it. Old + new code coexist at every step; each phase is independently deployable **and** revertible. The right question is never "is this migration reversible?" (most useful ones aren't) but "is each *phase* reversible?" (gh-ost / pt-online-schema-change / Fowler's *Parallel Change*).
 
 **Why:** Rollout strategy is where well-tested code still breaks production. A perfectly-implemented feature with no rollout plan is a half-finished feature. PRDs usually mention "launch" but rarely "rollout shape" — the impl plan is where that lives.
 
-**Pass condition:** Each layer's rollout mechanism is stated. If feature-flagged, the flag name + default value + cohort rollout plan + success metric for the cohort are stated. If migration-first, the safe-window during which old + new code can coexist is stated.
+**Pass condition:** Each layer's rollout mechanism is stated. If feature-flagged, the flag name + default value + cohort rollout plan + success metric for the cohort are stated. If migration-first, the safe-window during which old + new code can coexist is stated. **No PR drops / renames / retypes a column (or drops a table) in the same PR that ships its code change** — every destructive schema change is decomposed into the expand → migrate → contract phases above, or the plan fails this pass.
 
 **Adversarial counter-pass:** What happens if you ship the API PR but the migration hasn't completed in production yet? If the answer is "it crashes" or "it serves wrong data," the rollout isn't safe — re-sequence or add a forward-compat shim. Also: what's the rollout cohort size for round 1? If "100%", you're not rolling out, you're deploying.
 
@@ -88,7 +89,7 @@ The adversarial half asks *"what does this plan defer that will bite us?"*
 
 **Check:** Can each layer be reverted cleanly? Specifically:
 
-- **Migrations:** are they reversible? Some destructive migrations (drop column, drop table, change column type, rename) are NOT cleanly reversible — flag those.
+- **Migrations:** is each *phase* independently revertible? A whole destructive migration usually isn't cleanly reversible — which is exactly why Pass 4 decomposes it into expand → migrate → contract. The discipline here is that each phase reverts cleanly and old+new code coexist during the bake window. Flag any single-PR destructive migration (it has no clean revert).
 - **Code:** a `git revert` of each PR should leave the system in a coherent state — not "the API references a column that the migration revert just dropped."
 - **Feature flags:** can we toggle off without a deploy?
 - **Data backfills:** if backfill ran and we revert, is the data left in a valid state? Or is it half-migrated?
@@ -104,6 +105,8 @@ The adversarial half asks *"what does this plan defer that will bite us?"*
 After all 5 passes pass + adversarial counter-passes are addressed + overlap with current in-flight work is reconciled — **mark the plan FROZEN**. From this moment on, plan changes require a delta amendment (a commit to the plan doc), just like spec amendments.
 
 A frozen plan tells the implementation phase what to build, in what order, with what tests, with what rollout, with what rollback. The implementer should not be reinventing any of those during coding.
+
+**Circuit breaker (cancel-by-default).** If implementation runs materially past the layered stack this plan projected (Pass 1) — meaningfully more PRs or scope — *without shipping*, the default is to **STOP and re-bet**: return to the design / PRD gate and re-scope, rather than silently extending. Extension is the exception that requires explicit justification, not the default. This is the project-level analog of `copilot-review-loop`'s 5-round cap — it fights sunk-cost bias the same way (a plan that has doubled in size is usually the wrong shape, not merely behind).
 
 ## Adversarial pair pattern (heavier — for non-trivial plans)
 
