@@ -26,11 +26,15 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
   Reviews:    prd-review · adr-review · design-review · impl-plan-review ·
               python-review · typescript-review · api-surface-review ·
               postgres-review · security-review · test-coverage-audit ·
-              test-strategy · ai-pre-review-checklist · verification-before-completion
-  Triggers:   threat-model · multi-tenancy · polymorphic-type-modeling ·
+              test-strategy · ai-pre-review-checklist · verification-before-completion ·
+              cross-artifact-consistency
+  Triggers:   threat-model · observability-review · multi-tenancy ·
+              data-migration-review · polymorphic-type-modeling ·
               protocol-first-workflow · verify-ports
   PR phase:   pr-discipline · pr-review-primer · summarize-changes ·
               responding-to-review
+  Post-release: incident-retro (run by name after a RESOLVED incident —
+              maps the miss to the gate that should have caught it)
   (Want one by hand? Just ask — e.g. "run security-review on this diff".)
 
 WORKFLOW AT A GLANCE:

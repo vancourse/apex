@@ -97,12 +97,27 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                              changes a privilege transition — │
    │                              STRIDE against attack surface,   │
    │                              anchored on ADR-0003 + ADR-0007) │
+   │    observability-review    (if non-trivial runtime behavior — │
+   │                              external calls, async/bg work,   │
+   │                              interesting failure modes —      │
+   │                              designs the per-feature          │
+   │                              observability contract)          │
    │    api-surface-review      (if new endpoint/payload/handler   │
    │                              → run against PROPOSED shape)    │
    │    protocol-first-workflow (if starting new Python component) │
    │    verify-ports            (if copying code from another      │
    │                              repository — schema/UX/format    │
    │                              assumptions are stale by default)│
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+   ┌───────────────────────────────▼───────────────────────────────┐
+   │ 1b. DESIGN REVIEW (FREEZE) — NEW feature only                 │
+   │    apex:design-review      cold adversarial re-pass of        │
+   │                              design-feature's 5+1 passes,     │
+   │                              attack lens — a separate         │
+   │                              cognitive step from authoring;   │
+   │                            then FREEZE the design before      │
+   │                              IMPL-PLAN may begin              │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -119,6 +134,9 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                              (feature flag / direct deploy /  │
    │                               migration-first / compat window)│
    │                            §5 reversibility (rollback story)  │
+   │    data-migration-review   data-safety of the migrate         │
+   │                              phase (backfill corrupt /        │
+   │                              lose / leak; stop halfway)       │
    │                            then FREEZE the plan               │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
@@ -136,9 +154,9 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                                 locking, observability        │
    │                                 planned)                      │
    │    multi-tenancy              (tenant-scoped tables, RLS      │
-   │                                 policies, cross-tenant FKs — │
+   │                                 policies, cross-tenant FKs —  │
    │                                 Postgres RLS ships today)     │
-   │    frontend-design            (UI change)                     │
+   │    frontend-design            (UI change — companion)         │
    │    polymorphic-type-modeling  (new variant / event-type)      │
    │    api-surface-review         (re-run on actual code, not     │
    │                                only the proposed shape)       │
@@ -187,6 +205,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                           success-failure-fallback / tests)   │
    │    review-risk rules    risk note if auth / data / concurrency│
    │                          / billing / external-API touched     │
+   │    summarize-changes    branch / working-tree summary +       │
+   │                          risks + likely test commands         │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -245,15 +265,17 @@ prd-review                     ✓
 apex-flow                            ✓
 recon                                ✓¹¹
 design-feature                       ✓⁷
+design-review                        ✓²
 threat-model                         ✓⁸
+observability-review                 ✓¹³
 impl-plan-review                            ✓
+data-migration-review                ✓¹²    ✓¹²
 test-strategy                               ✓         ✓
 api-surface-review                   ✓                ✓                ✓                                  ✓¹
 python-review                                         ✓                ✓                                  ✓
 typescript-review                                     ✓                ✓                                  ✓
 postgres-review                                       ✓                ✓                                  ✓
 multi-tenancy                        ✓                ✓                ✓                                  ✓¹⁰
-frontend-design                                       ✓²
 protocol-first-workflow              ✓³               ✓³
 polymorphic-type-modeling            ✓⁴               ✓⁴
 verify-ports                         ✓⁵               ✓⁵
@@ -271,13 +293,14 @@ superpowers:systematic-debugging   — side path; fires on bug discovery (any ph
 superpowers:brainstorming          — upstream of SPEC (intent exploration)
 superpowers:writing-plans          — upstream of IMPL-PLAN (writes the plan; review with apex:impl-plan-review)
 superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent adversarial pair pattern (see Side paths)
+frontend-design (companion)        — UI changes; external plugin (claude-plugins-official), not bundled with apex
 
 apex:cross-artifact-consistency    — fires at the impl-plan-freeze boundary (after IMPL-PLAN, before IMPL): checks the frozen PRD↔design↔plan still agree (DROPPED / ORPHAN / CONFLICT)
 apex:incident-retro                — side path; post-release, on a RESOLVED incident — maps the miss to the gate that should have caught it, feeds domain-knowledge via memory-note
 ```
 
 ¹ if API surface in diff
-² UI changes only
+² cold adversarial re-pass of `design-feature` + design-FREEZE; runs after PLAN, before IMPL-PLAN (NEW feature only)
 ³ new Python component
 ⁴ new variant / event-type / discriminated union
 ⁵ porting / adapting code from another repository
@@ -287,6 +310,8 @@ apex:incident-retro                — side path; post-release, on a RESOLVED in
 ⁹ for any PR touching auth / data access / external input / cryptography / sensitive paths
 ¹⁰ when touching tenant-scoped tables, RLS policies, or cross-tenant FK enforcement
 ¹¹ promotes apex-flow §1a to a written Recon Brief; fires on design-bearing work, esp. "support new X" / "shrink X" framings
+¹² when the change backfills / rewrites / relocates / re-types EXISTING rows, or migrates a data model over a populated table — the DATA-safety contract behind impl-plan-review Pass 4's migrate phase
+¹³ when the feature has non-trivial runtime behavior (external calls, async/background work, interesting failure modes) — designs the per-feature observability contract (logging / metrics / tracing / alerting / telemetry-privacy) against the stack + SLO/alerting policy from `architecture-design` Pass 4
 (architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
 ## Scenario → test traceability: where each part is validated
@@ -321,7 +346,7 @@ Validation is **distributed across the freeze gates, one link per phase** — ea
 4. **Ask before push** — every transition from local → remote requires explicit user confirmation. Default to `--draft` on PR creation.
 5. **Self-improvement loop** — every non-obvious lesson goes into memory or domain-knowledge so the next session starts smarter.
 6. **Loop termination** — the COPILOT review (phase 6b) and human-review address cycle (phase 6c) both terminate at NITs-only OR 5 rounds. Five rounds with non-NIT issues outstanding = the PR shape is wrong; return to an upstream gate (IMPL-PLAN, design, or PRD).
-7. **Freeze gates** — the architecture freezes after `apex:architecture-design` (7 ADRs); the PRD freezes after `apex:prd-review` Pass 7; the implementation plan freezes after `apex:impl-plan-review`. All three freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation." Per-feature work runs against frozen upstream artifacts.
+7. **Freeze gates** — the architecture freezes after `apex:architecture-design` (7 ADRs); the PRD freezes after `apex:prd-review` Pass 7; the design freezes after `apex:design-review`; the implementation plan freezes after `apex:impl-plan-review`. All four freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation." Per-feature work runs against frozen upstream artifacts.
 8. **Security is structural, not ceremonial** — `apex:architecture-design` Pass 3 (trust boundaries + auth + data classification) and Pass 7 (system-level threat model) set the security invariants ALL future features inherit. `apex:threat-model` applies STRIDE per-feature against those invariants. `apex:security-review` audits the implementation against the threat model at PR time. The hook `scan-secrets-on-edit` BLOCKS writes that contain real-looking secrets. Security checked at design beats security checked at PR; security checked at PR beats security found in prod.
 
 ## When to skip phases

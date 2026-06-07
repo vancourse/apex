@@ -4,6 +4,26 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`observability-review` skill** — per-feature DESIGN-PHASE gate for the feature's observability contract (5 passes: structured logging / metrics + cardinality / tracing + causality / alerting + SLO / privacy in telemetry), asking *"when this misbehaves in prod, can an operator SEE why?"*. Instantiates the system-level stack + SLO/alerting policy from `architecture-design` Pass 4 per-feature; distinct from `security-review` Pass 5 (security-event slice at PR time) and the `python-review/rules/logging-observability.md` tooling. Plus an inline adversarial counter-pass per pass. `[AUTO]` / by-name (no new slash command — the menu stays 13); wired into the README skill table, the `FLOW.md` PLAN box + Skill×Phase matrix (footnote ¹³), and the `/apex:help` Triggers list.
+- **`data-migration-review` skill** — 5-pass design-phase gate for the data-correctness-and-safety of moving / transforming *existing* rows (backfills, bulk rewrites, re-types, relocations, data-model migrations over populated tables): data-level coexistence within impl-plan-review's expand→migrate→contract phasing, batched / idempotent / resumable / throttled / observable backfill design, in-window consistency + full-set reconciliation, mid-flight (run-level) reversibility + irreversible-step gating, and blast-radius / isolation / canary / kill-switch — each with an inline adversarial counter-pass. Distinct from `impl-plan-review` Pass 4 (rollout sequencing) + Pass 5 (stack-level git-revert) and `postgres-review` (schema DDL + lock strategy). `[AUTO]` / by-name; wired into the README skill table, the `FLOW.md` IMPL-PLAN box + matrix (footnote ¹²), and the `/apex:help` Triggers list.
+
+### Fixed
+
+- **`FLOW.md` — the `design-review` design-freeze gate was missing from the canonical phase-routing doc.** Although the README, `/apex:help`, WALKTHROUGH, the author commands, and the `suggest-skill-on-prompt` hook all treat `design-review` as the cold adversarial re-pass that FREEZES the design before impl-plan, `FLOW.md`'s pipeline jumped straight from `design-feature` to "frozen design enters here" with no gate, omitted `design-review` from the Skill×Phase matrix, and Principle 7 enumerated only *three* freezes (contradicting its own "spec → design → plan" chain). Added a `1b. DESIGN REVIEW (FREEZE)` phase box + matrix row + footnote; Principle 7 now states *four* freezes (architecture · PRD · design · impl-plan).
+- **`/apex:help` cheat sheet omitted `cross-artifact-consistency` and `incident-retro`.** Both real skills were invisible to anyone reading the canonical command cheat sheet — added (`cross-artifact-consistency` to the auto-fire Reviews list; `incident-retro` as a Post-release by-name entry).
+- **`scan-secrets-on-edit` hook missed modern OpenAI keys.** The pattern matched only legacy `sk-…` keys; `sk-proj-…` / `sk-svcacct-…` / `sk-admin-…` keys broke the character run at the prefix hyphen and slipped through. Broadened the pattern (and fixed a comment/code length mismatch).
+
+### Changed
+
+- **Hooks: dropped the dead `MultiEdit` matcher token.** `MultiEdit` is no longer a Claude Code tool, so the `Edit|Write|MultiEdit` matchers in `hooks.json` (and 5 script comment headers) never matched it. Trimmed to `Edit|Write`.
+- **`FLOW.md` housekeeping.** Moved the external companion `frontend-design` out of the apex Skill×Phase grid into the external-companions block (alongside `superpowers:*`); added `summarize-changes` to the OPEN-PR box; fixed a 1-column ASCII-box misalignment.
+
+---
+
 ## [0.3.5] — 2026-06-06
 
 ### Changed

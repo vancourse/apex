@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit|Write|MultiEdit.
+# PreToolUse hook for Edit|Write.
 # Detects edits to dependency manifests / lockfiles and injects a review-risk
 # reminder. Dependency bumps are a high-risk-low-attention class of change.
 #

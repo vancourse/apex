@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit|Write|MultiEdit.
+# PreToolUse hook for Edit|Write.
 # Scans the content being written for high-signal secret patterns and BLOCKS
 # the write on a match. Exit 2 = block + send stderr back to Claude.
 #
@@ -10,7 +10,7 @@
 #   - Stripe live/test secret    sk_(live|test)_[A-Za-z0-9]{24,}
 #   - Slack bot token            xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+
 #   - Anthropic API key          sk-ant-[A-Za-z0-9-_]{32,}
-#   - OpenAI API key             sk-[A-Za-z0-9]{32,}
+#   - OpenAI API key             sk-(proj-|svcacct-|admin-)?[A-Za-z0-9]{32,}
 #   - Google API key             AIza[0-9A-Za-z\-_]{35}
 #   - SSH/RSA private key block  -----BEGIN [A-Z ]+PRIVATE KEY-----
 #
@@ -28,7 +28,7 @@ content=$(echo "$input" | jq -r '.tool_input.content // .tool_input.new_string /
 [ -z "$content" ] && exit 0
 
 # Build a single regex with named alternatives.
-pattern='(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|sk_(live|test)_[A-Za-z0-9]{24,}|xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+|sk-ant-[A-Za-z0-9_-]{32,}|sk-[A-Za-z0-9]{40,}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]+PRIVATE KEY-----)'
+pattern='(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|sk_(live|test)_[A-Za-z0-9]{24,}|xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+|sk-ant-[A-Za-z0-9_-]{32,}|sk-(proj-|svcacct-|admin-)?[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]+PRIVATE KEY-----)'
 
 # Find lines matching the pattern.
 matches=$(echo "$content" | grep -nE "$pattern" 2>/dev/null || true)

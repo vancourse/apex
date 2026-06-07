@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit|Write|MultiEdit.
+# PreToolUse hook for Edit|Write.
 # Inspects the target file path and injects a one-line skill-gate reminder
 # when the path matches an API-surface / payload / handler shape.
 #

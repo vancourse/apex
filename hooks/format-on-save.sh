@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse hook: auto-format files after Edit/Write/MultiEdit.
+# PostToolUse hook: auto-format files after Edit/Write.
 # Silent on success; never blocks Claude (always exits 0).
 
 set -u

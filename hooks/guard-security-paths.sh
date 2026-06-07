@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit|Write|MultiEdit.
+# PreToolUse hook for Edit|Write.
 # Detects edits to security-sensitive paths (auth, credentials, oauth, secrets,
 # encryption, signing, SSO, JWT, SAML, OIDC) and injects a review reminder.
 #
