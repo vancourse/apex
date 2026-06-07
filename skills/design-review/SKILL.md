@@ -106,12 +106,14 @@ If the design hasn't passed:
 
 ## Adversarial pair pattern (DEFAULT for non-trivial designs)
 
-For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel agents via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
+For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel adversarial agents (Task tool, `isolation: "worktree"`):
 
 - **Adversarial agent A** — walks the 6 passes in attack mode against the design doc.
 - **Adversarial agent B** — runs `apex:threat-model` heavyweight pattern independently on the attack surface.
 
 Both run in isolated worktrees with the design doc as input. They report independently. Reconcile their findings. Most real design weaknesses surface only when the attack lens is run separately from the authoring lens and the threat lens is run separately from the architectural lens.
+
+(Note: this is a *two-attacker on different inputs* pair — distinct from `apex:adversarial-pair`'s canonical *cooperative + adversarial on the same input* framing. The dispatch mechanic — parallel Task calls with worktree isolation — is the same; the framings differ because `design-review` is itself already the adversarial half of `design-feature`'s cooperative authoring voice. For non-design artifacts the canonical cooperative+adversarial pair via `apex:adversarial-pair` applies instead.)
 
 Skipping the pair on a non-trivial design is a deviation that must be explicitly justified in the design doc ("single-author review accepted because …"), not a silent default.
 
