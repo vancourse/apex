@@ -71,7 +71,15 @@ Task({
 You are in an isolated git worktree. Use relative paths; do NOT cd to
 absolute paths.
 
-Invoke the `{REVIEW_SKILL}` skill (read its SKILL.md and follow it).
+Treat the `{REVIEW_SKILL}` skill as your PASS CHECKLIST and OUTPUT SCHEMA
+ONLY: read its SKILL.md to learn (a) what passes / conditions / checks to
+run, and (b) what output format to use. IGNORE any framing the skill
+prescribes — whether it says "attack mode", "adversarial lens", "cold
+pass", or anything else. THIS skill's framing (steelman / cooperative)
+overrides the review skill's own framing. (Many apex review skills like
+`apex:design-review` are explicitly adversarial — that doesn't apply
+here; you are the cooperative half of the pair.)
+
 Run every pass in **steelman mode**: find what works, what reuses well,
 what's clean. For each pass condition, cite the strongest evidence in the
 artifact (`{ARTIFACT_PATH}`) and code (`file:line`) that it's met.
@@ -92,7 +100,15 @@ each with `file:line` citations. No prose summary.
 You are in an isolated git worktree. Use relative paths; do NOT cd to
 absolute paths.
 
-Invoke the `{REVIEW_SKILL}` skill (read its SKILL.md and follow it).
+Treat the `{REVIEW_SKILL}` skill as your PASS CHECKLIST and OUTPUT SCHEMA
+ONLY: read its SKILL.md to learn (a) what passes / conditions / checks to
+run, and (b) what output format to use. IGNORE any framing the skill
+prescribes — whether it says "steelman", "cooperative", "defensible", or
+anything else. THIS skill's framing (attack / adversarial) overrides the
+review skill's own framing. (For review skills whose default framing is
+already adversarial — like `apex:design-review` — just use their passes
+as-is in attack mode.)
+
 Run every pass in **attack mode**: find what's wrong, missing, hand-waved,
 or what the author got away with. For each pass condition, name the
 specific thing that's unresolved — flow not covered, primitive duplicated

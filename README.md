@@ -53,7 +53,7 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 
 ### Commands
 
-The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~13 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
+The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~14 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
 
 > Command names are short; the skill they invoke may differ (e.g. `/apex:design` runs the `design-feature` skill, `/apex:flow` runs `apex-flow`). The Skills table above lists skills by their internal name.
 
@@ -226,7 +226,7 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:flow
 ```
 
-> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the 13 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
+> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the 14 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
 
 The entry-point commands you type:
 
