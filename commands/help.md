@@ -7,7 +7,7 @@ Display the following cheat sheet to the user verbatim, as a code block. Do NOT 
 ```
 APEX — Which command should I type?
 
-YOU TYPE THESE — the entire /apex: slash menu (13 entry-point commands):
+YOU TYPE THESE — the entire /apex: slash menu (14 entry-point commands):
   /apex:flow              Unsure which gate? This routes you (catch-all)
   /apex:prd             Start a new feature → brainstorm + draft PRD
   /apex:arch    System architecture (once at project start)
@@ -15,6 +15,7 @@ YOU TYPE THESE — the entire /apex: slash menu (13 entry-point commands):
   /apex:design         Design a feature (after PRD frozen)
   /apex:impl-plan       Write impl plan (after design frozen)
   /apex:review-pr              Multi-agent pre-PR review (cooperating specialists)
+  /apex:adversarial-pair  Run any review skill as two parallel worktree agents (steelman + attack), reconcile
   /apex:copilot-review    Trigger Copilot review on an open PR
   /apex:spec-view              Render PRD/ADR/design as disposable rich HTML for human freeze-review (optional)
   /apex:test [layer]           Focus test-strategy on ONE test layer
@@ -54,7 +55,7 @@ WORKFLOW AT A GLANCE:
   Review    → /apex:copilot-review    (auto: responding-to-review)
 
 THE SLASH MENU IS INTENTIONALLY SMALL:
-  Only the 13 entry-point commands above appear under /apex: — the ones you drive by hand.
+  Only the 14 entry-point commands above appear under /apex: — the ones you drive by hand.
   Every review gate (prd-review, design-review, security-review, …) is a SKILL that fires
   automatically by phase + file path; it has no slash command, by design. Ask for any of
   them by name to run a manual pass.

@@ -137,7 +137,7 @@ If any of these aren't crisp, push back upstream — `apex:architecture-design` 
 
 ## Adversarial pair pattern (heavier)
 
-For features with high blast radius (payment, auth, multi-tenant data export, admin actions), dispatch the threat model as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+For features with high blast radius (payment, auth, multi-tenant data export, admin actions), dispatch the threat model as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 6 passes in steelman mode. Confirms mitigations are present and well-placed.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the primary lens. Tries to break the design.

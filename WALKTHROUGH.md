@@ -97,7 +97,7 @@ for Verify; `pr-discipline` + `pr-review-primer` + `summarize-changes` for Open 
 **skills, not commands** — they fire automatically and are deliberately kept out of the
 slash menu. **Build** has none on purpose: it's the *absence* of a gate (you write code;
 the language / api-surface / postgres review skills fire by file path). The slash menu is
-limited to the 13 entry-point commands you actually drive by hand; to fire any auto skill
+limited to the 14 entry-point commands you actually drive by hand; to fire any auto skill
 manually, just ask for it by name (e.g. "run `verify-ports` on this").
 
 ---
@@ -116,9 +116,9 @@ manually, just ask for it by name (e.g. "run `verify-ports` on this").
   the `design-review` and `impl-plan-review` skills on a non-trivial artifact (an impl
   plan with ≥3 PRs or any production-data migration; a design touching auth, payments,
   multi-tenant data, crypto, or any trust-boundary crossing), the cooperative+adversarial
-  **pair** (`superpowers:dispatching-parallel-agents` — one agent runs the passes in
-  steelman mode, a second in attack mode, findings reconciled before freeze) is the
-  default. Single-agent review on a non-trivial artifact is a deviation you must justify
+  **pair** (`apex:adversarial-pair` — apex's canonical dispatch mechanic; one agent runs
+  the passes in steelman mode, a second in attack mode, findings reconciled before freeze)
+  is the default. Single-agent review on a non-trivial artifact is a deviation you must justify
   in the artifact itself.
 
 - **Where TDD lives.** apex does **not** re-implement the red-green loop. The discipline

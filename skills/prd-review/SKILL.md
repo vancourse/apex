@@ -156,7 +156,7 @@ For any non-trivial feature, ask: **does open-source already solve this?** Reinv
 
 ## Adversarial pair pattern (heavier — for non-trivial PRDs)
 
-The inline adversarial counter-passes above are the *cheap* version (one agent does both). For non-trivial PRDs, dispatch the review as **two parallel agents** (see `superpowers:dispatching-parallel-agents`):
+The inline adversarial counter-passes above are the *cheap* version (one agent does both). For non-trivial PRDs, dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 7 passes + overlap scan + OSS scan in "steelman" mode. Finds what works, what's well-stated, what's defensible. Reports with citations.
 - **Adversarial agent** — runs the same checklist in attack mode. Each adversarial counter-pass becomes the primary lens. Finds what's vague, what's assumed away, what's overstated, what's missing. Reports with file:line citations from the PRD itself.

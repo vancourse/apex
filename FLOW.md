@@ -255,7 +255,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 
 **DEBUG.** When a bug, test failure, or unexpected behavior interrupts any phase above, drop into `superpowers:systematic-debugging` (root-cause-first / reproduce-first / log-first discipline). Apex deliberately defers — the systematic-debugging skill is a complete discipline and we don't duplicate it. Once the bug is understood, return to whatever phase you were in.
 
-**ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` — one cooperative, one adversarial, both running the same apex skill on the same input. **Run the pair at the *design-shape* gate (`apex-flow` §1b / `apex:design-feature`), not only at `impl-plan-review`** — the "is this the minimal design?" decision is made at the shape gate, so a pair that first runs at `impl-plan-review` arrives after the shape is already locked (the exact failure mode `apex:recon` + the §1b pair are meant to catch). The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
+**ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via **`apex:adversarial-pair`** — apex's canonical mechanic for the cooperative/adversarial worktree pair (one cooperative, one adversarial, both running the same apex review skill on the same input). The generic external alternative is `superpowers:dispatching-parallel-agents`, but `apex:adversarial-pair` hardcodes the cooperative/adversarial framings, worktree-isolation defaults, and reconciliation table — use it for review-shaped work. **Run the pair at the *design-shape* gate (`apex-flow` §1b / `apex:design-feature`), not only at `impl-plan-review`** — the "is this the minimal design?" decision is made at the shape gate, so a pair that first runs at `impl-plan-review` arrives after the shape is already locked (the exact failure mode `apex:recon` + the §1b pair are meant to catch). The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
 
 ## Skill × Phase matrix
 
@@ -294,7 +294,8 @@ memory-note                                                                     
 superpowers:systematic-debugging   — side path; fires on bug discovery (any phase)
 superpowers:brainstorming          — upstream of SPEC (intent exploration)
 superpowers:writing-plans          — upstream of IMPL-PLAN (writes the plan; review with apex:impl-plan-review)
-superpowers:dispatching-parallel-agents — mechanism for the heavier two-agent adversarial pair pattern (see Side paths)
+apex:adversarial-pair              — canonical dispatch mechanic for the heavier two-agent adversarial pair (see Side paths)
+superpowers:dispatching-parallel-agents — generic external alternative; apex:adversarial-pair is the opinionated version with hardcoded framings + worktree defaults
 frontend-design (companion)        — UI changes; external plugin (claude-plugins-official), not bundled with apex
 
 apex:cross-artifact-consistency    — fires at the impl-plan-freeze boundary (after IMPL-PLAN, before IMPL): checks the frozen PRD↔design↔plan still agree (DROPPED / ORPHAN / CONFLICT)

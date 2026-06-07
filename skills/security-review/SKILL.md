@@ -146,7 +146,7 @@ If the threat model is missing, that's the first finding — STOP and push back 
 
 ## Adversarial pair pattern (for high-stakes PRs)
 
-For PRs touching auth / payment / multi-tenant data / admin actions / cryptography, dispatch the security review as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+For PRs touching auth / payment / multi-tenant data / admin actions / cryptography, dispatch the security review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 passes in defense mode. Confirms mitigations are present.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the lens. Treats the PR as an unfamiliar code base they're paid to find holes in.
