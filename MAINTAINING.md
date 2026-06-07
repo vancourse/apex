@@ -24,9 +24,11 @@ Why this exists: `design-review` is itself already the *adversarial half* of `de
 
 ### Known cooperative+adversarial pairs (`apex:adversarial-pair` applies)
 
-All other review skills currently in the repo:
+The apex review skills that explicitly reference `apex:adversarial-pair` as their canonical pair-dispatch mechanism (per the PR #22 consolidation):
 
 `prd-review`, `design-feature`, `impl-plan-review`, `threat-model`, `adr-review`, `architecture-design`, `observability-review`, `data-migration-review`, `security-review`.
+
+Other review-oriented skills in the repo (e.g. `postgres-review`, `test-coverage-audit`, `python-review`, `typescript-review`) do **not** currently use the pair pattern at all — they run as a single agent. When promoting one of those to a pair pattern, decide consciously whether it's cooperative+adversarial (use `apex:adversarial-pair`) or some other shape (document the divergence inline).
 
 ### Discipline
 

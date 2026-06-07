@@ -86,8 +86,12 @@ if [ "$in_apex" = "1" ]; then
 fi
 
 # --- Emit (if anything to say). -----------------------------------------
+# Use jq -Rs to JSON-encode the message (same pattern as hooks/apex-primer.sh).
+# A raw printf with the message interpolated as a string can produce invalid
+# JSON if the filename or any interpolated text contains `"`, `\`, or a
+# newline — that would silently drop the hook's additionalContext.
 if [ -n "$msg" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$msg"
+  printf '%s' "$msg" | jq -Rs '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:.}}' 2>/dev/null
 fi
 
 exit 0
