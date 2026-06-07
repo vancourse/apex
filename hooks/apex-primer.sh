@@ -4,12 +4,12 @@
 # agent that apex is installed, names the phase pipeline + entry points,
 # and points to FLOW.md for the canonical phase × skill matrix.
 #
-# Why this exists: every other apex hook (suggest-skill-on-prompt,
-# suggest-skill-on-edit, suggest-review-on-stop) fires *reactively* on
-# user/agent activity. The primer fires *proactively* once per fresh
-# context — so the agent knows apex exists before the first prompt arrives,
-# instead of discovering it through a keyword-matched skill suggestion that
-# may or may not happen on the first turn.
+# Why this exists: every other apex hook in this plugin fires *reactively*
+# on user or agent activity (UserPromptSubmit, PreToolUse/Edit, PostToolUse,
+# Stop). The primer fires *proactively* once per fresh context — so the
+# agent knows apex exists before the first prompt arrives, instead of
+# discovering it through a keyword-matched skill suggestion that may or may
+# not happen on the first turn.
 #
 # Schema followed: stdout JSON with hookSpecificOutput.additionalContext,
 # same pattern as hooks/suggest-skill-on-prompt.sh.
@@ -35,7 +35,7 @@ PIPELINE (skip phases for trivial fixes):
   OPEN PR             → apex:pr-discipline (draft-default, ask-before-push, squash-to-one)
   REVIEW              → apex:copilot-review-loop (GraphQL bot-request mutation; 5-round cap)
 
-TWO-VOICE REVIEW (default for non-trivial work): apex:adversarial-pair — runs any review skill twice in parallel worktree-isolated agents (cooperative steelman + adversarial attacker), reconciles findings.
+TWO-VOICE REVIEW (default for non-trivial work): run any review skill twice in parallel worktree-isolated agents (cooperative steelman + adversarial attacker) and reconcile findings. If `apex:adversarial-pair` is installed, that skill is the canonical dispatch mechanic; otherwise dispatch via the standard Task tool with `isolation: "worktree"`.
 
 ENTRY POINTS: /apex:flow (full methodology) or invoke the apex-flow skill in context. Phase × skill matrix lives in FLOW.md.
 
