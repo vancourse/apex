@@ -55,7 +55,18 @@ diff_files=$(printf '%s\n%s\n' "$tracked_files" "$untracked_files" | sort -u | s
 # Count lines: tracked-file insertions+deletions (vs HEAD) plus the total
 # line count of untracked language files. (Every line of a brand-new file
 # is effectively an "insertion" for review-volume purposes.)
-tracked_lines=$(git diff --shortstat HEAD 2>/dev/null | grep -oE '[0-9]+ insertion|[0-9]+ deletion' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+#
+# RESTRICT THE TRACKED-LINE COUNT TO CODE-LANGUAGE FILES (.py / .ts / .tsx).
+# Without this, a large README / config / yaml edit can push the diff line
+# count over the threshold even when only a tiny .py/.ts change happened,
+# triggering a code-review nudge for non-code work.
+code_tracked=$(printf '%s\n' "$tracked_files" | grep -E '\.(py|tsx?)$' || true)
+if [ -n "$code_tracked" ]; then
+  # shellcheck disable=SC2086  # intentional word-splitting for file list
+  tracked_lines=$(git diff --shortstat HEAD -- $code_tracked 2>/dev/null | grep -oE '[0-9]+ insertion|[0-9]+ deletion' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+else
+  tracked_lines=0
+fi
 untracked_lines=0
 if [ -n "$untracked_files" ]; then
   while IFS= read -r f; do
