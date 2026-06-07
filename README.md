@@ -6,6 +6,8 @@ An opinionated Claude Code plugin that bundles a personal SDLC framework — pla
 
 **Already using a spec-driven tool?** apex composes with [GitHub Spec Kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD) — author specs with them, then run apex's adversarial review/freeze gates on their artifacts. See **[INTEROP.md](INTEROP.md)**.
 
+**Contributing to apex itself?** See **[MAINTAINING.md](MAINTAINING.md)** for maintainer-only discipline (pair-pattern verification, slash-menu-count grep, etc.). The PreToolUse hook surfaces it automatically when you edit `skills/`, `commands/`, `hooks/`, or `rules/` inside the apex plugin repo.
+
 ## What's in the box
 
 ### Skills
