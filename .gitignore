@@ -7,6 +7,7 @@ graphify-out/
 # local Claude Code settings (machine-specific, never ship in the plugin)
 .claude/settings.json
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Python bytecode (the conformance-lint generates these when run locally)
 __pycache__/

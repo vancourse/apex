@@ -259,6 +259,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 
 **AUTONOMOUS BUG-FIX.** When a bug-fix is driven by an *unattended/supervised* agent (label/webhook/cron, no human until merge), the enforcement wrapper is **`apex:autonomous-fix`** — the same reproduce-first discipline it *requires from* (and names, AC4) `superpowers:systematic-debugging`, with the human-confirm gate removed and every other rail kept: draft-PR-only (human merges, permanent), sensitive-path refuse+escalate, fail-closed cost cap, nonce-fenced untrusted input (incl. the issue title). It ships the *rails* — a reference GitHub-Action template + a conformance-lint — not a runner; on a recurrence it hands off to `apex:incident-retro` (AC10). It is the unattended counterpart to `apex:ai-pre-review-checklist` and the generic parent of a project's bug-bot (e.g. BookBridge's penny/F-049 pipeline).
 
+**STACK-ADAPTIVE BUG LOOP.** The *diagnosis* half of that loop is made tooling-agnostic by two more skills. **`apex:detect-stack`** (`/apex:detect-stack`) profiles a project's bug-loop tooling (issue tracker / observability / reproduce) into a routing-only, secret-free `apex.profile.toml`. **`apex:investigate-bug`** (by name) reads that profile and routes the read-only diagnosis through whatever the project has — MCP-first interactive, CLI unattended, ask-user hard fallback — reproduces the bug, then hands `{red test, PLAN.json, fenced bundle}` into `apex:autonomous-fix`'s P3→P4 seam. apex ships *zero* integrations: it discovers what's installed and routes. The three layers compose — `detect-stack` (config) → `investigate-bug` (diagnosis) → `autonomous-fix` (write gate) — and a project's own bug-bot becomes a thin consumer of `investigate-bug`.
+
 ## Skill × Phase matrix
 
 Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=6, COPILOT=6b, ADDRESS=6c, REVIEW=7.
@@ -303,6 +305,8 @@ frontend-design (companion)        — UI changes; external plugin (claude-plugi
 apex:cross-artifact-consistency    — fires at the impl-plan-freeze boundary (after IMPL-PLAN, before IMPL): checks the frozen PRD↔design↔plan still agree (DROPPED / ORPHAN / CONFLICT)
 apex:incident-retro                — side path; post-release, on a RESOLVED incident — maps the miss to the gate that should have caught it, feeds domain-knowledge via memory-note
 apex:autonomous-fix                — side path; the rails an unattended/supervised agent must satisfy before a bug-fix PR (wraps any runner; draft-only). Unattended counterpart to ai-pre-review-checklist.
+apex:detect-stack                  — side path; profiles bug-loop tooling (tracker / observability / reproduce) into a routing-only apex.profile.toml (/apex:detect-stack).
+apex:investigate-bug               — side path; stack-adaptive read-only diagnosis — routes via apex.profile.toml, reproduces, hands to autonomous-fix P3→P4. Parent of a project's bug-bot.
 ```
 
 ¹ if API surface in diff

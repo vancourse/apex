@@ -51,12 +51,14 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
 | `incident-retro` | **Post-release learning loop** — take a *resolved* production incident (or staging near-miss), run a blameless retro, map it to the apex gate that **should have caught it** (reads `FLOW.md`), write the durable lesson to `domain-knowledge` via `memory-note`, and propose a one-line preventative gate amendment. The *learning* half of a postmortem only — **not** incident response (no paging / sev / timelines). User-invoked, zero ambient cost. |
 | `autonomous-fix` | **Unattended/supervised bug-fix gate** — the discipline a label/webhook/cron-triggered coding agent MUST satisfy before raising a bug-fix PR: five rail phases via a two-invocation runner split (budget+risk-route → read-only investigate → reproduce-first → sensitive-path refuse+escalate → constrained write fix → DRAFT PR), in two modes differing by **only** the human-confirm step. Ships ONE commented GH-Actions reference template (wraps any runner) + a static conformance-lint + a "port these seams" list. Nonce-fenced untrusted input incl. title · default-deny tool allowlist with staged write-unlock · turn/timeout/concurrency/**fail-closed cost** budgets · secret/customer-data leak hard-fail · **draft-PR only (human merges, permanent)**. Composes `systematic-debugging` + `security-review`/`threat-model` + `pr-discipline` + `incident-retro`. The generic parent of a project's bug-bot; ships the rails, NOT a runner. |
+| `detect-stack` | **Bug-loop tooling profiler** — probes deps / CI configs / connected MCP servers + the git remote and writes a routing-only, **secret-free** `apex.profile.toml` that `investigate-bug` reads to route each axis (tracker / observability / reproduce) through whatever the project actually has. Auto-fills inferable fields, **prompts (never guesses)** for the rest, records conflicting signals instead of silently picking. A value-shape lint makes "no secrets in the profile" decidable. Distinct from `setup` (installs apex's *own* companions) and `recon` (code-graph facts for a design). |
+| `investigate-bug` | **Stack-adaptive bug diagnosis** — reads `apex.profile.toml` and routes the read-only diagnosis (fetch the issue, query logs/traces in the failure window, check recent commits) through the configured adapter per axis: **MCP-first interactive, CLI unattended, ask-user hard fallback**. Reproduces the bug with a failing test, then **hands off to the `autonomous-fix` write gate at its P3→P4 seam** (composes it, re-implements no write rail). Per-axis capability contracts (tracker / observability) + a two-binding resolver; ships the universal `gh` + `grep` adapters. The generic parent BookBridge's `investigate-bug` becomes a thin consumer of. |
 
 **Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, and `superpowers:test-driven-development` for the red-green loop (write the failing test first) that `test-strategy` assumes — apex owns scenario sourcing + layer placement + mock budget *around* that loop but does not re-implement it. The two-agent cooperative+adversarial pair pattern referenced by `prd-review`, `design-feature`, `design-review`, and `impl-plan-review` (the default for non-trivial designs / impl plans) is now owned by apex via **`apex:adversarial-pair`** — `superpowers:dispatching-parallel-agents` is the generic external alternative but apex stands alone.
 
 ### Commands
 
-The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~14 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
+The slash menu is intentionally small: **only the entry-point commands you actually type appear there.** apex's review gates fire *automatically* (driven by their skill `description` + the `suggest-skill-*` hooks, based on phase + file paths), so they are **skills, not slash commands** — keeping the `/apex:` menu focused on the ~15 things you drive by hand instead of burying them under 30+ auto-fired gates. (To run an auto gate by hand, just ask — e.g. "run security-review on this diff"; the model invokes the skill by name.)
 
 > Command names are short; the skill they invoke may differ (e.g. `/apex:design` runs the `design-feature` skill, `/apex:flow` runs `apex-flow`). The Skills table above lists skills by their internal name.
 
@@ -75,6 +77,7 @@ The slash menu is intentionally small: **only the entry-point commands you actua
 | `/apex:remember` | `memory-note` | Capture a high-signal lesson or durable project fact to memory. |
 | `/apex:help` | *(orchestrator)* | Prints the cheat sheet — which commands you type vs. which skills fire automatically, plus the SDLC workflow at a glance. |
 | `/apex:setup` | *(orchestrator)* | Guided installer for apex's companions (`superpowers`, `pr-review-toolkit`, `frontend-design`), an optional large-codebase context tool (Graphify / Serena / Claude Context), and optional gastown-ecosystem tooling (beads `bd` + gastown `gt`) — asks what you want, then **installs for real via the `claude` CLI** (falls back to printing `/plugin` commands when the CLI isn't available). |
+| `/apex:detect-stack` | `detect-stack` | Profile this project's bug-loop tooling into a routing-only `apex.profile.toml` (issue tracker / observability / reproduce) — probes deps, CI configs, connected MCP servers, and the git remote; auto-fills what it can infer, asks for the rest, never stores a secret. Run once before `investigate-bug`, or to refresh when the stack changes. |
 
 Everything else listed in the Skills table above is a **skill that fires automatically** at its phase — `prd-review`, `adr-review`, `design-review`, `impl-plan-review`, the language/`api-surface`/`postgres` reviews, `security-review`, `threat-model`, `pr-discipline`, and the rest. They have no slash command by design; the model invokes them, and you can ask for any of them by name.
 
@@ -219,7 +222,7 @@ Run these in order, and stop and ask me if any step fails:
 2. `claude plugin install apex@apex` — install the plugin. If it's already installed, run `claude plugin update apex@apex` instead.
 3. `claude plugin list | grep apex` — show me the output so I can confirm.
 
-When done, remind me to start a NEW Claude Code session (slash commands only register at session start) and type `/apex:help` — I should see the 14-command cheat sheet (`/apex:flow`, `/apex:prd`, `/apex:design`, `/apex:impl-plan`, `/apex:adversarial-pair`, …). Optionally, run `/apex:setup` to install the recommended companion plugins.
+When done, remind me to start a NEW Claude Code session (slash commands only register at session start) and type `/apex:help` — I should see the 15-command cheat sheet (`/apex:flow`, `/apex:prd`, `/apex:design`, `/apex:impl-plan`, `/apex:adversarial-pair`, …). Optionally, run `/apex:setup` to install the recommended companion plugins.
 ```
 
 ### Quickstart
@@ -230,7 +233,7 @@ After installing, add the skill-gate stubs from the "Suggested additions" sectio
 /apex:flow
 ```
 
-> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the 14 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
+> **Note:** The CLAUDE.md stubs above use short names like `apex-flow` and `python-review` (the model's routing name). Only the 15 **entry-point** commands have an interactive `/apex:` slash form (e.g. `/apex:flow`); the review gates below are **skills** the model fires automatically — they are not in the slash menu.
 
 The entry-point commands you type:
 

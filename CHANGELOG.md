@@ -4,6 +4,21 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Stack-adaptive bug loop (MVP) — `detect-stack` + generic `investigate-bug`.** Makes the *diagnosis* half of the bug loop tooling-agnostic across the three axes (issue tracker / observability / reproduce) without apex shipping any integration — it discovers what's installed and routes (MCP-first interactive, CLI unattended, ask-user hard fallback). Composes the shipped `autonomous-fix` write gate at its **P3→P4 seam** (re-implements no write rail).
+  - **`detect-stack` skill + `/apex:detect-stack` command (the 15th).** Probes deps / CI configs / connected MCP servers + the git remote and writes a routing-only, **secret-free** `apex.profile.toml`. A value-shape allowlist + a known-secret-token scan make "no secrets in the profile" **decidable**; auto-fills inferable fields, **prompts (never guesses)** for the rest, and **records conflicting signals instead of silently picking** (github remote + gitlab CI → ask, never fabricate). In-repo TOML with its own loader (stdlib `tomllib`; atomic temp-file+rename writer). `reference/profile.py` + `reference/detect.py`.
+  - **`investigate-bug` skill ([AUTO]/by-name).** Reads the profile, routes the read-only diagnosis per axis via a **two-binding resolver** whose structural guarantee is that **MCP-only is impossible** (the unattended branch never reads the `mcp` field — so nothing dies headless in the gate's CI path), reproduces the bug, and hands `{red test, PLAN.json, nonce-fenced bundle}` into the gate's P4. Per-axis capability contracts (tracker `fetch_issue`/`comment`; observability `query_logs(window, …)` — window a required positional = the DoS bound) + three normalized dataclasses + one `AdapterError`; ships the universal `gh` + `grep` adapters. `reference/contracts.py` + `reference/resolver.py` + `reference/adapters/`. The generic parent BookBridge's `investigate-bug` becomes a thin consumer of.
+  - Dogfooded through apex's own full chain (PRD → prd-review → design → design-review → impl-plan → impl-plan-review, all frozen — `docs/stack-adapters/`). Unit tests green for every PRD scenario: S1/S2/S3/S7/S10 (detect), S5.1/S5.2 (resolver), S8 (adapters), S9 (stub conformance). U2 (the adapter-contract shape) resolved via `api-surface-review`: **per-axis interfaces, not one uniform `Adapter`**.
+
+### Changed
+
+- **`autonomous-fix` PRD/SKILL — investigation-path parentage amended (non-scope).** The `investigation` child now interposes the generic `apex:investigate-bug` (BookBridge → generic → composes the gate at P3→P4); the gate stays the write-safety parent of both paths. Explicit AMENDMENT notes at all three design-mandated sites. The gate's behavior is unchanged.
+
+---
+
 ## [0.3.7] — 2026-06-07
 
 ### Added
