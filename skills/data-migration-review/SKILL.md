@@ -122,7 +122,7 @@ If the prod row count is "I don't know," that's the first finding — STOP, get 
 
 ## Adversarial pair pattern (heavier — for high-volume / irreversible moves)
 
-The inline counter-passes are the cheap version. For high-blast-radius moves (≥ tens of millions of rows, cross-DB relocation, a re-type with a lossy transform, or any multi-tenant backfill), dispatch the review as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+The inline counter-passes are the cheap version. For high-blast-radius moves (≥ tens of millions of rows, cross-DB relocation, a re-type with a lossy transform, or any multi-tenant backfill), dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 passes in steelman mode. Confirms the coexistence, idempotency, reconciliation, abort path, and bounds are present and well-placed.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the primary lens: the kill-at-50% abort, the live-write interleaving, the reconciliation that fails but contract fires anyway, the one-weird-row transform, the canary that wasn't.

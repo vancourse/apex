@@ -21,7 +21,7 @@ Pairs with:
 - **`apex:impl-plan`** (downstream) — implementation plan against the frozen design
 - **`apex:impl-plan-review`** (further downstream) — review of that plan
 
-Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass, ideally dispatched as a parallel adversarial agent for non-trivial designs.
+Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass, ideally dispatched as the heavier two-voice pattern via **`apex:adversarial-pair`** for non-trivial designs.
 
 ## Adversarial counter-pass — read this first
 
@@ -106,7 +106,7 @@ If the design hasn't passed:
 
 ## Adversarial pair pattern (DEFAULT for non-trivial designs)
 
-For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel agents via `superpowers:dispatching-parallel-agents`:
+For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel agents via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Adversarial agent A** — walks the 6 passes in attack mode against the design doc.
 - **Adversarial agent B** — runs `apex:threat-model` heavyweight pattern independently on the attack surface.

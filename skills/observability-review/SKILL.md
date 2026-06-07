@@ -121,7 +121,7 @@ If Pass 4's stack + policy don't exist, the per-feature contract floats untether
 
 ## Adversarial pair pattern (heavier)
 
-For features with high operational blast radius (payment flows, multi-service fan-out, high-throughput async pipelines — anything whose outage is a customer-facing incident), dispatch the review as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+For features with high operational blast radius (payment flows, multi-service fan-out, high-throughput async pipelines — anything whose outage is a customer-facing incident), dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 passes in steelman mode. Confirms each signal is present and well-placed.
 - **Adversarial agent** — runs the same from the on-call seat. Each counter-pass becomes the primary lens: it tries to debug a synthetic incident using *only* the planned telemetry and reports where it goes blind.

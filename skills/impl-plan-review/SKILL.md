@@ -110,7 +110,7 @@ A frozen plan tells the implementation phase what to build, in what order, with 
 
 ## Adversarial pair pattern (heavier — for non-trivial plans)
 
-The inline adversarial counter-passes are the cheap version. For non-trivial plans (≥3 PRs in the stack, or any plan that touches migrations + production data), dispatch the review as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+The inline adversarial counter-passes are the cheap version. For non-trivial plans (≥3 PRs in the stack, or any plan that touches migrations + production data), dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 passes in steelman mode. Finds what works, what sequences cleanly, what reverts cleanly.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the primary lens. Finds the layer that's too big, the dependency that's unstated, the migration that's secretly irreversible.

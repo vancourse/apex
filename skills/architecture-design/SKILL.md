@@ -22,7 +22,7 @@ Pairs with:
 
 ## Adversarial counter-pass — read this first
 
-Every pass below has an inline adversarial counter-pass. Architecture decisions are the most expensive to undo — adversarial pressure here pays back the most. For non-trivial architecture work, dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents`.
+Every pass below has an inline adversarial counter-pass. Architecture decisions are the most expensive to undo — adversarial pressure here pays back the most. For non-trivial architecture work, dispatch the heavier two-agent version via `apex:adversarial-pair` (apex's canonical dispatch mechanic).
 
 ## The 7 passes (each outputs one ADR)
 

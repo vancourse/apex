@@ -103,7 +103,7 @@ The adversarial half asks *"what is this design getting away with?"*
 
 **Pass condition:** The threat model produces a 6-category output (Spoofing / Tampering / Repudiation / Information disclosure / DoS / Elevation of privilege) with named mitigations OR explicit accepted residual risks per category. `apex:security-review` (PR time) audits the implementation against this output.
 
-**Adversarial counter-pass:** Don't author the threat model yourself in cooperative mode — dispatch the heavier two-agent version via `superpowers:dispatching-parallel-agents` for any feature touching auth, payment, multi-tenant data, admin actions, or cryptography. See `apex:threat-model` for the "when to invoke the heavier pattern" criteria.
+**Adversarial counter-pass:** Don't author the threat model yourself in cooperative mode — dispatch the heavier two-agent version via `apex:adversarial-pair` for any feature touching auth, payment, multi-tenant data, admin actions, or cryptography. See `apex:threat-model` for the "when to invoke the heavier pattern" criteria.
 
 ## Existing-product overlap scan
 
@@ -131,12 +131,9 @@ For any non-trivial design, look outward before locking in:
 
 ## Adversarial pair pattern (heavier — for non-trivial designs)
 
-The inline adversarial counter-passes above are the *cheap* version (one agent does both). For non-trivial designs, dispatch the review as **two parallel agents** (see `superpowers:dispatching-parallel-agents`):
+The inline adversarial counter-passes above are the *cheap* version — one agent does both, and the attack voice gets contaminated by the just-spent author voice. For non-trivial designs, dispatch the heavier two-voice pattern via **`apex:adversarial-pair`** — apex's canonical mechanic for running a review skill as two parallel worktree-isolated agents (steelman + attack) and reconciling their findings. The pair takes `apex:design-review` as the review skill it runs twice.
 
-- **Cooperative agent** — runs 5 passes + overlap scan + OSS scan in steelman mode. Finds what works, what reuses well, what's clean.
-- **Adversarial agent** — runs the same in attack mode. Each adversarial counter-pass becomes the primary lens. Finds the missing scenario, the bloated MVP, the unresolved failure mode, the missed primitive, the un-considered OSS library.
-
-Both agents run in isolated worktrees with the same input design doc. They report independently. Reconcile their findings. Most real design weaknesses surface only when both views are produced and compared.
+Most real design weaknesses surface only when both views are produced and compared.
 
 ## Output location
 

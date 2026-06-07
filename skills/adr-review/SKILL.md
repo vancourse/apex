@@ -109,7 +109,7 @@ already in place? Cite specific files / data / PRs if relevant.>
 
 ## Adversarial pair pattern
 
-For high-stakes ADRs (auth model, tenancy, persistence, deploy shape — anything from `apex:architecture-design` Passes 2 / 3 / 4), dispatch the review as **two parallel agents** via `superpowers:dispatching-parallel-agents`:
+For high-stakes ADRs (auth model, tenancy, persistence, deploy shape — anything from `apex:architecture-design` Passes 2 / 3 / 4), dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 elements in steelman mode. Confirms the decision is defensible.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the lens. Finds missing alternatives, hidden constraints, under-stated consequences, residual security risks.

@@ -48,7 +48,7 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
 | `incident-retro` | **Post-release learning loop** — take a *resolved* production incident (or staging near-miss), run a blameless retro, map it to the apex gate that **should have caught it** (reads `FLOW.md`), write the durable lesson to `domain-knowledge` via `memory-note`, and propose a one-line preventative gate amendment. The *learning* half of a postmortem only — **not** incident response (no paging / sev / timelines). User-invoked, zero ambient cost. |
 
-**Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, `superpowers:dispatching-parallel-agents` for the two-agent cooperative+adversarial pair pattern referenced by `prd-review`, `design-feature`, `design-review`, and `impl-plan-review` (the default for non-trivial designs / impl plans), and `superpowers:test-driven-development` for the red-green loop (write the failing test first) that `test-strategy` assumes — apex owns scenario sourcing + layer placement + mock budget *around* that loop but does not re-implement it.
+**Side paths (apex defers; install separately):** `superpowers:systematic-debugging` for debug discipline, and `superpowers:test-driven-development` for the red-green loop (write the failing test first) that `test-strategy` assumes — apex owns scenario sourcing + layer placement + mock budget *around* that loop but does not re-implement it. The two-agent cooperative+adversarial pair pattern referenced by `prd-review`, `design-feature`, `design-review`, and `impl-plan-review` (the default for non-trivial designs / impl plans) is now owned by apex via **`apex:adversarial-pair`** — `superpowers:dispatching-parallel-agents` is the generic external alternative but apex stands alone.
 
 ### Commands
 
@@ -101,7 +101,7 @@ These are not auto-loaded. Skills reference them by anchor; your own CLAUDE.md c
 
 These are not declared as `dependencies` in `plugin.json` — Claude Code's dependency resolver requires every listed dep to resolve to an installable plugin by name, and a single typo or a name that's actually a skill (rather than a plugin) silently fails the entire install. We keep apex's manifest dependency-free and list its useful companions here instead:
 
-- `superpowers` (in `obra/superpowers` marketplace) — brainstorming, planning, debugging, TDD, parallel-agent skills; backs `/apex:prd`, `/apex:impl-plan`, and the 2-agent adversarial pair
+- `superpowers` (in `obra/superpowers` marketplace) — brainstorming, planning, debugging, TDD skills; backs `/apex:prd`, `/apex:impl-plan`, and the TDD red-green loop (the 2-agent adversarial pair is owned by apex via `apex:adversarial-pair`, no superpowers dependency)
 - `pr-review-toolkit` — the 6 cooperating specialist agents `/apex:review-pr` dispatches
 - `frontend-design` (in `anthropics/claude-plugins-official`) — distinctive, polished frontend interfaces
 - `skill-creator` (in `anthropics/claude-plugins-official`) — create / iterate skills

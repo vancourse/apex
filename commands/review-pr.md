@@ -6,7 +6,7 @@ allowed-tools: ["Bash", "Glob", "Grep", "Read", "Task"]
 
 Run a comprehensive PR review using specialized **cooperating** agents. This is a thin apex wrapper around the `pr-review-toolkit` plugin — it dispatches the same agents in parallel via the Task tool.
 
-This is the **cooperating-agents** complement to apex's **adversarial pair pattern** (which uses `superpowers:dispatching-parallel-agents`):
+This is the **cooperating-agents** complement to apex's **adversarial pair pattern** (`apex:adversarial-pair`):
 - Adversarial pair = "what's wrong with this design / spec?"
 - Cooperating specialists (this command) = "how does each lens see this diff?"
 

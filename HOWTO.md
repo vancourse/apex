@@ -70,7 +70,7 @@ What apex defers to each:
 | `superpowers:brainstorming` | `/apex:prd` step 1 — explore intent before drafting | `/apex:prd` will say it's missing |
 | `superpowers:writing-plans` | `/apex:prd` step 2 + `/apex:impl-plan` | Same |
 | `superpowers:test-driven-development` | The red-green loop that `test-strategy` assumes | apex still tells you *what* to test + *where* + *what to mock*; you'll write the loop manually |
-| `superpowers:dispatching-parallel-agents` | The 2-agent cooperative+adversarial pair (default for non-trivial designs/plans) | You can still run the single-agent inline adversarial pass |
+| ~~`superpowers:dispatching-parallel-agents`~~ | (no longer required — apex owns the pattern via `apex:adversarial-pair`; the superpowers skill is the generic external alternative) | n/a — apex stands alone |
 | `superpowers:systematic-debugging` | Debug discipline (apex doesn't own debugging) | Use your own approach |
 | `pr-review-toolkit` | `/apex:review-pr` 6-specialist multi-agent review | `/apex:review-pr` won't dispatch its agents |
 

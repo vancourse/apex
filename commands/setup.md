@@ -35,9 +35,10 @@ Then **ask the user which groups they want** with a choices prompt
 ## Step 1 — SDLC companion plugins
 
 These back apex commands directly — **without them the chaining commands degrade**
-(superpowers powers `/apex:prd`, `/apex:impl-plan`, the adversarial pair, the TDD
-loop, and `systematic-debugging`; pr-review-toolkit powers `/apex:review-pr`'s 6
-specialist agents; frontend-design is optional polish).
+(superpowers powers `/apex:prd`, `/apex:impl-plan`, the TDD loop, and
+`systematic-debugging`; pr-review-toolkit powers `/apex:review-pr`'s 6 specialist
+agents; frontend-design is optional polish). The 2-agent adversarial pair is owned
+by apex via `apex:adversarial-pair` — no superpowers dependency.
 
 **If the `claude` CLI is present**, install for real (use `--scope user` so they
 are available everywhere and never write a project-local `.claude/settings.json`):
