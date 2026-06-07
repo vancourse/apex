@@ -57,6 +57,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
                 │   • guard-dependency-bump     →     │ on lockfiles / dep manifests
                 │   • guard-destructive (Bash)  →     │ blocks rm -rf, force-push, --no-verify
                 │   • format-on-save (PostEdit) →     │ ruff / prettier
+                │   • suggest-review-on-stop   →     │ nudges review skill on turn-end after 20+ LOC of code edits
                 └──────────────────┬──────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐

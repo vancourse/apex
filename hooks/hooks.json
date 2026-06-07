@@ -63,6 +63,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-review-on-stop.sh"
+          }
+        ]
+      }
     ]
   }
 }
