@@ -21,7 +21,7 @@ Pairs with:
 - **`apex:impl-plan`** (downstream) — implementation plan against the frozen design
 - **`apex:impl-plan-review`** (further downstream) — review of that plan
 
-Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass, ideally dispatched as the heavier two-voice pattern via **`apex:adversarial-pair`** for non-trivial designs.
+Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass; for non-trivial designs the heavier *two-attacker* dispatch pattern below (one walking the 6 passes, one running `apex:threat-model`) is the default. See the §"Adversarial pair pattern" section at the bottom for the dispatch mechanics — that pattern is **distinct from `apex:adversarial-pair`'s cooperative+adversarial framing** because `design-review` is itself already the adversarial half of `design-feature`'s authoring voice.
 
 ## Adversarial counter-pass — read this first
 

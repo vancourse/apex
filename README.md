@@ -215,7 +215,7 @@ Run these in order, and stop and ask me if any step fails:
 2. `claude plugin install apex@apex` — install the plugin. If it's already installed, run `claude plugin update apex@apex` instead.
 3. `claude plugin list | grep apex` — show me the output so I can confirm.
 
-When done, remind me to start a NEW Claude Code session (slash commands only register at session start) and type `/apex:help` — I should see the 13-command cheat sheet (`/apex:flow`, `/apex:prd`, `/apex:design`, `/apex:impl-plan`, …). Optionally, run `/apex:setup` to install the recommended companion plugins.
+When done, remind me to start a NEW Claude Code session (slash commands only register at session start) and type `/apex:help` — I should see the 14-command cheat sheet (`/apex:flow`, `/apex:prd`, `/apex:design`, `/apex:impl-plan`, `/apex:adversarial-pair`, …). Optionally, run `/apex:setup` to install the recommended companion plugins.
 ```
 
 ### Quickstart
