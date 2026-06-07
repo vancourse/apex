@@ -97,7 +97,7 @@ for Verify; `pr-discipline` + `pr-review-primer` + `summarize-changes` for Open 
 **skills, not commands** — they fire automatically and are deliberately kept out of the
 slash menu. **Build** has none on purpose: it's the *absence* of a gate (you write code;
 the language / api-surface / postgres review skills fire by file path). The slash menu is
-limited to the 13 entry-point commands you actually drive by hand; to fire any auto skill
+limited to the 14 entry-point commands you actually drive by hand; to fire any auto skill
 manually, just ask for it by name (e.g. "run `verify-ports` on this").
 
 ---
