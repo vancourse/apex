@@ -1,0 +1,48 @@
+# apex's autonomous-fix reference template — conformance gate.
+# Runs the shipped conformance-lint over the shipped template (must PASS) and over
+# every negative fixture (must each FAIL). This is the executable half of the
+# autonomous-fix discipline: it proves the reference template the skill ships still
+# encodes the six template-shape ACs (AC2/AC4/AC5/AC6/AC7a/AC9), and that the lint
+# still catches their violations. apex's FIRST CI workflow (see docs/autonomous-fix/).
+name: conformance-lint
+
+on:
+  push:
+    paths:
+      - "skills/autonomous-fix/reference/**"
+      - ".github/workflows/conformance-lint.yml"
+  pull_request:
+    paths:
+      - "skills/autonomous-fix/reference/**"
+      - ".github/workflows/conformance-lint.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  autonomous-fix-template:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/autonomous-fix/reference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: install pyyaml
+        run: pip install pyyaml
+      - name: template must pass all 7 checks
+        run: python conformance-lint.py autonomous-fix.yml
+      - name: every fixture must fail (the lint catches violations)
+        run: |
+          rc=0
+          for fx in fixtures/*.yml; do
+            if python conformance-lint.py "$fx" > /dev/null 2>&1; then
+              echo "::error file=$fx::fixture did NOT fail — the lint missed its violation"
+              rc=1
+            else
+              echo "ok: $fx correctly failed"
+            fi
+          done
+          exit $rc

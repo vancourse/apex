@@ -257,6 +257,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 
 **ADVERSARIAL PAIR.** `apex:prd-review` and `apex:design-feature` both include inline adversarial counter-passes for the cheap (one-agent) version. For non-trivial PRDs or designs, dispatch the heavier two-agent version via **`apex:adversarial-pair`** — apex's canonical mechanic for the cooperative/adversarial worktree pair (one cooperative, one adversarial, both running the same apex review skill on the same input). The generic external alternative is `superpowers:dispatching-parallel-agents`, but `apex:adversarial-pair` hardcodes the cooperative/adversarial framings, worktree-isolation defaults, and reconciliation table — use it for review-shaped work. **Run the pair at the *design-shape* gate (`apex-flow` §1b / `apex:design-feature`), not only at `impl-plan-review`** — the "is this the minimal design?" decision is made at the shape gate, so a pair that first runs at `impl-plan-review` arrives after the shape is already locked (the exact failure mode `apex:recon` + the §1b pair are meant to catch). The user's CLAUDE.md may also prescribe this pattern for finished PRs (independent review).
 
+**AUTONOMOUS BUG-FIX.** When a bug-fix is driven by an *unattended/supervised* agent (label/webhook/cron, no human until merge), the enforcement wrapper is **`apex:autonomous-fix`** — the same reproduce-first discipline it *requires from* (and names, AC4) `superpowers:systematic-debugging`, with the human-confirm gate removed and every other rail kept: draft-PR-only (human merges, permanent), sensitive-path refuse+escalate, fail-closed cost cap, nonce-fenced untrusted input (incl. the issue title). It ships the *rails* — a reference GitHub-Action template + a conformance-lint — not a runner; on a recurrence it hands off to `apex:incident-retro` (AC10). It is the unattended counterpart to `apex:ai-pre-review-checklist` and the generic parent of a project's bug-bot (e.g. BookBridge's penny/F-049 pipeline).
+
 ## Skill × Phase matrix
 
 Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=6, COPILOT=6b, ADDRESS=6c, REVIEW=7.
@@ -300,6 +302,7 @@ frontend-design (companion)        — UI changes; external plugin (claude-plugi
 
 apex:cross-artifact-consistency    — fires at the impl-plan-freeze boundary (after IMPL-PLAN, before IMPL): checks the frozen PRD↔design↔plan still agree (DROPPED / ORPHAN / CONFLICT)
 apex:incident-retro                — side path; post-release, on a RESOLVED incident — maps the miss to the gate that should have caught it, feeds domain-knowledge via memory-note
+apex:autonomous-fix                — side path; the rails an unattended/supervised agent must satisfy before a bug-fix PR (wraps any runner; draft-only). Unattended counterpart to ai-pre-review-checklist.
 ```
 
 ¹ if API surface in diff

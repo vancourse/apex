@@ -4,6 +4,15 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`autonomous-fix` skill** — the discipline an UNATTENDED (or supervised) coding agent must satisfy before raising a bug-fix PR, plus a generic reference GitHub-Actions template + a static conformance-lint. Five rail phases via a **two-invocation runner seam** (read-only investigate + reproducing test → reproduce-gate → staged write fix), four honest terminal states (DRAFT-PR / ESCALATE / NOT-REPRO / HALT), two modes differing by **only** the human-confirm step. Five value-adds over an ad-hoc pipeline: **sensitive-path hard-stop** (refuse+escalate, never auto-fix auth/RLS/migrations/secrets/crypto), **untrusted input nonce-fenced incl. the issue title**, **fail-closed cost cap** (UNKNOWN read ⇒ HALT), **the apex gates named in the agent's operating prompt**, and **reproduce-the-bug-with-a-failing-test first**. Draft-PR-only / human-merges is **permanent** (never auto-merge). Composes `superpowers:systematic-debugging` + `security-review`/`threat-model` + `ai-pre-review-checklist` + `pr-discipline` + `incident-retro`; the generic parent of a project's bug-bot (e.g. BookBridge's penny / F-049 pipeline). Dogfooded through apex's own full chain (PRD → prd-review → design → design-review → impl-plan → impl-plan-review, all frozen — `docs/autonomous-fix/`). `[AUTO]` / by-name (no new slash command); wired into `FLOW.md` (DEBUG/side-path), `/apex:help` (Post-release), and the README skill table.
+- **`.github/workflows/conformance-lint.yml` — apex's first CI workflow.** Runs the autonomous-fix conformance-lint over the shipped reference template (must pass all 7 template-shape checks) and over 7 negative fixtures (each must fail), so the reference template can't silently drift from the discipline it encodes.
+
+---
+
 ## [0.3.6] — 2026-06-06
 
 ### Added

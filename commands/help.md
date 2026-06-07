@@ -36,6 +36,9 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
               responding-to-review
   Post-release: incident-retro (run by name after a RESOLVED incident —
               maps the miss to the gate that should have caught it)
+              autonomous-fix (run by name, or wire its reference template into
+              your CI — the rails an unattended bug-fix agent must satisfy:
+              fenced input · fail-closed cost · reproduce-first · draft-only)
   (Want one by hand? Just ask — e.g. "run security-review on this diff".)
 
 WORKFLOW AT A GLANCE:
