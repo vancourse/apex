@@ -42,5 +42,5 @@ ENTRY POINTS: /apex:flow (full methodology) or invoke the apex-flow skill in con
 SKIP FOR: typos, single-line behavior changes, obvious bugs. When in doubt, run the gate.'
 
 # Emit additionalContext using jq to safely encode the primer string.
-printf '%s' "$primer" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+printf '%s' "$primer" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}' 2>/dev/null
 exit 0
