@@ -30,12 +30,15 @@ in_apex=0
 # the walk-up loop would never check the repo root via ./.claude-plugin/).
 case "$file" in
   /*) ;;  # already absolute
-  *)  file="${PWD}/${file}" ;;
+  *)  file="${PWD:-$(pwd)}/${file}" ;;
 esac
 dir=$(dirname "$file")
 while [ -n "$dir" ] && [ "$dir" != "/" ]; do
   if [ -f "$dir/.claude-plugin/plugin.json" ]; then
-    if grep -q '"name":[[:space:]]*"apex"' "$dir/.claude-plugin/plugin.json" 2>/dev/null; then
+    # Parse with jq (script already depends on it elsewhere) — robust
+    # against any whitespace / formatting in plugin.json. Falls back to
+    # in_apex=0 silently if jq errors or the field is missing.
+    if jq -e '.name == "apex"' "$dir/.claude-plugin/plugin.json" >/dev/null 2>&1; then
       in_apex=1
     fi
     break  # first plugin.json wins — either we're inside apex or another plugin
