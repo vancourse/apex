@@ -50,6 +50,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
                                    │
                 ┌──────────────────▼──────────────────┐
                 │  HOOKS (always-on, automatic)       │
+                │   • apex-primer (SessionStart) →    │ injects apex methodology primer on new/cleared/compacted sessions
                 │   • suggest-skill-on-prompt   →     │ injects review-skill reminders
                 │   • suggest-skill-on-edit     →     │ on API-surface paths
                 │   • guard-security-paths      →     │ on auth/creds/oauth/secrets paths
