@@ -85,6 +85,7 @@ Everything else listed in the Skills table above is a **skill that fires automat
 | `guard-destructive.sh` | PreToolUse (Bash) | Blocks `rm -rf` on root/home/parent, force-push to main, `--no-verify` commits, `.env` writes, `git reset --hard origin` |
 | `scan-secrets-on-edit.sh` | PreToolUse (Edit/Write/MultiEdit) | **BLOCKS** writes containing real-shaped secrets (AWS / GitHub PAT / Stripe / Slack / Anthropic / OpenAI / Google API keys; SSH/RSA private key blocks). Exempts test fixtures marked with `FAKE`/`EXAMPLE`/`TEST`/`DUMMY`/`FIXTURE`/`REPLACE`/`YOUR_` |
 | `format-on-save.sh` | PostToolUse (Edit/Write/MultiEdit) | Auto-formats `.py` (ruff), `.ts/.tsx/.js/.json/.md/.yaml/.css` (prettier — project-local first, then global) |
+| `suggest-review-on-stop.sh` | Stop | Soft-blocks the assistant's stop attempt once per session when ≥20 LOC of uncommitted code edits (tracked diff + untracked new files) touch `.py` / `.ts` / `.tsx` — nudges the agent to invoke `apex:python-review` / `apex:typescript-review` before declaring done |
 
 ### Rules
 
