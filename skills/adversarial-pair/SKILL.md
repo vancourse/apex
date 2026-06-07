@@ -43,23 +43,25 @@ The dispatch is three steps: spawn two agents in parallel, wait for both, reconc
 
 ### Step 1 — Spawn both agents in parallel
 
-Send a **single message with two `Agent` tool calls** so they run concurrently. Each call uses `isolation: "worktree"` so the agents work on isolated copies of the repo and can't step on each other's notes / scratch files.
+Send a **single message with two `Task` tool calls** so they run concurrently. Each call uses `isolation: "worktree"` so the agents work on isolated copies of the repo and can't step on each other's notes / scratch files.
 
 ```javascript
-Agent({
+Task({
   description: "Cooperative review of <artifact>",
   subagent_type: "general-purpose",
   isolation: "worktree",
   prompt: COOPERATIVE_PROMPT,
 })
 
-Agent({
+Task({
   description: "Adversarial review of <artifact>",
   subagent_type: "general-purpose",
   isolation: "worktree",
   prompt: ADVERSARIAL_PROMPT,
 })
 ```
+
+(Some Claude Code versions surface this as the `Agent` tool — the parameter shape is identical; the rest of the apex repo standardizes on `Task` per `commands/review-pr.md`.)
 
 ### Step 2 — Prompt templates (fill in `{REVIEW_SKILL}` and `{ARTIFACT_PATH}`)
 
@@ -77,8 +79,11 @@ artifact (`{ARTIFACT_PATH}`) and code (`file:line`) that it's met.
 Default to "defensible" unless the evidence forces "unresolved." Your
 job is to find what this artifact gets RIGHT — not to invent praise.
 
-Output: per-pass findings (defensible / unresolved / can't-tell), each
-with file:line citations. No prose summary.
+Output: follow the `{REVIEW_SKILL}`'s own output schema if it specifies
+one (e.g., `apex:ai-pre-review-checklist` produces a step-by-step
+checklist; `apex:design-review` produces per-pass verdicts; etc.).
+Otherwise emit per-pass findings (defensible / unresolved / can't-tell),
+each with `file:line` citations. No prose summary.
 ```
 
 **Adversarial prompt** — attack the artifact:
@@ -99,8 +104,10 @@ to find what this artifact gets WRONG — not to invent gotchas, but to
 read the artifact and the code (`file:line`) like a senior engineer
 trying to merge the smallest possible diff.
 
-Output: per-pass findings (refuted / accepted-residual-risk / ok), each
-with file:line citations. No prose summary.
+Output: follow the `{REVIEW_SKILL}`'s own output schema if it specifies
+one (run the same passes, but in attack mode). Otherwise emit per-pass
+findings (refuted / accepted-residual-risk / ok), each with `file:line`
+citations. No prose summary.
 ```
 
 ### Step 3 — Reconcile
@@ -119,13 +126,13 @@ The reconciliation is **your** job, not a third agent's. A third reconciler woul
 
 ## Worktree isolation rules (load-bearing)
 
-Per the `feedback_parallel_agent_worktrees.md` project memory:
+Three rules every dispatched agent must honor — state them inline in the prompt (agents reliably honor inline statements; reliably forget buried-in-system ones):
 
 - **Relative paths only.** A worktree-isolated agent that `cd`s to an absolute path leaves the worktree silently.
 - **No writes outside the worktree.** Agents producing artifacts should write them to relative paths inside the worktree; the main loop collects from each worktree after both finish.
 - **No git operations that affect main.** No `git push`, no `git rebase --onto main`, no `git checkout main`. The agent's worktree is read-bystander for the rest of the repo.
 
-These rules belong in the **prompt**, not in a system message — agents reliably honor them when stated inline, reliably forget them when buried in a system prompt.
+The cooperative + adversarial prompt templates above already include the first rule verbatim ("Use relative paths; do NOT cd to absolute paths"). Append the other two if your dispatched agents will write artifacts or run git commands.
 
 ## Pass condition
 
