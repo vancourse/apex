@@ -54,9 +54,15 @@ The "N entry-point commands" count is hardcoded as prose in **at least 6 doc sit
 Run this from the apex repo root before opening a PR that adds or removes a slash command:
 
 ```bash
-grep -rn '[0-9]\+ entry-point\|[0-9]\+-command cheat sheet' \
-  --include='*.md' . | grep -v node_modules
+grep -rEn '[0-9]+[* ]+entry-point|[0-9]+-command cheat sheet|~?[0-9]+ things you drive' \
+  --include='*.md' --exclude-dir=node_modules .
 ```
+
+Notes on the pattern:
+- `-E` (ERE) for portable `+` / `|` (works under BSD grep on macOS as well as GNU).
+- `--exclude-dir=node_modules` excludes the directory, not the substring (cleaner than `| grep -v node_modules`).
+- `[* ]+` between the digit and `entry-point` swallows markdown bold (`14 **entry-point**`) and plain space alike — without this the `entry-point` form in `README.md:232` would slip through.
+- Three alternations cover the three phrasings used across the 6 sites in the table above.
 
 Update every hit to the new count in the same commit. Also add a row to `commands/help.md`'s actual command list.
 

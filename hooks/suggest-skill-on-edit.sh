@@ -25,15 +25,24 @@ file=$(echo "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 # project). Bounded walk — stops at first plugin.json found or filesystem
 # root, whichever comes first.
 in_apex=0
+# Ensure file path is absolute before extracting dirname — Claude Code
+# usually passes absolute paths, but defensively handle relative (otherwise
+# the walk-up loop would never check the repo root via ./.claude-plugin/).
+case "$file" in
+  /*) ;;  # already absolute
+  *)  file="${PWD}/${file}" ;;
+esac
 dir=$(dirname "$file")
-while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "." ]; do
+while [ -n "$dir" ] && [ "$dir" != "/" ]; do
   if [ -f "$dir/.claude-plugin/plugin.json" ]; then
     if grep -q '"name":[[:space:]]*"apex"' "$dir/.claude-plugin/plugin.json" 2>/dev/null; then
       in_apex=1
     fi
     break  # first plugin.json wins — either we're inside apex or another plugin
   fi
-  dir=$(dirname "$dir")
+  parent=$(dirname "$dir")
+  [ "$parent" = "$dir" ] && break  # idempotent dirname → reached root
+  dir="$parent"
 done
 
 # --- Build the message(s). Accumulate, emit once. ------------------------
