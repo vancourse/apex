@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "feature": "agent-rails",
+  "artifacts": {
+    "prd":       { "status": "frozen", "gate": "prd-review", "at": "2026-06-11",
+                   "sha256": "c6cadeeeda674dc9bbada9defd8012ba6e9f598f65c1025791d307a31e54a32d", "signed_off_by": "PR #27" },
+    "design":    { "status": "in-review" },
+    "impl-plan": { "status": "absent" }
+  }
+}

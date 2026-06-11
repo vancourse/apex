@@ -1,6 +1,6 @@
 # PRD — `agent-rails` (machine-decidable pipeline state + freeze enforcement + gate registry)
 
-**Status:** DRAFTED — awaiting user sign-off to freeze · **Slug:** `agent-rails`
+**Status:** FROZEN as of 2026-06-11 (user sign-off = merge of PR #27) · **Slug:** `agent-rails`
 Dogfood: authored then cold-audited (`prd-review.md` beside this file). Source: `docs/research/full-lifecycle-roadmap.md` agent-first audit, findings 1–3.
 
 ---
@@ -97,4 +97,4 @@ Adversarial miss check: every surveyed tool stores either *task* state or *runti
 
 ## Freeze marker
 
-*Not yet frozen.* Awaiting: `prd-review` cold audit (beside this file) + user sign-off. Scope changes before freeze are normal edits; after freeze, explicit amendment.
+**Frozen as of 2026-06-11** (user sign-off = merge of PR #27). Passed `prd-review` (`prd-review.md`); F1–F3 resolved, F4 accepted risk, F5 carried to design. Scope changes now require an explicit amendment. `apex:design-feature` may begin (see `design.md`). Machine record: `state.json` beside this file (the feature dogfoods its own C1).
