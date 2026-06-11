@@ -4,6 +4,26 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The SHIP phase (FLOW.md phase 8) — apex's pipeline no longer ends at "merged".** Three new skills close the post-merge hole the full-lifecycle review found (`docs/research/full-lifecycle-roadmap.md`):
+  - **`release-readiness` skill + `/apex:release` command** — the release event for the USER's project: semver decision **audited against the actual diff** since the last tag, changelog written for users, a readiness gate that blocks the tag (suite green at the exact SHA, every manifest bumped, migration + config notes, **rollback path stated before shipping**), tag → **build-from-tag** → publish mechanics (never delete-recreate a pushed tag), and a post-release bake watch wired to `observability-review`'s signals and `incident-retro` on a bad bake.
+  - **`cicd-review` skill** — pipeline-as-code gate treating a CI workflow as a **privileged program that runs other people's input**: least-privilege `permissions:`, the `pull_request_target` trap, untrusted-interpolation injection, **SHA-pinned third-party actions**, cache poisoning, `test-strategy` CI-tier mapping, timeouts + concurrency, **OIDC federation over stored cloud keys**, lockfile determinism, idempotent re-runs. Auto-nudged by `suggest-skill-on-edit` on workflow-file paths (GH Actions / GitLab / Jenkins / Azure Pipelines / CircleCI).
+  - **`deployment-review` skill** — deploy + IaC gate for any diff that alters HOW software reaches an environment: workload-identity deploy auth (per-cloud OIDC notes for Azure / AWS / GCP), **build-once-promote-the-same-artifact**, health-gated rollout shape justified per change, **rollback decided before deploy** (not-rollback-safe steps flagged with forward-fix notes), and IaC review where **the plan output is the review artifact** (a `replace` on a database routes to `data-migration-review`). Instantiates `architecture-design` Pass 4's deploy model per-change.
+- **`project-bootstrap` skill + `/apex:new` command — the greenfield path.** apex previously assumed an existing repo. One guided pass from empty directory to apex-wired project: intake paragraph → `architecture-design` (decisions stay there) → **official-generator scaffold** (hand-rolled skeletons fossilize) → `docs/` convention + CLAUDE.md gates + least-privilege CI baseline (audited by `cicd-review`) → one **walking-skeleton** PRD queued (no backlog seeding). **ADOPT mode** wires apex into an existing repo and touches nothing else. Counter-pass hunts speculative structure; day-two test closes it.
+- **`ui-design-review` skill — the LOOK-AT-IT gate.** Catches the UI failure mode no gate saw: visually wrong code that passes every test because nobody looked. Design-system conformance (first-affordance applied to UI) · **the five states designed up front** (loading/empty/error/partial/ideal) · WCAG 2.2 AA as Definition-of-Done (keyboard-walk, visible focus, ≥24×24, no drag-only) · the **screenshot loop** (render → screenshot → critique → iterate, ≤3 rounds then human; screenshots attach to the PR) · visual-regression promotion to `test-strategy` Layer 7. Extends `verification-before-completion` to pixels; turns `rules/frontend.md` from checklist into enforced gate.
+- **`council-review` skill — three seats, one round, four cases.** Extends `adversarial-pair` with the seat the pair lacks (operability/simplicity skeptic) for the four highest-stakes freezes only (architecture · auth/payment/tenant/crypto design · irreversible migration · public API). Context-isolated seats; reconciliation by rule (≥2-seat independent agreement = blocker; **explicit disagreement goes to the human verbatim, never averaged**); a **model-routing table** (deep-reasoning class for the adversary seat and the reconciliation; a fast model never holds a seat or decides a freeze). Explicitly NOT the survey-rejected BMAD persona swarm: seats review one artifact, never author; three is a structural cap.
+- **`docs/research/full-lifecycle-roadmap.md`** — the gap analysis behind all of the above (vertical excellence, hard edges at both ends), the wave-2 queue (performance-review, pre-mortem, docs-review, profile-driven model routing, cost-review), and the explicit reject list (per-cloud deploy skills, template libraries, N>3 councils, bootstrap backlog systems).
+
+### Changed
+
+- **`suggest-skill-on-edit` hook — CI/CD path routing.** Workflow-file edits (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, `azure-pipelines.yml`, `.circleci/config.yml`) now nudge `apex:cicd-review` the way API paths nudge `api-surface-review`.
+- **Slash menu 15 → 17** (`/apex:new`, `/apex:release`) — all six count sites updated per MAINTAINING.md §2; `FLOW.md` gains the phase-8 SHIP box, four matrix rows, and footnotes ¹⁴–¹⁶.
+
+---
+
 ## [0.3.8] — 2026-06-07
 
 ### Added

@@ -7,8 +7,9 @@ Display the following cheat sheet to the user verbatim, as a code block. Do NOT 
 ```
 APEX — Which command should I type?
 
-YOU TYPE THESE — the entire /apex: slash menu (15 entry-point commands):
+YOU TYPE THESE — the entire /apex: slash menu (17 entry-point commands):
   /apex:flow              Unsure which gate? This routes you (catch-all)
+  /apex:new                    Create a project from scratch (or adopt apex in an existing one)
   /apex:prd             Start a new feature → brainstorm + draft PRD
   /apex:arch    System architecture (once at project start)
   /apex:recon                  Reconnaissance brief before design (surface existing primitives + invariants)
@@ -23,6 +24,7 @@ YOU TYPE THESE — the entire /apex: slash menu (15 entry-point commands):
   /apex:help                   This cheat sheet
   /apex:setup                  Install recommended companions + a codebase-graph tool (one-time)
   /apex:detect-stack           Profile this project's bug-loop tooling → apex.profile.toml (for investigate-bug)
+  /apex:release                Cut a release: semver vs diff, changelog, readiness gate, tag→build→publish, bake
 
 I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu — you don't type them):
   Reviews:    prd-review · adr-review · design-review · impl-plan-review ·
@@ -32,7 +34,14 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
               cross-artifact-consistency
   Triggers:   threat-model · observability-review · multi-tenancy ·
               data-migration-review · polymorphic-type-modeling ·
-              protocol-first-workflow · verify-ports
+              protocol-first-workflow · verify-ports · ui-design-review (user-facing
+              UI — five states, WCAG 2.2, the screenshot LOOK-AT-IT loop) ·
+              cicd-review (editing .github/workflows / gitlab-ci / Jenkinsfile —
+              least-privilege, SHA-pinned actions, OIDC) · deployment-review
+              (deploy workflows / IaC / env promotion — rollback before deploy)
+  Council:    council-review (by name — three-seat review for the four highest-
+              stakes freezes only: arch · auth/payment design · irreversible
+              migration · public API. One round; disagreement goes to YOU.)
   PR phase:   pr-discipline · pr-review-primer · summarize-changes ·
               responding-to-review
   Post-release: incident-retro (run by name after a RESOLVED incident —
@@ -46,6 +55,7 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
   (Want one by hand? Just ask — e.g. "run security-review on this diff".)
 
 WORKFLOW AT A GLANCE:
+  New proj  → /apex:new                (greenfield scaffold or adopt apex in an existing repo)
   PRD       → /apex:prd         → prd-review (auto)   [→ /apex:spec-view for human HTML review]
   Arch      → /apex:arch  → adr-review (auto, per ADR)  [→ /apex:spec-view]
   Recon     → /apex:recon              (surface existing primitives + invariants before designing)
@@ -60,9 +70,12 @@ WORKFLOW AT A GLANCE:
   Pre-PR    → /apex:review-pr              (heavy, optional — 6 specialists in parallel)
   Open PR   → ("open the PR")              (auto: pr-discipline, primer, summarize)
   Review    → /apex:copilot-review    (auto: responding-to-review)
+  Ship      → /apex:release            (semver vs diff → changelog → readiness gate →
+                                        tag → build-from-tag → publish → bake watch;
+                                        deploys/IaC: deployment-review fires on the diff)
 
 THE SLASH MENU IS INTENTIONALLY SMALL:
-  Only the 15 entry-point commands above appear under /apex: — the ones you drive by hand.
+  Only the 17 entry-point commands above appear under /apex: — the ones you drive by hand.
   Every review gate (prd-review, design-review, security-review, …) is a SKILL that fires
   automatically by phase + file path; it has no slash command, by design. Ask for any of
   them by name to run a manual pass.

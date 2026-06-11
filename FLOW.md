@@ -244,6 +244,27 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
+   │ 8. SHIP  (versioned release events — /apex:release)           │
+   │    release-readiness    semver vs the ACTUAL diff since last  │
+   │                          tag · changelog written for users ·  │
+   │                          readiness gate blocks the tag (suite │
+   │                          green at the SHA, migration + config │
+   │                          notes, ROLLBACK PATH stated first) · │
+   │                          tag → build-from-tag → publish ·     │
+   │                          post-release bake watch → a bad bake │
+   │                          routes to incident-retro             │
+   │    deployment-review    fires on the diff when deploy/IaC/env │
+   │                          promotion changes — identity (OIDC), │
+   │                          build-once-promote-same-artifact,    │
+   │                          health-gated rollout, rollback       │
+   │                          decided BEFORE deploy, plan-as-      │
+   │                          review-artifact for IaC              │
+   │    cicd-review          fires when the pipeline itself is     │
+   │                          edited (the workflow is a privileged │
+   │                          program running other people's input)│
+   └───────────────────────────────┬───────────────────────────────┘
+                                   │
+   ┌───────────────────────────────▼───────────────────────────────┐
    │ POST-TASK: SELF-IMPROVEMENT LOOP                              │
    │    memory-note   capture surprising / non-obvious lessons     │
    │                  → ~/.claude/.../memory/<name>.md             │
@@ -263,7 +284,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 
 ## Skill × Phase matrix
 
-Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=6, COPILOT=6b, ADDRESS=6c, REVIEW=7.
+Phases shorthand: SPEC=0, PLAN=1, IMPL-PLAN=2, IMPL=3, VERIFY=4, PRE-PR=5, OPEN=6, COPILOT=6b, ADDRESS=6c, REVIEW=7, SHIP=8.
 
 ```
                               SPEC  PLAN  IMPL-PLAN  IMPL  VERIFY  PRE-PR  OPEN  COPILOT  ADDRESS  REVIEW
@@ -293,6 +314,10 @@ pr-discipline                                                        ✓      �
 pr-review-primer                                                            ✓
 copilot-review-loop                                                                ✓
 responding-to-review                                                                                ✓⁶
+ui-design-review                     ✓¹⁴               ✓¹⁴
+cicd-review                                            ✓¹⁵                                                ✓¹⁵   (SHIP)
+deployment-review                           ✓¹⁶        ✓¹⁶                                                       (SHIP)
+release-readiness                                                                                                (SHIP=8)
 memory-note                                                                                                          after
 
 superpowers:systematic-debugging   — side path; fires on bug discovery (any phase)
@@ -307,6 +332,8 @@ apex:incident-retro                — side path; post-release, on a RESOLVED in
 apex:autonomous-fix                — side path; the rails an unattended/supervised agent must satisfy before a bug-fix PR (wraps any runner; draft-only). Unattended counterpart to ai-pre-review-checklist.
 apex:detect-stack                  — side path; profiles bug-loop tooling (tracker / observability / reproduce) into a routing-only apex.profile.toml (/apex:detect-stack).
 apex:investigate-bug               — side path; stack-adaptive read-only diagnosis — routes via apex.profile.toml, reproduces, hands to autonomous-fix P3→P4. Parent of a project's bug-bot.
+apex:project-bootstrap             — upstream of EVERYTHING (/apex:new): greenfield scaffold (official generator) or ADOPT mode; routes decisions to architecture-design, the CI baseline to cicd-review, and queues the walking-skeleton PRD
+apex:council-review                — side path; three-seat review council (steelman / security adversary / operability skeptic) for the FOUR highest-stakes freezes only — arch freeze, auth/payment/tenant/crypto design freeze, irreversible migration, public API freeze. One round; ≥2-seat agreement = blocker; explicit disagreement goes to the human verbatim. Extends adversarial-pair; never a persona swarm.
 ```
 
 ¹ if API surface in diff
@@ -322,6 +349,9 @@ apex:investigate-bug               — side path; stack-adaptive read-only diagn
 ¹¹ promotes apex-flow §1a to a written Recon Brief; fires on design-bearing work, esp. "support new X" / "shrink X" framings
 ¹² when the change backfills / rewrites / relocates / re-types EXISTING rows, or migrates a data model over a populated table — the DATA-safety contract behind impl-plan-review Pass 4's migrate phase
 ¹³ when the feature has non-trivial runtime behavior (external calls, async/background work, interesting failure modes) — designs the per-feature observability contract (logging / metrics / tracing / alerting / telemetry-privacy) against the stack + SLO/alerting policy from `architecture-design` Pass 4
+¹⁴ when the feature has a user-facing UI — five states designed up front at PLAN; the screenshot LOOK-AT-IT loop (≤3 rounds) + WCAG 2.2 walk at IMPL; extends `verification-before-completion` to pixels
+¹⁵ when CI/CD pipeline files are created or edited (.github/workflows, .gitlab-ci.yml, Jenkinsfile, azure-pipelines.yml) — auto-nudged by `suggest-skill-on-edit`; the pipeline is a privileged program running other people's input
+¹⁶ when the diff alters HOW software reaches an environment (deploy workflows, IaC, env promotion, runtime infra) — instantiates `architecture-design` Pass 4's deploy model per-change; rollback decided BEFORE deploy
 (architecture-design + adr-review are foundational, not per-feature — see "Architecture phase" section above)
 
 ## Scenario → test traceability: where each part is validated
