@@ -79,4 +79,4 @@ Strictly L1→L5 (each consumes only earlier layers). Expand-only — no destruc
 
 ## Freeze marker
 
-*Not yet frozen.* Awaiting `impl-plan-review` (beside this file) + user sign-off. Building (L1) may not begin until then.
+**Frozen as of 2026-06-11** (user sign-off = merge of PR #29). Passed `impl-plan-review` (`impl-plan-review.md`); P1–P2 resolved, P3 carried to L5. Scope changes now require an explicit amendment. Building (L1) may begin. Machine record: `state.json` beside this file.

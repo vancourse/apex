@@ -6,6 +6,7 @@
                    "sha256": "c6cadeeeda674dc9bbada9defd8012ba6e9f598f65c1025791d307a31e54a32d", "signed_off_by": "PR #27" },
     "design":    { "status": "frozen", "gate": "design-review", "at": "2026-06-11",
                    "sha256": "ff612c7277037198c4320f7fafee741800af0f330877b97807def0044861730c", "signed_off_by": "PR #28" },
-    "impl-plan": { "status": "in-review" }
+    "impl-plan": { "status": "frozen", "gate": "impl-plan-review", "at": "2026-06-11",
+                   "sha256": "c3e14e3534e62c903f76d9c051ecb2151a8f25848315295a67098c883d454ddb", "signed_off_by": "PR #29" }
   }
 }
