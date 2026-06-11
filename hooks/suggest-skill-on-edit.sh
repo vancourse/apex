@@ -6,8 +6,9 @@
 #   (b) apex's own plugin internals                 → read MAINTAINING.md
 #       (detected via .claude-plugin/plugin.json with name "apex" in an
 #        ancestor directory + path under skills/ commands/ hooks/ rules/)
+#   (c) a CI/CD pipeline definition                 → invoke apex:cicd-review
 #
-# Both checks can fire on the same edit (e.g. an api-surface file inside
+# Multiple checks can fire on the same edit (e.g. an api-surface file inside
 # apex's own repo) — messages concatenate into one additionalContext line.
 #
 # Silent for unrelated paths. Always exits 0 — never blocks the edit.
@@ -67,6 +68,20 @@ case "$file" in
         msg="API-surface path detected (${file##*/}). Before editing, invoke apex:api-surface-review (run all 5 passes against the proposed/current shape)."
         ;;
     esac
+    ;;
+esac
+
+# (c) CI/CD pipeline check — fires for any project. A workflow file is a
+# privileged program that runs other people's input; route authoring/edits
+# through the cicd-review gate.
+case "$file" in
+  */.github/workflows/*.yml|*/.github/workflows/*.yaml|*/.gitlab-ci.yml|*/Jenkinsfile|*/azure-pipelines.yml|*/azure-pipelines.yaml|*/.circleci/config.yml)
+    ci_msg="CI/CD pipeline file detected (${file##*/}). Before editing, invoke apex:cicd-review (least-privilege permissions, SHA-pinned actions, injection via untrusted interpolation, OIDC over stored cloud keys, timeouts)."
+    if [ -n "$msg" ]; then
+      msg="${msg} ${ci_msg}"
+    else
+      msg="$ci_msg"
+    fi
     ;;
 esac
 
