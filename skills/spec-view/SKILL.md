@@ -1,13 +1,23 @@
 ---
 name: spec-view
-description: Render an apex SPEC-phase artifact (PRD, ADR set, or design doc) as a disposable, self-contained, offline rich HTML view for HUMAN review at the freeze gate — color-coded freeze-readiness dashboard, inline-SVG diagrams (data-flow, STRIDE grid, MVP-vs-deferred, scenario↔test traceability), collapsible/tabbed sections, severity badges, and syntax-highlighted code. The Markdown stays canonical; this HTML is a throwaway VIEW (gitignored, never re-ingested, never the source of truth). Pairs with apex:prd-review / apex:adr-review / apex:design-review (run the gate, then render the view for a human to approve). Fires when a human — especially a non-engineer reviewer — needs to read and approve a PRD, ADR, or design before freeze. Keywords: spec view, render spec, html review, prd view, adr view, design view, human review, freeze dashboard, review html.
+description: Render an apex SPEC-phase artifact (PRD, ADR set, or design doc) as a disposable, self-contained, offline rich HTML view a human can actually read — in COMPREHENSION mode (default; the artifact's own content: object model, worked example, interface surface, data model, invariants) or FREEZE-REVIEW mode (a readiness dashboard for approve-or-send-back). Inline-SVG diagrams, collapsible sections, severity badges, syntax-highlighted code. The Markdown stays canonical; this HTML is a throwaway VIEW (gitignored, never re-ingested, never the source of truth). Fires when someone says they don't understand a spec, asks to see/explain/render a design, or needs to approve a PRD, ADR, or design before freeze. Keywords: spec view, render spec, explain the design, show me the design, html review, prd view, adr view, design view, understand the design, human review, freeze dashboard, review html.
 ---
 
-# Spec View — disposable rich HTML for human review
+# Spec View — disposable rich HTML for humans
 
-Renders a PRD, ADR set, or design doc into a single self-contained HTML page so a human (often a non-engineer: product on a PRD, a staff eng on ADRs) can read, understand, and approve it at the freeze gate. The view is **rich on purpose** — color-coded freeze-readiness, inline SVG diagrams, collapsible passes, severity badges, highlighted code — because comprehension at the approval moment is the bottleneck this skill exists to relieve.
+Renders a PRD, ADR set, or design doc into a single self-contained HTML page a human can actually read. Rich on purpose — inline SVG diagrams, collapsible sections, severity badges, highlighted code — because comprehension is the bottleneck this skill exists to relieve.
 
-## The disposable contract — read this first
+## The failure mode this skill has to avoid
+
+**The commonest failure of this skill is rendering the REVIEW instead of the ARTIFACT.**
+
+The apex review vocabulary — six passes, freeze-readiness, MVP-vs-deferred, overlap and OSS scans, findings by severity — is *process metadata about* a design. It is not the design. A reader who says "I don't understand this design" needs the object model, a worked example, the interface, and the data model. Handing them a freeze dashboard and a six-pass accordion answers a question they did not ask, and it is the single most likely way to waste this skill's output.
+
+> **Render what the artifact IS, not what the review FOUND.**
+
+Process/status content is legitimate — but in comprehension mode it is an appendix: **last, collapsed, and under ~15% of the page.**
+
+## The disposable contract
 
 This HTML is a **VIEW, never the source of truth.**
 
@@ -18,13 +28,28 @@ This HTML is a **VIEW, never the source of truth.**
 
 If you find yourself wanting to treat the HTML as authoritative, stop — edit the Markdown and regenerate.
 
+## The two modes — pick one before you write anything
+
+| | **Comprehension** (default) | **Freeze review** |
+|---|---|---|
+| The ask sounds like | "I don't understand the design", "explain X", "show me the design", "render this so I can read it", or no qualifier at all | "is this ready to freeze?", "review this before I approve", invoked straight after `apex:*-review` |
+| Leads with | what the thing IS — object model, worked example | the readiness dashboard |
+| Ordered by | the artifact's own logic | the review's pass conditions |
+| Process/status content | an appendix: last, collapsed, ≤15% of the page | the point of the page |
+| Diagrams show | how the system works | where the risk is |
+
+**When the ask is ambiguous, choose comprehension.** It is the more useful failure: a reader who wanted the gate can still find the appendix, whereas a reader who wanted the design cannot reconstruct it from a dashboard.
+
+If a mode was chosen and the reader pushes back ("too much commentary", "this isn't the design"), you are in the wrong mode — switch, don't patch.
+
 ## When to invoke
 
-- Right after `apex:prd-review` / `apex:adr-review` / `apex:design-review` runs its passes and a **human needs to approve before freeze**.
-- When a non-engineer stakeholder must read a spec they wouldn't read as raw Markdown.
-- On demand: "render the design for review", "give me an HTML view of the PRD".
+- Someone says they **don't understand** a spec, or asks you to explain/show/walk through a design → comprehension mode.
+- A non-engineer stakeholder must read a spec they wouldn't read as raw Markdown → comprehension mode.
+- Right after `apex:prd-review` / `apex:adr-review` / `apex:design-review` runs its passes and a **human needs to approve before freeze** → freeze-review mode.
+- On demand: "render the design", "give me an HTML view of the PRD".
 
-Skip it when the only reviewer is an engineer reading in-editor — rendered Markdown is enough, and this costs tokens. It's a nice-to-have for the human-review moment, not a pipeline step.
+Skip it when the only reader is an engineer reading in-editor — rendered Markdown is enough, and this costs tokens.
 
 ## Input & output
 
@@ -131,6 +156,18 @@ svg{max-width:100%;height:auto}
 .knob input{flex:1} .knob output{font-weight:700;min-width:3ch;text-align:right}
 .copybtn{font-size:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);
   color:var(--ink);padding:4px 10px;cursor:pointer}
+/* comprehension mode: section nav + numbered walkthrough steps */
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 4px}
+.toc a{font-size:13px;font-weight:600;text-decoration:none;color:var(--ink);border:1px solid var(--line);
+  background:var(--panel);border-radius:999px;padding:6px 13px}
+.toc a:hover{border-color:var(--accent);color:var(--accent)}
+.step{display:flex;gap:14px;margin:16px 0;align-items:flex-start}
+.step .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.step .c{flex:1;min-width:0}
+.callout{border-left:4px solid var(--accent);padding:12px 16px;background:var(--panel);
+  border-radius:0 10px 10px 0;margin:14px 0;border:1px solid var(--line);border-left-width:4px}
+.callout.risk{border-left-color:var(--risk)} .callout.ok{border-left-color:var(--ok)}
 @media print{details{break-inside:avoid} details:not([open])>.body{display:block}
   details>summary::before{content:""} body{background:#fff}}
 </style>
@@ -144,6 +181,8 @@ svg{max-width:100%;height:auto}
   <h1>{TITLE}</h1>
   <div class="meta">{SUBTITLE_OR_STATUS}</div>
 
+  <!-- FREEZE-REVIEW MODE ONLY — in comprehension mode DELETE these two lines and
+       put a nav of section links here instead (.toc in the stylesheet). -->
   <h2>Freeze readiness</h2>
   <ul class="dash"><!-- DASHBOARD --></ul>
 
@@ -171,9 +210,11 @@ document.querySelectorAll('.copybtn').forEach(b=>b.addEventListener('click',()=>
 </html>
 ```
 
-## Freeze-readiness dashboard
+## Freeze-readiness dashboard — **freeze-review mode only**
 
-The dashboard is the highest-value element: it turns the view into the **freeze decision aid.** Render one `<li>` per pass condition of the matching review skill. Evaluate each against the artifact and pick a status dot + badge:
+Do not render this in comprehension mode. It is the highest-value element *of a freeze decision aid*, and dead weight at the top of a page whose reader is trying to learn how the system works. In comprehension mode the same facts appear as a short collapsed appendix at the end.
+
+In freeze-review mode, render one `<li>` per pass condition of the matching review skill. Evaluate each against the artifact and pick a status dot + badge:
 
 - `ok` (green) — condition met.
 - `warn` (amber) — partially met / accepted residual risk; note why.
@@ -197,7 +238,7 @@ End the dashboard with a one-line verdict badge: all-green → `<span class="bad
 
 ## Rich-content toolkit (what to render where)
 
-Use these to make the artifact *comprehensible at a glance* — not decoration. Every visual must carry review signal.
+Use these to make the artifact *comprehensible at a glance* — not decoration. Every visual must carry signal: **how the system works** in comprehension mode, **where the risk is** in freeze-review mode.
 
 - **Inline SVG — data-flow** (design integration pass): boxes for services/stores, arrows for calls; color new components with `--accent`, existing ones neutral, broken invariants with `--risk`. Define one arrowhead `<marker>` and reuse.
 - **Inline SVG — STRIDE grid** (design Pass 6): a 2×3 or 1×6 grid, one cell per category, cell tinted by residual risk (ok/warn/risk), mitigation text inside.
@@ -208,11 +249,41 @@ Use these to make the artifact *comprehensible at a glance* — not decoration. 
 - **Syntax-highlighted code**: any schema/API/code snippet in the source → themed `<pre>` with `tok-*` spans you tokenize by hand (keywords, strings, numbers, comments, function names, punctuation).
 - **Sliders / knobs** (`.knob`, optional): only for genuinely tunable values the reviewer might want to try — rollout cohort %, a threshold, a timeout. Wire the `output` to echo the value; add a `.copybtn` with `data-copy` so the reviewer can copy the chosen value back to you. Don't force a slider where there's no tunable.
 
-## Type-specific body layout
+## Body layout — comprehension mode (the default)
 
-- **PRD** → problem/goal panel · acceptance-criteria checklist (badges) · numbered scenario cards (each: action → response → edge case) · scenario↔test traceability table · success-metric callout panel · in/out-of-scope two-column grid · open-questions list · sequencing.
-- **ADR set** → tabbed (one tab per ADR). Each: status badge · context · decision · alternatives **table** (option · pros · cons · why-not) · consequences with security + reversibility badges. A leading summary panel lists all ADRs with status dots.
-- **Design** → freeze dashboard (above) · 6-pass accordion (`<details>`, open the ones with `risk`) · data-flow SVG in the integration pass · MVP-vs-deferred SVG · failure-mode table (mode → trigger → **user-visible behavior** → status) · STRIDE grid SVG · overlap + OSS scan results panel.
+Order by the artifact's own logic, never by the review's pass structure. A design doc's six apex passes are how it was *authored*; they are not how it is *understood*.
+
+**Design** — the layout below is the spine. Skip a section the artifact genuinely lacks; never invent one to fill a slot.
+
+1. **What it is** — two or three sentences, then a section nav (`.toc`).
+2. **Object model** — the entities, their relationships and cardinality, as an inline-SVG diagram plus a one-line "reading the diagram" caption. *If you render only one thing, render this.* Most design docs never draw it, so this is where the view adds the most.
+3. **A worked example, end to end** — the highest-value element in this mode. Walk one real case through the whole system as numbered `.step` blocks with **real payloads at each step**, not placeholders. Abstract mechanism becomes concrete here or nowhere.
+4. **The domain vocabulary** — every field/knob of the central type, in a table: what it controls, what happens if it is wrong.
+5. **Interface surface** — actual signatures, verbs, error taxonomy. What a caller types.
+6. **Data model / storage** — tables with key columns and, crucially, *the constraints that carry meaning* (which uniqueness rule enforces which rule of the domain).
+7. **Invariants and what enforces each** — pair every guarantee with its mechanism. A guarantee with no named mechanism is the thing a reader most needs flagged.
+8. **Failure modes** — mode → trigger → **user-visible behavior**.
+9. **Threat model** — mechanism and residual per category.
+10. **Appendix** (`<details>`, collapsed, last): status, open questions, deferrals, review history. All of it. This is the ≤15%.
+
+**PRD** → problem/goal panel · what the user can do (scenario cards: action → response → edge case) · acceptance criteria as a checklist · in/out-of-scope grid · success metric · appendix: open questions, sequencing, review status.
+
+**ADR set** → tabbed, one tab per ADR: context · decision · alternatives **table** (option · pros · cons · why-not) · consequences with security + reversibility badges. Leading summary panel lists all ADRs with status dots.
+
+## Body layout — freeze-review mode
+
+- **PRD** → dashboard · acceptance-criteria checklist · scenario↔test traceability table · success-metric callout · in/out-of-scope grid · open questions · sequencing.
+- **ADR set** → dashboard · tabbed per ADR as above, each with its pass conditions scored.
+- **Design** → dashboard · 6-pass accordion (`<details>`, open the ones with `risk`) · data-flow SVG in the integration pass · MVP-vs-deferred SVG · failure-mode table · STRIDE grid SVG · overlap + OSS scan panel.
+
+## Before you emit — self-check
+
+1. **Mode named?** If the ask was ambiguous, you chose comprehension.
+2. **Comprehension mode: does an object model and a worked example with real values exist?** If not, the page is not yet a design view.
+3. **Comprehension mode: measure the process/status content** — freeze readiness, findings, blockers, review log, cost-of-change, MVP-vs-deferred, what-changed-since-the-last-revision. Over ~15% of the page, or appearing before the artifact's own content? Cut and move to the appendix.
+4. **Would a reader who has never seen this system be able to describe how it works after reading?** That is the only test comprehension mode has to pass.
+5. **Offline?** No CDN, no web fonts, no network. Opens by double-click.
+6. **Diagrams sane?** No text or box outside its `viewBox`; every `url(#id)` marker is defined. Verify by parsing the file, not by eye — a `file://` page often cannot be scripted or screenshotted from a preview pane.
 
 ## Quality bar
 
