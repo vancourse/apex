@@ -49,6 +49,11 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
               autonomous-fix (run by name, or wire its reference template into
               your CI — the rails an unattended bug-fix agent must satisfy:
               fenced input · fail-closed cost · reproduce-first · draft-only)
+  Enforcement: install-gates (run by name, once per repo — apex's hooks are
+              advisory and bind only Claude Code sessions; a plugin cannot ship
+              CI. This scaffolds the blocking half in: a required pull_request
+              check whose demands come from the diff, plus the local pre-PR
+              mirror of the same commands.)
   Bug loop:   investigate-bug (run by name — stack-adaptive read-only diagnosis;
               routes via apex.profile.toml + reproduces, then hands to
               autonomous-fix's write gate. Run /apex:detect-stack first.)
