@@ -11,6 +11,8 @@ apex's SDLC artifacts have a standard home so each phase knows where to read its
 
 The author steps (`/apex:prd`, `/apex:design`, `/apex:impl-plan`) write to these paths by default and ask for the slug only when the feature name is ambiguous; `spec-view` reads from them.
 
+**The blank forms live at [`templates/`](templates/)** — one per artifact (`recon`, `prd`, `design`, `impl-plan`, `adr`). The `artifact_templates.py` hook injects the matching form the moment a session creates one of these files, resolving a repo's own `docs/templates/<name>.md` first and apex's shipped form otherwise. A repo that has decided its own shape keeps it; every other repo gets a comparable artifact for free.
+
 ## Architecture phase (one-time, or amendment-triggered)
 
 This phase runs ONCE at project start and again whenever a feature crosses the existing architecture boundary (triggered by `apex:design-feature` Pass 4 finding incompatible integration).

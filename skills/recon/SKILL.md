@@ -65,7 +65,10 @@ Same checks as apex-flow §1a — recon just runs them against an **explicit fac
 
 ## Output — the Recon Brief
 
-A short, structured artifact (not prose) — the hand-off to design:
+A short, structured artifact (not prose) — the hand-off to design. The blank form
+is [`templates/recon.md`](../../templates/recon.md); start from it rather than
+inventing the shape, so every brief is comparable to the last. Written to
+`docs/<feature-slug>/recon.md`.
 
 ```
 RECON BRIEF — <feature / change>
