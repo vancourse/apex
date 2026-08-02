@@ -141,6 +141,11 @@ Write the design to **`docs/<feature-slug>/design.md`** — the same per-feature
 folder as its `prd.md` (apex's standard layout; the `impl-plan` step will add
 `impl-plan.md` beside it). Reuse the slug from the feature's PRD.
 
+Start from the blank form at [`templates/design.md`](../../templates/design.md).
+Its sections are the ones `apex:design-review` audits — reuse verdict, failure
+modes, attack surface, deferred, open questions discharged — so a design written
+into the form arrives at review with nothing to reconstruct.
+
 ## Pass/fail summary
 
 The design passes if:

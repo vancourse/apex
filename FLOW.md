@@ -11,6 +11,8 @@ apex's SDLC artifacts have a standard home so each phase knows where to read its
 
 The author steps (`/apex:prd`, `/apex:design`, `/apex:impl-plan`) write to these paths by default and ask for the slug only when the feature name is ambiguous; `spec-view` reads from them.
 
+**The blank forms live at [`templates/`](templates/)** — one per artifact (`recon`, `prd`, `design`, `impl-plan`, `adr`). The `artifact_templates.py` hook injects the matching form the moment a session creates one of these files, resolving a repo's own `docs/templates/<name>.md` first and apex's shipped form otherwise. A repo that has decided its own shape keeps it; every other repo gets a comparable artifact for free.
+
 ## Architecture phase (one-time, or amendment-triggered)
 
 This phase runs ONCE at project start and again whenever a feature crosses the existing architecture boundary (triggered by `apex:design-feature` Pass 4 finding incompatible integration).
@@ -293,6 +295,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
 **AUTONOMOUS BUG-FIX.** When a bug-fix is driven by an *unattended/supervised* agent (label/webhook/cron, no human until merge), the enforcement wrapper is **`apex:autonomous-fix`** — the same reproduce-first discipline it *requires from* (and names, AC4) `superpowers:systematic-debugging`, with the human-confirm gate removed and every other rail kept: draft-PR-only (human merges, permanent), sensitive-path refuse+escalate, fail-closed cost cap, nonce-fenced untrusted input (incl. the issue title). It ships the *rails* — a reference GitHub-Action template + a conformance-lint — not a runner; on a recurrence it hands off to `apex:incident-retro` (AC10). It is the unattended counterpart to `apex:ai-pre-review-checklist` and the generic parent of a project's bug-bot (e.g. BookBridge's penny/F-049 pipeline).
 
 **STACK-ADAPTIVE BUG LOOP.** The *diagnosis* half of that loop is made tooling-agnostic by two more skills. **`apex:detect-stack`** (`/apex:detect-stack`) profiles a project's bug-loop tooling (issue tracker / observability / reproduce) into a routing-only, secret-free `apex.profile.toml`. **`apex:investigate-bug`** (by name) reads that profile and routes the read-only diagnosis through whatever the project has — MCP-first interactive, CLI unattended, ask-user hard fallback — reproduces the bug, then hands `{red test, PLAN.json, fenced bundle}` into `apex:autonomous-fix`'s P3→P4 seam. apex ships *zero* integrations: it discovers what's installed and routes. The three layers compose — `detect-stack` (config) → `investigate-bug` (diagnosis) → `autonomous-fix` (write gate) — and a project's own bug-bot becomes a thin consumer of `investigate-bug`.
+
+**MAKING GATES BIND.** Everything above is advisory: apex's hooks fire inside Claude Code and nowhere else, and a plugin cannot ship CI. **`apex:install-gates`** carries the blocking half into a repo — `pr_body_check.py` as a required `pull_request` check (its requirements derived from the diff, so a typo fix is not asked for a rollout plan), and `pre_pr_check.py` as the local mirror of those same CI commands, so "pre-PR passed" and "CI passed" cannot drift into two definitions of green. Run it once per repo, after `apex:project-bootstrap` or the first `apex:detect-stack` pass. The honest ceiling is stated in the skill: only the CI job binds a teammate who never opens Claude Code.
 
 ## Skill × Phase matrix
 

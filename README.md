@@ -8,6 +8,18 @@ An opinionated Claude Code plugin that bundles a personal SDLC framework — pla
 
 **Contributing to apex itself?** See **[MAINTAINING.md](MAINTAINING.md)** for maintainer-only discipline (pair-pattern verification, slash-menu-count grep, etc.). The PreToolUse hook surfaces it automatically when you edit `skills/`, `commands/`, `hooks/`, or `rules/` inside the apex plugin repo.
 
+## What enforces what — read this before trusting a gate
+
+A Claude Code plugin can ship skills, hooks, commands, rules and templates. **It cannot ship CI.** So apex's enforcement splits into three tiers, and only the third binds anyone who is not running apex:
+
+| Layer | Binds | apex ships it |
+|---|---|---|
+| **Hooks** | Claude Code sessions only — advisory, they inject context and never deny | ✅ natively |
+| **Local pre-PR script** | Only when the developer runs it | ⚠️ as a file `apex:install-gates` installs |
+| **CI job** | Everyone, and it blocks the merge | ❌ only as scaffolding + an installer skill |
+
+Installing apex does **not** give you blocking gates. It gives you advice at the moment you are making the decision, plus the scaffolding to make a subset of it binding — run `apex:install-gates` for that. Assuming otherwise means finding out at the worst possible moment.
+
 ## What's in the box
 
 ### Skills
@@ -49,6 +61,7 @@ For *when* each skill fires, see [FLOW.md](FLOW.md). This table is what each ski
 | `data-migration-review` | **5-pass DESIGN-PHASE data-safety gate** for MOVING / TRANSFORMING data that already exists (backfills, bulk updates, re-types, relocations, data-model migrations over populated tables) — expand→migrate→contract *at the data level* / backfill design (batched + idempotent + resumable + throttled + observable) / consistency model + reconciliation during the window / mid-flight reversibility / blast radius + isolation + kill-switch. Plus adversarial counter-pass. Audits *will this backfill corrupt, lose, or leak data, and can we stop it halfway* — distinct from `impl-plan-review` Pass 4 (rollout sequencing) and `postgres-review` (schema DDL). Outputs a "Data Migration Plan" section the impl-plan carries. |
 | `summarize-changes` | Branch / working-tree summary with risks and likely verification commands |
 | `memory-note` | Capture a high-signal lesson or durable project fact to memory/domain-knowledge |
+| `install-gates` | **The blocking half of apex's PR discipline** — a plugin ships skills and hooks, it cannot ship CI, so the layer that binds everyone has to be scaffolded into the target repo. Installs two gates: `pr_body_check.py`, which **derives a PR's required sections from its own diff** (any → What/Why; changes shipped source → + Test plan + Wiring; *adds* shipped source → + Reuse verdict; touches a custody path → + Risk note), and `pre_pr_check.py`, which runs CI's own commands locally plus two pure-git preflights CI cannot replicate (a squash-merge commit found in `origin/<default>..HEAD` means the branch was cut from a rewritten base; a `docs(...)`-only branch carrying source files picked up something it didn't mean to). Wires the `pull_request` job, then makes it required. States plainly which tier each piece lands in — advisory vs blocking. |
 | `incident-retro` | **Post-release learning loop** — take a *resolved* production incident (or staging near-miss), run a blameless retro, map it to the apex gate that **should have caught it** (reads `FLOW.md`), write the durable lesson to `domain-knowledge` via `memory-note`, and propose a one-line preventative gate amendment. The *learning* half of a postmortem only — **not** incident response (no paging / sev / timelines). User-invoked, zero ambient cost. |
 | `autonomous-fix` | **Unattended/supervised bug-fix gate** — the discipline a label/webhook/cron-triggered coding agent MUST satisfy before raising a bug-fix PR: five rail phases via a two-invocation runner split (budget+risk-route → read-only investigate → reproduce-first → sensitive-path refuse+escalate → constrained write fix → DRAFT PR), in two modes differing by **only** the human-confirm step. Ships ONE commented GH-Actions reference template (wraps any runner) + a static conformance-lint + a "port these seams" list. Nonce-fenced untrusted input incl. title · default-deny tool allowlist with staged write-unlock · turn/timeout/concurrency/**fail-closed cost** budgets · secret/customer-data leak hard-fail · **draft-PR only (human merges, permanent)**. Composes `systematic-debugging` + `security-review`/`threat-model` + `pr-discipline` + `incident-retro`. The generic parent of a project's bug-bot; ships the rails, NOT a runner. |
 | `detect-stack` | **Bug-loop tooling profiler** — probes deps / CI configs / connected MCP servers + the git remote and writes a routing-only, **secret-free** `apex.profile.toml` that `investigate-bug` reads to route each axis (tracker / observability / reproduce) through whatever the project actually has. Auto-fills inferable fields, **prompts (never guesses)** for the rest, records conflicting signals instead of silently picking. A value-shape lint makes "no secrets in the profile" decidable. Distinct from `setup` (installs apex's *own* companions) and `recon` (code-graph facts for a design). |
@@ -93,6 +106,10 @@ Everything else listed in the Skills table above is a **skill that fires automat
 
 | Hook | Event | Behavior |
 |---|---|---|
+| `apex-primer.sh` | SessionStart (startup/clear/compact) | Injects the apex methodology primer so a fresh session knows the phase gates before its first edit |
+| `session_collisions.py` | SessionStart | Names the **other Claude Code sessions active in this repo right now** — branch, worktree and title — and flags a COLLISION when one shares your branch, your worktree, or the work item your branch names. The one fact a session cannot learn for itself; scans every project directory sharing the main checkout's prefix, so sessions in *other* worktrees are found. Advisory, never blocks |
+| `artifact_templates.py` | PreToolUse (Write) | Injects the matching blank form from `templates/` when a session creates a `prd.md` / `design.md` / `impl-plan.md` / `recon.md` / ADR. Resolves a repo's own `docs/templates/` first, apex's shipped form otherwise |
+| `artifact_templates.py` | PreToolUse (Bash) | Checks `gh pr create` / `gh issue create` bodies against the repo's `.github/` templates and **names the sections the body is missing**. GitHub applies those templates only in its web UI — `--body-file` skips them, which is how an agent files nearly every PR |
 | `suggest-skill-on-prompt.sh` | UserPromptSubmit | Injects review-skill reminders when the prompt mentions Python / TS / API surface keywords |
 | `suggest-skill-on-edit.sh` | PreToolUse (Edit/Write/MultiEdit) | Reminds you to invoke `api-surface-review` when editing files under `payloads/`, `routes/`, `services/`, `handlers/`, `endpoints/`, `api/` |
 | `guard-security-paths.sh` | PreToolUse (Edit/Write/MultiEdit) | Injects security-review reminder on edits to `auth/`, `credentials/`, `oauth/`, `oidc/`, `sso/`, `secrets/`, `jwt/`, `saml/`, `encryption/`, `signing/`, `permissions/`, `authorization/` paths |
@@ -110,8 +127,25 @@ Reference files at `rules/`, loaded on-demand by skills:
 - `rules/responding-to-review.md` — **canonical** PR-review-comment protocol (blocker artifact rule, reply structure, mechanical flagged-line verification, pre-re-review gate).
 - `rules/frontend.md` — design-system reuse, focus states, empty/loading/error states, no hardcoded tokens
 - `rules/review-risk.md` — pre-merge checklist for auth/data/concurrency/billing/external-API touch points
+- `rules/landing-a-component.md` — **canonical** three rules for getting a component from sliced to merged (a slice must touch its target package; a design may be at most one revision ahead of code; branch name matches worktree name, one slice one branch)
 
 These are not auto-loaded. Skills reference them by anchor; your own CLAUDE.md can reference them when relevant.
+
+### Templates
+
+Blank forms for the artifacts apex's gates review, at [`templates/`](templates/):
+
+| Template | Written to | Reviewed by |
+|---|---|---|
+| `recon.md` | `docs/<feature-slug>/recon.md` | — (feeds design) |
+| `prd.md` | `docs/<feature-slug>/prd.md` | `apex:prd-review` |
+| `design.md` | `docs/<feature-slug>/design.md` | `apex:design-review` |
+| `impl-plan.md` | `docs/<feature-slug>/impl-plan.md` | `apex:impl-plan-review` |
+| `adr.md` | `docs/adr/00NN-*.md` | `apex:adr-review` |
+
+`templates/github/` holds a PR template and two issue forms, which `apex:install-gates` copies into a target repo's `.github/`.
+
+apex has always told you to write a PRD, a design and an impl-plan; these are the shape, stated once, so review stops re-deriving what "done" means per feature. The `artifact_templates.py` hook injects the matching form when you create one of these files — see [`templates/README.md`](templates/README.md) for overriding a form or adding an artifact type.
 
 ### Recommended companions (install separately)
 

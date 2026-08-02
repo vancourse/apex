@@ -18,6 +18,10 @@ Pairs with `apex:architecture-design` (the producer) and `apex:design-feature` P
 
 ## ADR canonical structure
 
+The blank form is [`templates/adr.md`](../../templates/adr.md) — an author starts
+from that file; the skeleton below is the same structure, restated here as what
+this review audits against.
+
 ```markdown
 # ADR-NNNN: <Decision title>
 

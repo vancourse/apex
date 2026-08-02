@@ -207,7 +207,7 @@ docs/adr/
 └── README.md      ← index + freeze status
 ```
 
-Each ADR follows a canonical structure (`apex:adr-review` audits this). New ADRs from amendments use the next available number; superseded ADRs get a "Superseded by ADR-NNNN" link, not deleted.
+Each ADR follows a canonical structure (`apex:adr-review` audits this) — write each one from the blank form at [`templates/adr.md`](../../templates/adr.md). New ADRs from amendments use the next available number; superseded ADRs get a "Superseded by ADR-NNNN" link, not deleted.
 
 ## Hand-off to feature work
 

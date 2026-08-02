@@ -1,0 +1,44 @@
+# apex's Python hooks — the suite that keeps them honest.
+#
+# A hook is uniquely easy to break silently: it has no importers, it produces no
+# diff, and these three are fail-open by construction, so a dead hook emits
+# nothing and exits 0 — indistinguishable from a healthy one with nothing to say.
+# A dropped `import json` did exactly that once, and only a suite like this caught
+# it. `session_collisions.py` has the sharper version of the same edge: silence is
+# its *normal* output, so "it ran and said nothing" can never be read as health.
+#
+# Paths-scoped, like conformance-lint: this fires only when the hooks, their
+# tests, their registration, or the templates they inject actually change.
+name: hook-tests
+
+on:
+  push:
+    paths:
+      - "hooks/**"
+      - "templates/**"
+      - ".github/workflows/hook-tests.yml"
+  pull_request:
+    paths:
+      - "hooks/**"
+      - "templates/**"
+      - ".github/workflows/hook-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  python-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install pytest
+        run: pip install pytest
+      - name: hooks must compile
+        run: python -m py_compile hooks/_hooklib.py hooks/artifact_templates.py hooks/session_collisions.py
+      - name: hooks.json must be valid JSON
+        run: python -c "import json; json.load(open('hooks/hooks.json'))"
+      - name: hook suite
+        run: python -m pytest hooks/tests/ -q

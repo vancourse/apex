@@ -1,0 +1,73 @@
+name: Defect
+description: Something built is behaving wrongly — in prod, in CI, or locally.
+title: "[defect] "
+labels: ["defect"]
+body:
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where observed
+      options:
+        - Production (Azure)
+        - CI
+        - Local
+        - Staging / preview
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Data loss or credential exposure
+        - Broken for users, no workaround
+        - Broken for users, workaround exists
+        - Degraded or cosmetic
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: Observed behaviour, with the error text or log line if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        Steps, or the commit and command. If it is not reproducible, say so and give
+        the frequency — intermittent is a finding, not a blocker to filing.
+    validations:
+      required: true
+
+  - type: input
+    id: blast_radius
+    attributes:
+      label: Blast radius
+      description: Who or what is affected while this is open.
+      placeholder: every tenant on the <x> path; ~2/day
+    validations:
+      required: true
+
+  - type: textarea
+    id: missing_gate
+    attributes:
+      label: Which gate should have caught this?
+      description: >
+        The repo runs arch gates, a contract gate, an image gate, a type gate and a
+        narrowed suite. Name the one that should have failed — or say "none exists",
+        which makes this defect worth a follow-up gate issue.
+    validations:
+      required: true

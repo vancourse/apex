@@ -23,6 +23,8 @@ Verify the install in a **new** Claude Code session (the slash-command list is l
 
 You should see the apex cheat sheet — `[USER]` commands you type at phase boundaries, `[AUTO]` skills the model fires automatically, and the SDLC workflow at a glance. If the command is missing, the plugin didn't activate — see *Updating* below.
 
+**What you just installed is advisory.** apex's hooks bind Claude Code sessions only — they inject context and never deny. A plugin cannot ship CI, so nothing you have now blocks a merge or binds a teammate who is not running apex. Run **`apex:install-gates`** to scaffold the blocking half into a repo. See the enforcement-split table at the top of [README.md](README.md) — assuming you already have blocking gates is a thing you find out at the worst possible moment.
+
 ---
 
 ## 2. The 6-command workflow

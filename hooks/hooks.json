@@ -9,6 +9,14 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/apex-primer.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_collisions.py"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -44,11 +52,24 @@
         ]
       },
       {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh artifact_templates.py"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh artifact_templates.py"
           }
         ]
       }
