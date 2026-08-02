@@ -108,6 +108,31 @@ A frozen plan tells the implementation phase what to build, in what order, with 
 
 **Circuit breaker (cancel-by-default).** If implementation runs materially past the layered stack this plan projected (Pass 1) — meaningfully more PRs or scope — *without shipping*, the default is to **STOP and re-bet**: return to the design / PRD gate and re-scope, rather than silently extending. Extension is the exception that requires explicit justification, not the default. This is the project-level analog of `copilot-review-loop`'s 5-round cap — it fights sunk-cost bias the same way (a plan that has doubled in size is usually the wrong shape, not merely behind).
 
+### Bound the loop — this review runs at most TWICE for one plan
+
+This skill can send a plan back to `superpowers:writing-plans`, so it inherits the
+same unbounded shape as `apex:design-review` and `apex:prd-review`: revise → review
+→ revise, with no fixed point, because a finding against a *plan* is prose and no
+test can settle it. **The second review is the cap.**
+
+- **Round 2's surviving findings do not trigger a round 3.** Freeze the plan with
+  them recorded as known-open risks against the layered stack, and let the first
+  layer's PR settle them — code falsifies a sequencing or LOC-budget claim in an
+  afternoon that reviewers can argue about for a week.
+- **A plan may be at most one revision ahead of code.** A plan on rev 3 with no
+  PR in the stack merged is itself the finding: stop reviewing and ship Layer 1
+  (foundation), which is the cheapest way to test the contested sequencing.
+- **The escalation exception is a stop, not a round 3.** An unresolved
+  **irreversible-migration or destructive-schema step** at round 2 (Pass 4 /
+  Pass 5 — a single-PR `DROP`/rename, or a backfill with no revert path), or an
+  unresolved trust-boundary break, means escalate to the owner and hold. Those
+  are the findings code *cannot* cheaply falsify, because being wrong costs a
+  restore-from-backup.
+
+As with the 5-round cap, this is about **loop termination, not about lowering the
+quality bar** — surviving findings get recorded, not dropped. See `apex:apex-flow`
+§12 for the cross-skill rule.
+
 ## Adversarial pair pattern (heavier — for non-trivial plans)
 
 The inline adversarial counter-passes are the cheap version. For non-trivial plans (≥3 PRs in the stack, or any plan that touches migrations + production data), dispatch the review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
@@ -124,8 +149,11 @@ The plan passes if:
 - All 5 passes meet their pass conditions
 - Adversarial counter-passes addressed
 - Plan is explicitly frozen (or annotated "exploratory, not yet frozen — do not implement against this")
+- **This is review round 1 or 2 for this plan** — round 2 is the cap (see §"Bound the loop"). Note the round number in the review output
 
 Fail any → revise the plan before any code is written. Mid-implementation plan changes compound expensively; a 1-day plan-review delay saves multi-day implementation rework.
+
+**Unless this was round 2** — then the cap fires instead of a third revision: freeze the plan, record the surviving findings as known-open risks, and ship Layer 1 to settle them. Escalation exception: an unresolved irreversible-migration step or trust-boundary break is a stop-and-escalate, not another round.
 
 ## Hand-off to implementation
 

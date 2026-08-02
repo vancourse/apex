@@ -33,6 +33,10 @@ This phase runs ONCE at project start and again whenever a feature crosses the e
    │      5-element audit per ADR: context, decision, alternatives,│
    │      consequences (incl. security + reversibility), status    │
    │      Fires for every ADR (initial set + amendments).          │
+   │      Each ADR bounces at most twice; the SET freezes when     │
+   │      every ADR has been reviewed, not when every ADR is       │
+   │      unobjectionable. Tenancy / trust-boundary / threat-      │
+   │      model findings escalate to the owner instead.            │
    └───────────────────────────────────────────────────────────────┘
                                    │
                                    ▼
@@ -70,7 +74,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                                metric, sequencing, freeze;    │
    │                                + product-overlap + OSS scan   │
    │                                + adversarial counter-pass.    │
-   │                                FREEZE the spec at Pass 7.)    │
+   │                                FREEZE the spec at Pass 7;     │
+   │                                send-back capped at 2 rounds.) │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -120,6 +125,10 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                              cognitive step from authoring;   │
    │                            then FREEZE the design before      │
    │                              IMPL-PLAN may begin              │
+   │                              (2-round cap: round 2 freezes    │
+   │                                with survivors recorded;       │
+   │                                trust-boundary break = stop    │
+   │                                + escalate, not a round 3)     │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -140,6 +149,9 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                              phase (backfill corrupt /        │
    │                              lose / leak; stop halfway)       │
    │                            then FREEZE the plan               │
+   │                              (2-round cap; irreversible-      │
+   │                                migration finding = stop       │
+   │                                + escalate, not a round 3)     │
    └───────────────────────────────┬───────────────────────────────┘
                                    │
    ┌───────────────────────────────▼───────────────────────────────┐
@@ -385,8 +397,8 @@ Validation is **distributed across the freeze gates, one link per phase** — ea
 3. **Prove it works** — phase 4 (VERIFY) is non-negotiable. Verification is what separates "the code exists" from "this is done."
 4. **Ask before push** — every transition from local → remote requires explicit user confirmation. Default to `--draft` on PR creation.
 5. **Self-improvement loop** — every non-obvious lesson goes into memory or domain-knowledge so the next session starts smarter.
-6. **Loop termination** — the COPILOT review (phase 6b) and human-review address cycle (phase 6c) both terminate at NITs-only OR 5 rounds. Five rounds with non-NIT issues outstanding = the PR shape is wrong; return to an upstream gate (IMPL-PLAN, design, or PRD).
-7. **Freeze gates** — the architecture freezes after `apex:architecture-design` (7 ADRs); the PRD freezes after `apex:prd-review` Pass 7; the design freezes after `apex:design-review`; the implementation plan freezes after `apex:impl-plan-review`. All four freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation." Per-feature work runs against frozen upstream artifacts.
+6. **Loop termination** — every review loop terminates, at PR time and at the freeze gates alike. The COPILOT review (phase 6b) and human-review address cycle (phase 6c) terminate at NITs-only OR 5 rounds; five rounds with non-NIT issues outstanding = the PR shape is wrong, return to an upstream gate (IMPL-PLAN, design, or PRD). The **artifact reviews** upstream (PRD, design, impl-plan, ADR) terminate at **2 rounds** — findings against prose are unfalsifiable, so an uncapped review has no fixed point. Round 2's survivors are recorded as known-open and settled by the next phase, which can falsify what a reviewer can only assert; an unresolved trust-boundary / tenancy / irreversible-data finding escalates to the owner instead. See `apex:apex-flow` §12.
+7. **Freeze gates** — the architecture freezes after `apex:architecture-design` (7 ADRs); the PRD freezes after `apex:prd-review` Pass 7; the design freezes after `apex:design-review`; the implementation plan freezes after `apex:impl-plan-review`. All four freezes mean "scope changes from this point require explicit amendment, not silent reinterpretation." Per-feature work runs against frozen upstream artifacts. A freeze is capped as well as gated (principle 6): an artifact may be **at most one revision ahead of code** — a design on rev 3 with nothing in the tree is itself the finding.
 8. **Security is structural, not ceremonial** — `apex:architecture-design` Pass 3 (trust boundaries + auth + data classification) and Pass 7 (system-level threat model) set the security invariants ALL future features inherit. `apex:threat-model` applies STRIDE per-feature against those invariants. `apex:security-review` audits the implementation against the threat model at PR time. The hook `scan-secrets-on-edit` BLOCKS writes that contain real-looking secrets. Security checked at design beats security checked at PR; security checked at PR beats security found in prod.
 
 ## When to skip phases

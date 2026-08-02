@@ -104,6 +104,36 @@ If the design hasn't passed:
 - 1-2 findings → minor revisions, re-run the affected pass
 - ≥3 findings or any unresolved failure mode / broken invariant → back to `apex:design-feature`, reshape
 
+### Bound the loop — this ceremony runs at most TWICE for one design
+
+The rule above has no termination condition, and that is a real failure mode, not
+a theoretical one. Reshape produces a new design, which earns a new review, which
+finds new findings, which triggers reshape. Findings against prose are
+**unfalsifiable** — there is no test to settle them — so pass N+1 can always
+invent another plausible blocker, and the loop has no fixed point.
+
+Observed cost: one repo's `docs/resource` reached **rev 7 across 71 commits** —
+24 review-round commits and 22 reversal/correction commits ("reversed same day",
+"residue", "restore") — while the package it described did not exist. The code,
+once written, took a day and passed every gate first time.
+
+So:
+
+- **Round 2's surviving findings do not trigger a round 3.** They are filed as
+  issues against the implementation and the design freezes with them recorded as
+  known-open. Implementation settles them, because code can falsify a claim.
+- **A design may be at most one revision ahead of code.** If a design is on rev 3
+  with no package in the tree, that is itself the finding — stop reviewing and
+  build the thinnest vertical slice that tests the contested decision.
+- **The one exception is a stop, not a round 3.** An unresolved trust-boundary
+  break or key-custody violation at round 2 means escalate to the owner and hold
+  — not another authoring cycle.
+
+This is the artifact-review analog of `apex:copilot-review-loop`'s 5-round cap,
+and it carries the same caveat: the cap is about **loop termination, not about
+lowering the quality bar.** Surviving findings get *recorded*, not dropped. See
+`apex:apex-flow` §12 for the cross-skill rule.
+
 ## Adversarial pair pattern (DEFAULT for non-trivial designs)
 
 For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel adversarial agents (Task tool, `isolation: "worktree"`):
@@ -125,8 +155,11 @@ The design is frozen-ready if:
 - Overlap + OSS scans audited (no synonym-grade misses, no widely-adopted OSS unaddressed)
 - Pass 6 STRIDE output present (or "no attack surface" justified in one line)
 - The adversarial pair (now the default for non-trivial designs) was dispatched — or its omission is explicitly justified in the design doc
+- **This is review round 1 or 2 for this design** — round 2 is the cap (see §"Bound the loop"). Note the round number in the review output, so the next reviewer knows which round they're on
 
 Fail any → don't freeze. Reshape via `apex:design-feature` before invoking `apex:impl-plan`.
+
+**Unless this was round 2** — then the cap fires instead of a third reshape: freeze the design, record the surviving findings as known-open issues against the implementation, and let code settle them. The one exception is an unresolved trust-boundary break or key-custody violation: escalate to the owner and hold, don't author another round.
 
 ## Hand-off
 

@@ -165,6 +165,34 @@ After all 7 passes + adversarial counter-passes + the 7 ADRs are written, **each
 - A feature that doesn't fit triggers an architecture amendment via `apex:adr-review` (writing a new ADR or updating an existing one)
 - Silent reshaping of the architecture during implementation is a process failure
 
+### Bound the loop — each ADR bounces at most TWICE, and the set freezes once
+
+"Must pass `apex:adr-review`, and then freeze" has no cap on how many times an ADR
+can bounce, and with 7 ADRs the unbounded shape compounds sevenfold: each one can
+revise → review → revise forever, and the *whole architecture* stays unfrozen while
+any one of them does. That blocks every downstream PRD. Two rules:
+
+- **Per-ADR: `apex:adr-review`'s two-round cap applies** (see that skill's §"Bound
+  the loop"). At round 2, the ADR is accepted with surviving findings recorded in
+  its own **Consequences → Negative** section — which is precisely what a
+  foundational decision's residual risks belong in — and the freeze proceeds.
+- **Set-level: the architecture freezes when every ADR has been reviewed, not when
+  every ADR is unobjectionable.** An ADR still at round 1 blocks the freeze; an
+  ADR that has *had* its two rounds does not, whatever survived them. Otherwise a
+  single contested ADR holds all seven hostage.
+- **The escalation exception is a stop, not a round 3.** A substantive unresolved
+  finding at round 2 against Pass 2 (tenancy), Pass 3 (trust boundaries / auth /
+  data classification), or Pass 7 (system threat model) means **escalate to the
+  architecture owner and hold the freeze** — these are the decisions that are
+  genuinely expensive to reverse, and unlike a feature design, no cheap vertical
+  slice falsifies a tenancy choice. Passes 1, 4, 5, 6 take the ordinary cap.
+
+Corollary, and the general point: **an architecture may be at most one revision
+ahead of code.** Seven ADRs at rev 3 with an empty `src/` is itself the finding —
+freeze the set and build the walking skeleton (`apex:project-bootstrap`), which
+tests more of the architecture in a day than a third review round does in a week.
+See `apex:apex-flow` §12 for the cross-skill rule.
+
 ## Output structure
 
 ```
