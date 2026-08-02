@@ -118,7 +118,36 @@ Both agents work with the same ADR text. Reconcile their findings.
 
 ## Pass/fail summary
 
-The ADR passes if all 5 elements meet their conditions AND adversarial findings are addressed. Fail any → revise before committing the ADR. ADRs are durable institutional memory — bad ADRs misinform every future amendment.
+The ADR passes if all 5 elements meet their conditions AND adversarial findings are addressed, **and this is review round 1 or 2 for this ADR** (see below). Fail any → revise before committing the ADR. ADRs are durable institutional memory — bad ADRs misinform every future amendment.
+
+### Bound the loop — an ADR bounces at most TWICE
+
+This skill sends ADRs back to their author (`apex:architecture-design`'s passes, or
+whoever wrote the amendment), so it has the same unbounded shape as
+`apex:design-review` and `apex:prd-review`: revise → review → revise. An ADR is
+prose; Element 3 in particular ("a skeptical reviewer can't think of a 3rd
+alternative") is **unfalsifiable by construction** — round N+1 can always name one
+more alternative. **The second review is the cap.** Note the round number in the
+review output.
+
+- **Round 2's surviving findings do not trigger a round 3.** Accept the ADR with
+  them recorded — in the ADR's own **Consequences → Negative** section (a named
+  residual risk is exactly what that section is for) or as a linked open issue.
+  An ADR that records a known-open trade-off is more honest than one polished
+  until the objection stops being written down.
+- **The escalation exception is a stop, not a round 3.** These ADRs carry
+  decisions code cannot cheaply falsify, so a *substantive* unresolved finding
+  against the **auth / tenancy / data-classification / persistence** ADRs
+  (`architecture-design` Passes 2 / 3 / 7) at round 2 — a trust-boundary break, a
+  key-custody violation, a tenancy model that makes cross-tenant leaks one bug
+  away — means escalate to the architecture owner and hold the freeze. Don't
+  author another round, and don't accept it as a residual risk either.
+- **Element 5 (Status) never counts as a round.** Bumping `Proposed` → `Accepted`
+  or adding a `Superseded by` link is bookkeeping, not a review finding.
+
+As with `apex:copilot-review-loop`'s 5-round cap, this is about **loop termination,
+not about lowering the quality bar.** See `apex:apex-flow` §12 for the cross-skill
+rule.
 
 ## Hand-off
 

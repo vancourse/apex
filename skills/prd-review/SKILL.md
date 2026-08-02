@@ -173,3 +173,20 @@ The PRD passes if:
 - The adversarial counter-pass (or adversarial agent) produced findings that have either been addressed in the PRD or explicitly accepted with reason
 
 Fail any → the PRD is not ready for `apex:design-feature`. Send it back for revision; don't paper over with optimistic design work. A weak PRD compounds into a weak design which compounds into expensive rework.
+
+**But bound it: send-back runs at most twice.** "Not ready → revise → review →
+not ready" has no termination condition, and a spec review can always find one
+more unfalsifiable objection, because there is no test to settle a claim about
+prose. One observed PRD took 11 rev commits and was still being re-derived
+against a design that had itself reached rev 7, with no code in existence.
+After the second send-back, freeze the PRD with the open questions recorded as
+open, and let design and implementation settle them — a question the builder
+answers in an afternoon is cheaper than a question three reviewers argue for a
+week. Same escalation exception as `apex:design-review`: an unresolved trust
+boundary is a stop-and-escalate, not another round.
+
+Note the round number in the review output so the next reviewer knows which round
+they're on. As with `apex:copilot-review-loop`'s 5-round cap, this is about **loop
+termination, not about lowering the quality bar** — surviving objections are
+recorded as Pass 4 unknowns the design phase must resolve, not deleted. See
+`apex:apex-flow` §12 for the cross-skill rule.

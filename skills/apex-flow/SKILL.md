@@ -1,6 +1,6 @@
 ---
 name: apex-flow
-description: Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist with alternatives and critiques, phase-routed skill gates for planning/implementing/reviewing, port-verification discipline. Fires when planning a non-trivial change, designing a new endpoint or service, refactoring across files, shrinking a bloated PR or design, adding support for a new scope/source/kind/variant, opening a PR, or reviewing changes. Keywords: plan, design, refactor, endpoint, payload, review, PR, implement, ship, shrink, bloated, minimal diff, support a new, subtractive design, reconnaissance, recon.
+description: Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist with alternatives and critiques, phase-routed skill gates for planning/implementing/reviewing, port-verification discipline. Fires when planning a non-trivial change, designing a new endpoint or service, refactoring across files, shrinking a bloated PR or design, adding support for a new scope/source/kind/variant, opening a PR, or reviewing changes. Keywords: plan, design, refactor, endpoint, payload, review, PR, implement, ship, shrink, bloated, minimal diff, support a new, subtractive design, reconnaissance, recon, review loop, round cap, bounded review, send-back, freeze gate, loop termination.
 ---
 
 # SDLC Methodology
@@ -123,3 +123,19 @@ If yes, include a short risk note and the verification performed.
 - Avoid broad visual refactors in feature PRs unless requested.
 - Do not hardcode copy, colors, spacing, or breakpoints if the repo has tokens or helpers.
 - If using a motion library (Framer Motion / Motion, etc.), gate animations behind `prefers-reduced-motion` and reuse the existing animation pattern — don't introduce a second one alongside it.
+
+## 12. Bounded Review Loops — every gate that can send an artifact back needs a cap
+
+**The rule: every apex skill that can send an artifact back to an authoring skill must state a round cap and an escalation exception.** A review that can always reshape has no fixed point.
+
+**Why.** "Findings → reshape → new artifact → new review → new findings" terminates only if the findings run out. Against *code* they eventually do, because a test settles the question. Against *prose* — a PRD, a design doc, an impl plan, an ADR — they never do: the findings are **unfalsifiable**, so round N+1 can always invent another plausible blocker. This is not theoretical. One repo running apex reached **design rev 7 across 71 commits** — 24 review-round commits and 22 reversal/correction commits — on a package that did not exist in the tree; its PRD took 11 rev commits and was still being re-derived against that moving design. When the code was finally written it took about a day and passed every gate on the first run. A week of review cycles, settled immediately by implementation.
+
+**The cap is two rounds for artifact reviews.** apex's PR-time loops already had this discipline — `apex:copilot-review-loop` stops at NITs-only OR 5 rounds, `apex:ui-design-review`'s screenshot loop at ≤3 — and §12 is that same discipline applied to the freeze gates upstream. Round 2's surviving findings do **not** trigger a round 3: freeze the artifact and record them as known-open (an issue against the implementation, a Pass 4 unknown, an ADR's *Consequences → Negative* bullet). Downstream work settles them, because the next phase can falsify a claim that a reviewer can only assert.
+
+**Corollary — an artifact may be at most one revision ahead of code.** A design on rev 3 with no package in the tree, or seven ADRs on rev 3 with an empty `src/`, is *itself the finding*. Stop reviewing and build the thinnest vertical slice that tests the contested decision.
+
+**The escalation exception is a STOP, not an extra round.** A substantive unresolved **trust-boundary break, key-custody violation, tenancy-isolation defect, or irreversible-data step** at round 2 means escalate to the owner and hold the freeze. These are the findings the next phase *can't* cheaply falsify, because being wrong costs a breach or a restore-from-backup. Escalating is not authoring another round.
+
+**A cap is loop termination, not a lower quality bar.** Surviving findings are *recorded*, never dropped — same caveat `copilot-review-loop` attaches to its 5-round cap. And a cap never licenses skipping a gate: round 1 is mandatory.
+
+**Where it's stated.** The gates that can send an artifact back restate this inline with their own escalation triggers: [`apex:prd-review`](../prd-review/SKILL.md), [`apex:design-review`](../design-review/SKILL.md), [`apex:impl-plan-review`](../impl-plan-review/SKILL.md), [`apex:adr-review`](../adr-review/SKILL.md), and [`apex:architecture-design`](../architecture-design/SKILL.md) (which also caps the *set* of 7 ADRs, so one contested ADR can't hold the architecture freeze hostage). Any other gate that routes findings back to an upstream artifact — `apex:data-migration-review` (→ `impl-plan-review` Pass 4/5), `apex:threat-model` (→ the design doc) — inherits this rule by default without restating it. **A new review skill that can send an artifact back inherits it too**; state the cap and the escalation trigger in its pass/fail summary.
