@@ -23,9 +23,9 @@ format, then lint, then lockfile, then types, then the (potentially narrowed) te
 suite. Each step's own failure output is a syntax the developer already knows — this
 gate reprints nothing, it only decides whether to keep going.
 
-Ahead of all of those sits ``preflight``, two pure-git checks that ask whether the
-branch is the shape its author believes it is. They live here rather than in CI
-because **CI cannot see either problem**, and both cost milliseconds:
+Ahead of all of those sits ``preflight``, three pure-git checks that ask whether the
+branch is the shape its author believes it is. They cost milliseconds, and CI either
+cannot see what they see or has no reason to look:
 
 * **base** — a commit whose subject ends in ``(#123)`` was written by the forge's
   squash-merge, never by hand, so such a commit belongs to the default branch's
@@ -41,6 +41,14 @@ because **CI cannot see either problem**, and both cost milliseconds:
   If every commit on the branch is ``docs(...)``, the diff has to be prose; source
   files in it mean the branch picked up something it did not mean to. See
   ``declares_docs_only``.
+* **replay** — files the default branch still has, that this branch merged in and
+  then **lost**. That is a branch reverting somebody else's merged work, and it is
+  what a replay built from the wrong base produces: reverse-hunks for files it never
+  should have touched, applied cleanly by ``git apply --3way``, landing as ordinary
+  deletion commits. Unlike the two above, CI *could* see this — the deletions are in
+  the diff — which is exactly why nobody does: a deletion inside your own PR reads as
+  part of your change. See ``dropped_from_base`` for the three conditions that keep
+  it off every branch that is merely behind.
 
 Usage::
 
@@ -266,12 +274,145 @@ def non_doc_paths(paths: list[str]) -> list[str]:
     return [p for p in paths if not (p.startswith("docs/") or p.endswith(".md"))]
 
 
-def preflight(base: str) -> list[str]:
-    """Two git-only checks, run before anything that costs money.
+def _git_lines(*args: str) -> list[str] | None:
+    """Non-empty lines from a git command, or ``None`` if git could not answer.
 
-    Both answer the same question from different sides — "is this branch what its
-    author thinks it is?" — and both are near-free, so they precede the linters.
-    Returns the names of the checks that failed.
+    The distinction matters for `dropped_from_base`: an empty result means "nothing
+    matched", a `None` means "the question could not be asked". Only the first is
+    evidence, and conflating them is how a check starts reporting PASS because it
+    is broken.
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def adding_commits(base: str, paths: list[str]) -> dict[str, str]:
+    """For each of ``paths``, the most recent commit on ``base`` that added it.
+
+    ``git log`` walks newest-first, so the first sha seen for a path is the latest
+    commit to have added it — the right one to ask about, since a path that was
+    added, removed and re-added belongs to whoever added it last. Asking about the
+    *first* add would test reachability against a commit the branch may well predate.
+    """
+    if not paths:
+        return {}
+    lines = _git_lines(
+        "log", "--diff-filter=A", "--name-only", "--format=%x00%H", base, "--", *paths
+    )
+    if lines is None:
+        return {}
+    adds: dict[str, str] = {}
+    sha = ""
+    for line in lines:
+        if line.startswith("\x00"):
+            sha = line[1:].strip()
+        elif sha:
+            adds.setdefault(line, sha)
+    return adds
+
+
+def absorbed_by_merge(base: str, shas: set[str]) -> set[str]:
+    """Which of ``shas`` this branch took in **from a merge** rather than inherited.
+
+    Two questions, and the check needs both:
+
+    * *Does this branch have the commit at all?* Everything on ``base`` that HEAD has
+      not absorbed is exactly ``HEAD..base``, so a sha outside that set is one the
+      branch already contains. This is what keeps a merely-behind branch quiet: it
+      never took the commit in, so it cannot have dropped what the commit added.
+    * *Did it come from base, or was it always ours?* ``rev-list --first-parent HEAD``
+      is the branch's own line of development — its commits, its merge commits, and
+      the base history it was originally cut from. What a catch-up merge pulls across
+      hangs off the *second* parent and is therefore absent from it. So a commit the
+      branch has but that is **not** on its first-parent line is base's work, absorbed
+      later.
+
+    A file whose adding commit fails the second test predates the fork, which makes
+    deleting it this branch's business — that is an ordinary cleanup PR, and flagging
+    it would make the check useless.
+
+    Known limit: a branch that **rebases** onto base instead of merging replays its
+    commits on top of base's tip, so base's commits land on the first-parent line and
+    look inherited. Deletions after a rebase are therefore treated as deliberate. That
+    is the defensible reading — a rebase genuinely makes those commits part of your
+    line — and the failure this check exists for arrived through merges.
+    """
+    if not shas:
+        return set()
+    outstanding = _git_lines("rev-list", f"HEAD..{base}")
+    own_line = _git_lines("rev-list", "--first-parent", "HEAD")
+    if outstanding is None or own_line is None:
+        return set()
+    return shas - set(outstanding) - set(own_line)
+
+
+def dropped_from_base(base: str) -> list[tuple[str, str]]:
+    """Files ``base`` still has, that this branch merged in and then lost.
+
+    This is the branch reverting somebody else's merged work while reporting a clean
+    bill of health. It is what a replay built from the wrong base produces: the patch
+    carries reverse-hunks for files it never should have touched, ``git apply --3way``
+    reconciles them without complaint, and the deletions land as ordinary commits.
+    The branch that motivated this check deleted **four files another PR had just
+    added** that way — a clean apply, a mergeable PR, a green suite, and the only tell
+    was reading the file list.
+
+    The predicate is deliberately narrow, because the obvious version of this check is
+    unusable. "Base has a file I don't" fires on every branch that is merely *behind*,
+    which is most of them, and a check that fires on correct work gets routed around
+    until none of the checks run. So a path is only reported when all three hold:
+
+    * base still has it and this tree does not — the file is live, and gone here;
+    * **the commit that added it is already in this branch's history** — the branch
+      merged that far, so it *had* the file. Being behind cannot produce this;
+    * **and that commit reached the branch through a merge**, not through the history
+      it was cut from — so the file is somebody else's new work, not an old file this
+      branch is deliberately removing.
+
+    The last two are the load-bearing pair. Without the first of them the check is a
+    "you are out of date" nag that fires on most branches; without the second it fires
+    on every cleanup PR. With both, a hit means the branch took the file in and then
+    dropped it, which is either the failure above or a deletion so deliberate it
+    belongs in the PR description either way. See `absorbed_by_merge` for how each is
+    computed and for the rebase case it does not claim to cover.
+
+    Unlike `inherited_commits` and `declares_docs_only`, CI *can* in principle see
+    this — the deletions are right there in the diff. That is precisely why it gets
+    missed: a deletion inside your own PR reads as part of your change, and nothing
+    draws a reviewer's eye to the four lines that are somebody else's. Tests catch it
+    only if a test covered the deleted files; in the measured case they did not, and
+    every check was green.
+
+    Returns ``(sha, path)`` pairs — the sha being the commit on base that added the
+    file, so the report can name who is about to lose what.
+    """
+    missing = _git_lines("diff", "--name-only", "--diff-filter=A", "HEAD", base)
+    if not missing:
+        return []
+
+    adds = adding_commits(base, missing)
+    absorbed = absorbed_by_merge(base, set(adds.values()))
+    hits = [
+        (sha, path) for path, sha in adds.items() if sha in absorbed and path in missing
+    ]
+    # By path, not by the natural tuple order: sorting on the sha first would print
+    # the four files of one bad replay in an order nobody can predict or scan.
+    return sorted(hits, key=lambda hit: hit[1])
+
+
+def preflight(base: str) -> list[str]:
+    """Three git-only checks, run before anything that costs money.
+
+    All three answer the same question from different sides — "is this branch what
+    its author thinks it is?" — and all three are near-free, so they precede the
+    linters. Returns the names of the checks that failed.
     """
     failures = []
     commits = branch_commits(base)
@@ -314,6 +455,24 @@ def preflight(base: str) -> list[str]:
         failures.append("scope")
     else:
         print("-- scope: PASS --\n")
+
+    print("-- replay --")
+    dropped = dropped_from_base(base)
+    if dropped:
+        print(f"   files {base} has, that this branch merged in and then lost:")
+        for sha, path in dropped:
+            print(f"     {path}  (added by {sha[:9]})")
+        print(
+            f"   Merging this would delete work that is already on {base}. A replay\n"
+            f"   built from the wrong base produces exactly this, applies cleanly, and\n"
+            f"   reports mergeable — the deletions look like part of your own change.\n"
+            f"   Fix: restore them (git checkout {base} -- <path>), or if the deletion\n"
+            f"   is deliberate, say so in the PR description — nobody will infer it."
+        )
+        print("-- replay: FAIL --\n")
+        failures.append("replay")
+    else:
+        print("-- replay: PASS --\n")
 
     return failures
 

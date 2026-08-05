@@ -23,7 +23,8 @@ Tools report that they succeeded at **what you asked**, not that you asked for t
   Because you just synced, every entry in that list should be **yours**. Any `D` you did not author is the alarm — it is a file the integration branch has and your branch does not, which after a sync can only mean your replay removed it.
 - Deletions are the entries to read first. An unintended *addition* shows up as review noise and someone catches it; an unintended *deletion* of code that landed while you were working is invisible to everyone downstream, because the diff of what you deleted is not in your commits' story.
 - The same read closes rule 2's failure: if a generated artifact appears in the list and you did not regenerate it, you hand-merged it.
-- The forge's "mergeable" badge is not this check. It answers "do the hunks reconcile?", which was already true in the failure above. See also the `base` preflight in [`templates/gates/pre_pr_check.py`](../templates/gates/pre_pr_check.py) — the mechanized detector of the *other* symptom of this same root cause (a branch cut from a base the default branch has since rewritten).
+- The forge's "mergeable" badge is not this check. It answers "do the hunks reconcile?", which was already true in the failure above.
+- **Mechanized:** the `replay` preflight in [`templates/gates/pre_pr_check.py`](../templates/gates/pre_pr_check.py) does this read for you — it reports files the integration branch has that your branch merged in and then lost, and it stays quiet on branches that are merely behind. Its sibling `base` preflight catches the *other* symptom of the same root cause (a branch cut from a base the default branch has since rewritten). Run it, but keep reading the list anyway: the check knows what your branch *lost*, not what you *meant*, and only the second one catches an unintended file you added or changed.
 
 ## 2. Generated Artifacts That Are Committed Must Never Be Hand-Merged
 
@@ -61,7 +62,7 @@ A conflict in a pure function of the tree is **never information**. That is the 
 
 | Rule | Applied in |
 |---|---|
-| 1. A clean apply is not evidence | `apex:pr-discipline` §3 (re-cutting a stack) + §5 (self-review checklist), `apex:ai-pre-review-checklist` (Definition of Ready), `apex:verification-before-completion` (the merge/replay row), `templates/gates/pre_pr_check.py` `preflight` (the `base` check — the mechanized sibling symptom) |
+| 1. A clean apply is not evidence | `apex:pr-discipline` §3 (re-cutting a stack) + §5 (self-review checklist), `apex:ai-pre-review-checklist` (Definition of Ready), `apex:verification-before-completion` (the merge/replay row), `templates/gates/pre_pr_check.py` `preflight` (the `replay` check — this rule, mechanized; plus `base`, the sibling symptom) |
 | 2. Generated artifacts are regenerated, never hand-merged | `apex:pr-discipline` §3 (generated code doesn't count toward the LOC cap — and doesn't get hand-resolved either), `apex:cicd-review` Pass 5 (determinism — a pipeline that can't reproduce the artifact can't verify it), `rules/review-risk.md` (lockfile/generated-type touch points) |
 
 Skills should reference this file by section rather than restating the rule. Apply it in the skill's own context; let the canonical statement live here.
