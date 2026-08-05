@@ -98,6 +98,20 @@ TEST_ENV: str | None = None
 #: to run, so the local suite is scoped exactly the way CI scopes it. Absent or
 #: failing, the full suite runs — the same safe default a selector uses for a path
 #: it has no mapping for.
+#:
+#: **That default is safe only where reachability is genuinely unknown.** A selector
+#: that answers "run everything" for a path it does not *recognize* is charging every
+#: developer the full suite for the privilege of its own missing mapping. Before
+#: accepting the fallback for a path, ask whether that path can *provably* not reach
+#: the rest: a frontend file cannot reach a backend package, and a docs file reaches
+#: nothing. Where the answer is provable, encode it — those are the mappings worth
+#: writing first, because they are the ones that turn a four-minute wait into zero.
+#:
+#: The measured shape of getting this wrong: a ~6,300-test suite run locally six times
+#: in one session at ~4 minutes each — ~25 minutes of waiting, most of it re-proving
+#: what CI proves on push. A gate that expensive stops being run, and then none of the
+#: cheaper gates above it run either. See `apex:pr-discipline` §2 for the rule this
+#: implements.
 TEST_SELECTOR = pathlib.Path("ci") / "select_tests.py"
 # -----------------------------------------------------------------------------
 
@@ -265,7 +279,9 @@ def preflight(base: str) -> list[str]:
     print("-- base (git history) --")
     inherited = inherited_commits(commits)
     if inherited:
-        print("   commits carrying a merged-PR number, which only the base branch's do:")
+        print(
+            "   commits carrying a merged-PR number, which only the base branch's do:"
+        )
         for sha, subject in inherited:
             print(f"     {sha} {subject}")
         print(

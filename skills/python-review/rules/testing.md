@@ -1,6 +1,6 @@
 # Testing — Python tooling specifics
 
-The generic testing methodology — scenarios-first, the 8-layer model, mocking policy per layer, CI tiering, transaction-rollback isolation, recorded fixtures, the 17 language-agnostic test design rules — lives in **`apex:test-strategy`**.
+The generic testing methodology — scenarios-first, the 8-layer model, mocking policy per layer, CI tiering, transaction-rollback isolation, recorded fixtures, the 18 language-agnostic test design rules — lives in **`apex:test-strategy`**.
 
 This file holds only the **Python-specific tooling rules** that don't generalize to other languages.
 

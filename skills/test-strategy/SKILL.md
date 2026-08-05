@@ -1,6 +1,6 @@
 ---
 name: test-strategy
-description: The methodology layer for how to test — what tests live at which layer (8-layer model), which CI tier runs them, what to mock (and where), how to isolate (transaction rollback / per-test budget), how to fixture (static / golden / per-test), how to record external services (VCR-style replay), what NOT to do (anti-goals), plus the 17 language-agnostic test design rules. Distinct from language-specific tooling rules (those live in apex:python-review/rules/testing.md and apex:typescript-review/rules/testing.md). Distinct from per-PR test audits (apex:test-coverage-audit). Fires when planning tests for a layer, auditing the test architecture for a feature, or routing test-design decisions. Keywords: test strategy, test architecture, test layers, test pyramid, mocking discipline, fixtures, CI tiering, transaction rollback, recorded fixtures, scenarios.
+description: The methodology layer for how to test — what tests live at which layer (8-layer model), which CI tier runs them, what to mock (and where), how to isolate (transaction rollback / per-test budget), how to fixture (static / golden / per-test), how to record external services (VCR-style replay), what NOT to do (anti-goals), plus the 18 language-agnostic test design rules. Distinct from language-specific tooling rules (those live in apex:python-review/rules/testing.md and apex:typescript-review/rules/testing.md). Distinct from per-PR test audits (apex:test-coverage-audit). Fires when planning tests for a layer, auditing the test architecture for a feature, or routing test-design decisions. Keywords: test strategy, test architecture, test layers, test pyramid, mocking discipline, fixtures, CI tiering, transaction rollback, recorded fixtures, scenarios.
 ---
 
 # Testing Strategy
@@ -13,7 +13,7 @@ The methodology layer for how to test. This skill answers:
 - *How do I isolate it?* → transaction rollback + per-test budget
 - *What fixture pattern?* → static / golden / per-test transactional
 - *How do I handle real external services in CI?* → recorded fixtures (VCR-style)
-- *What rules govern test shape?* → the 17 methodology rules
+- *What rules govern test shape?* → the 18 methodology rules
 
 What this skill is **not**: language-specific tooling guidance. For Python tooling (pytest, MagicMock vs stubs, async fixture typing) → `apex:python-review/rules/testing.md`. For TS tooling (Vitest, MSW, RTL, TanStack Query test helpers) → `apex:typescript-review/rules/testing.md`. For Playwright specifics → `apex:typescript-review/rules/playwright-e2e.md`. For per-PR test coverage audit → `apex:test-coverage-audit`.
 
@@ -157,13 +157,13 @@ Things explicitly **not** in scope, with rationale:
 | Real-DB tests slow over time | Per-test runtime budget (warn 100ms, fail 500ms). Slowest-10 reporter on every run. |
 | Recorded fixtures rot silently | Content-addressed by request hash so prompt/payload changes invalidate. Weekly drift suite is the smoke alarm. |
 | Golden seed becomes load-bearing reality | Bright-line: scenario / E2E tests assert on **state changes**, never on absolute seed counts. |
-| Browser-test flake erodes trust | Retry disabled in CI for cron tier; spine tier 1 retry max with flake counter. Tests flaking 3× / 30 days quarantined. Lint-enforce no `waitForTimeout`. |
+| Browser-test flake erodes trust | Retry disabled in CI for cron tier; spine tier 1 retry max with flake counter. Tests flaking 3× / 30 days quarantined. Lint-enforce no `waitForTimeout`. **This is the backstop, not the first move** — Rule 18 requires the developer who sees the first pass-on-retry to measure the ratio in isolation immediately; a test left to reach the 30-day threshold reddens unrelated branches the whole time (measured: 3 of 5 suite runs, two unrelated branches). |
 | Mocked tests proliferate at the wrong layer | Pre-push lint flagging new tests in `services/` or `routers/` that mock the DB. CLAUDE.md rule: "if it mocks the DB, it must be pure-logic unit." |
 | CI minutes balloon | Per-tier `timeout-minutes` in workflow config. Breaking budget is the trigger to add path-based selectivity. |
 
 ## The Methodology Rules
 
-These 17 rules are language-agnostic. Language-specific tooling (pytest, Vitest, RTL) lives in `apex:python-review/rules/testing.md` and `apex:typescript-review/rules/testing.md`. Language-specific frameworks (Playwright) live in `apex:typescript-review/rules/playwright-e2e.md`.
+These 18 rules are language-agnostic. Language-specific tooling (pytest, Vitest, RTL) lives in `apex:python-review/rules/testing.md` and `apex:typescript-review/rules/testing.md`. Language-specific frameworks (Playwright) live in `apex:typescript-review/rules/playwright-e2e.md`.
 
 ### 1. Scenarios-First — List Use Cases Before Code
 
@@ -284,6 +284,25 @@ For language-specific examples, see the language-review testing rule files.
 
 **When:** Tempted to check `assert "Fast parse complete" in captured_logs`.
 **Rule:** Assert on observable outcomes instead: return values, state changes, side effects. Log-string assertions break on copy edits with no functional change.
+
+### 18. "Passed on Retry" Is Not a Diagnosis — Measure the Ratio Immediately
+
+**When:** A test fails, you re-run it, and it passes.
+
+**Rule:** That is the moment — not later, not after it recurs. **Run the test N times in isolation (N ≥ 5) and record the pass/fail ratio before moving on.** Isolation is load-bearing: it is what separates a genuinely nondeterministic test from a suite-interaction effect (shared fixture, leaked global, ordering dependency), and those two have completely different fixes.
+
+```bash
+pytest path/to/test.py::test_name --count=5 -p no:randomly   # pytest-repeat
+# or, no plugin: for i in $(seq 5); do pytest path/to/test.py::test_name -q || echo "FAIL $i"; done
+```
+
+Record the ratio in the issue or the quarantine annotation. A ratio is a fact that survives handoff; "it's flaky" is a shrug that the next person has to re-derive.
+
+**Why:** "Passed on retry" is a *non-observation* — it tells you the test can pass, which you already knew. Writing it off costs the whole team, because the test keeps firing on branches that did not cause it. *Measured:* one test failed, was re-run, passed, and was written off as "a flake." It went on to fail **3 of 5** full-suite runs and turn **two unrelated branches red** — engineers on those branches each paying the diagnosis cost from scratch, on a failure none of them introduced. Only when it was finally run **three times consecutively in isolation (pass, pass, fail)** was it provably nondeterministic rather than a suite-interaction effect. The measurement that settled it took under a minute and was available on day one.
+
+**Corollary — a bare `assert False` in a flaky test is doubly costly.** It is nondeterministic *and* it tells you nothing when it fires: no expected, no actual, no state. The one artifact you get from a rare failure is its output, so a flaky test is exactly where Rule 8's "assert a side effect or a return value" pays most. If a test can fail intermittently, its assertion must be able to explain the failure from the log alone — you may not get a second chance to reproduce it.
+
+**Relationship to the quarantine policy:** the "flaking 3× / 30 days → quarantined" rule in *Failure Modes* is the **CI-level** backstop for flakes nobody measured. This rule is the **developer-level** action that should make it rarely fire. A 30-day window is a long time for a test to redden other people's branches.
 
 ## Cross-references
 

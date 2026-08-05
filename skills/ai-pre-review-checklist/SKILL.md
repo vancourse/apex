@@ -327,6 +327,7 @@ Treat these as high-risk until proven otherwise:
 
 Before posting the branch, make sure all of the following are true:
 
+- **the changed-file set is exactly yours** — after your last sync with the integration branch, `git diff --name-status origin/<base> HEAD` lists only files you meant to touch, and every `D` in it is a deletion you authored. This is the one item on the list a *reviewer cannot check for you*: a replay built from the wrong base applies cleanly, reports mergeable, and passes every test, because the work it deleted is not in your diff's story. Canonical statement + the stacked-branch failure that motivated it: [`rules/merge-hygiene.md` §1](../../rules/merge-hygiene.md#1-a-clean-apply-is-not-evidence-of-correctness)
 - the assistant can explain the branch at a high level
 - the API/layering story is coherent
 - state ownership is explicit

@@ -12,7 +12,7 @@ Three rules for getting a component from *sliced* to *merged*, each stated as th
 
 - Before counting a slice as progress, name the file it creates or changes in the target package. If there is none, retitle it a dependency and re-count what is actually left.
 - Sequence prerequisites to merge **before** the consuming branch is cut, or ship them in the same PR. Never leave both open at once.
-- If a consuming branch must live longer than a day, treat every merge into its dependencies as a scheduled conflict — rebase on each one, or shrink the branch until it no longer needs to.
+- If a consuming branch must live longer than a day, treat every merge into its dependencies as a scheduled conflict — rebase on each one, or shrink the branch until it no longer needs to. **Budget branch lifetime in hours and price it before you cut:** a second branch, carrying six issues for **eleven hours**, watched the integration branch move **23 commits** and paid **three separate merges** for it — each a conflict resolution plus artifact regeneration plus re-verification — and then a full re-cut of its stacked child once the parent squash-merged. That is the shape of the bill whenever the calendar, not the change, is what grew. `apex:impl-plan-review` Pass 1 owns the budget as a plan-time gate; [`merge-hygiene.md`](merge-hygiene.md) owns the mechanics of surviving each forced merge.
 - A stack whose bottom PRs all sit in other packages is not a stack for this component. `apex:impl-plan-review` Pass 2 requires each PR to state what it depends on and what it unblocks; a slice with no target-package file fails that pass by construction.
 
 ## 2. A Design May Be at Most One Revision Ahead of Code
@@ -40,7 +40,7 @@ Three rules for getting a component from *sliced* to *merged*, each stated as th
 
 | Rule | Applied in |
 |---|---|
-| 1. Slices touch the target package | `apex:impl-plan-review` Pass 2 (sequencing / dependency order), `apex:pr-discipline` §3 (layered PR stack, route per-layer while coding), `apex:cross-artifact-consistency` (ORPHAN layers — plan layers with no upstream anchor) |
+| 1. Slices touch the target package (+ branch lifetime) | `apex:impl-plan-review` Pass 1 (the lifetime budget) + Pass 2 (sequencing / dependency order), `apex:pr-discipline` §3 (layered PR stack, route per-layer while coding), `apex:cross-artifact-consistency` (ORPHAN layers — plan layers with no upstream anchor), [`merge-hygiene.md`](merge-hygiene.md) (surviving each forced merge) |
 | 2. At most one revision ahead of code | `apex:apex-flow` §12 (owns the round cap and the escalation exception), `apex:design-review` (design-freeze readiness), `apex:prd-review` / `apex:adr-review` (same cap on their own artifacts), `apex:architecture-design` (caps the ADR set) |
 | 3. Branch matches worktree, one slice one branch | `apex:pr-discipline` §1–§3 (branch per layer, one commit per PR, push once), `apex:adversarial-pair` (worktree-isolation rules for dispatched agents) |
 
