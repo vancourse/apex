@@ -18,8 +18,10 @@ Before you say the task is done, prove it. The proof depends on the change type 
 | Bug fix | Reproduce the original bug first. Apply the fix. Re-run the reproduction; confirm the bug is gone. |
 | UI change | Open the page in a browser. Exercise the change. Cover the golden path AND at least one edge case (empty state, error state). |
 | Refactor with no behavior change | Run the full test suite. Compare type-check output before/after. |
-| Performance fix | Measure before. Apply. Measure after. The number must move in the right direction. |
+| Performance fix | Measure before. Apply. Measure after. The number must move in the right direction. **Time the smallest primitive before theorizing** — see `apex:apex-flow` §1a Q0. |
 | Dependency bump | Run the build + test suite + type-check. Check for new warnings. |
+| Merge / rebase / cherry-pick / patch apply | Diff the result against the integration branch and read the **changed-file set**. A clean apply proves the hunks reconciled, not that the base was right — [`rules/merge-hygiene.md` §1](../../rules/merge-hygiene.md#1-a-clean-apply-is-not-evidence-of-correctness). |
+| Conflict in a generated artifact | Clear the markers, **regenerate in dependency order**, confirm byte-stable on a second run. Never hand-resolve — [`rules/merge-hygiene.md` §2](../../rules/merge-hygiene.md#2-generated-artifacts-that-are-committed-must-never-be-hand-merged). |
 
 ## What does NOT count as verification
 
@@ -29,6 +31,8 @@ Before you say the task is done, prove it. The proof depends on the change type 
 - "I wrote tests but didn't run them." Untested code is unverified.
 - "The lint passes." Lint is not behavior.
 - "I checked the diff." Reviewing your own diff is not exercising the code.
+- "The tool said it succeeded." Tools report success at what you asked, not that you asked the right thing. `git apply --3way` reports success on a patch built from the wrong base.
+- "It hung." You observed that you stopped waiting. Which operation consumed the time is a separate, measurable fact — `apex:apex-flow` §1a Q0.
 
 ## The verification checklist
 

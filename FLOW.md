@@ -160,7 +160,7 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │ 3. IMPLEMENT — write the tests here: scenarios/use-cases →    │
    │    tests 1:1, E2E-tagged → Playwright (apex:test-strategy)    │
    │    test-strategy              (8-layer model, mocking policy, │
-   │                                CI tiering, isolation, 17 rules│
+   │                                CI tiering, isolation, 18 rules│
    │                                — routes the test-writing)     │
    │    python-review              (Python — routes to topic file) │
    │    typescript-review          (TS / React — same)             │
@@ -208,6 +208,9 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                              feature's threat model output.   │
    │    pr-discipline §2          full check suite → squash WIPs   │
    │                              to ONE commit per PR             │
+   │    rules/merge-hygiene    §1 diff changed-file set against    │
+   │                            the integration branch; §2 regen   │
+   │                            artifacts, never hand-merge them   │
    │    api-surface-review        (if API surface touched)         │
    │    python-review / typescript-review                          │
    └───────────────────────────────┬───────────────────────────────┘
@@ -221,6 +224,10 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
    │                           success-failure-fallback / tests)   │
    │    review-risk rules    risk note if auth / data / concurrency│
    │                          / billing / external-API touched     │
+   │    pr-discipline §1     open the DRAFT on commit one — a      │
+   │                          CONFLICTING PR gets NO CI at all;    │
+   │                          "no checks reported" reads the same  │
+   │                          as a queue that has not started      │
    │    summarize-changes    branch / working-tree summary +       │
    │                          risks + likely test commands         │
    └───────────────────────────────┬───────────────────────────────┘

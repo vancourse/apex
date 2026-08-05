@@ -41,6 +41,20 @@ The adversarial half asks *"what does this plan defer that will bite us?"*
 
 **Adversarial counter-pass:** Find a layer with >600 LOC budget or one that mixes concerns. Force the question: can this be split into two? Also: find a layer that *will* exceed 400 LOC once tests are added — those are the layers that secretly mix scopes.
 
+#### Size has two dimensions — LOC *and* lifetime
+
+The LOC cap alone is not the whole rule. **A PR's cost is its size × how long it stays open against a moving base**, and the plan is where the second factor is decided — a layer scoped to "six issues" is a layer that will be open for a day no matter how few lines it turns out to be.
+
+**Why.** Long-lived branches are a false economy, and the cost is measurable. *Measured:* one branch carried **six issues for eleven hours**. During that window the integration branch moved **23 commits**, forcing **three separate merges** — each one a conflict resolution **plus** artifact regeneration **plus** re-verification — and the stacked child then needed a **full re-cut** after the parent squash-merged. None of that work appears in the diff. All of it was caused by the calendar, not by the change.
+
+The compounding is the point: merge *N* is not independent of merge *N−1*. Each one re-touches the same generated artifacts ([`rules/merge-hygiene.md` §2](../../rules/merge-hygiene.md#2-generated-artifacts-that-are-committed-must-never-be-hand-merged)), re-runs the same verification, and adds one more replay that can silently drop somebody else's merged work ([§1](../../rules/merge-hygiene.md#1-a-clean-apply-is-not-evidence-of-correctness)). A branch open twice as long costs materially more than twice as much.
+
+**Pass condition (lifetime).** Each PR in the stack states an expected **open-to-merge lifetime**, budgeted in **hours, not days**, and carries **one issue** — a layer scoped to several issues has already failed this, whatever its LOC estimate says. Any layer budgeted beyond a day states explicitly what forces it (a genuinely indivisible migration, an external dependency) and what it will cost: assume **one merge from the base per ~8 commits of base movement**, each one a resolve + regenerate + re-verify cycle.
+
+**Adversarial counter-pass (lifetime).** Find the layer that will be open longest and count what the base will do underneath it — how many commits per day does the integration branch actually move? Multiply. If the answer is more than one forced merge, the layer is mis-sized *even if its LOC estimate passes*. Also: find a layer whose child in the stack will need a re-cut when it squash-merges — that re-cut is unbudgeted work in every plan that does not name it, and it is the highest-risk operation in the stack.
+
+See [`rules/landing-a-component.md` §1](../../rules/landing-a-component.md) for the sibling failure (a long-lived branch whose *dependencies* moved underneath it).
+
 ### Pass 2 — Sequencing / dependency order
 
 **Check:** Foundation (types + storage + migrations) before service before API before UI. Cross-cutting concerns (feature flags, telemetry, audit events) inserted at the right layer. Each PR's preconditions are stated.

@@ -1,6 +1,6 @@
 # Testing — TypeScript / React tooling specifics
 
-The generic testing methodology — scenarios-first, the 8-layer model, mocking policy per layer, CI tiering, isolation patterns, recorded fixtures, the 17 language-agnostic test design rules — lives in **`apex:test-strategy`**.
+The generic testing methodology — scenarios-first, the 8-layer model, mocking policy per layer, CI tiering, isolation patterns, recorded fixtures, the 18 language-agnostic test design rules — lives in **`apex:test-strategy`**.
 
 This file holds only the **TypeScript / React-specific tooling rules** that don't generalize. For Playwright-specific patterns (selectors, state-based waits, flake control), see `rules/playwright-e2e.md`.
 

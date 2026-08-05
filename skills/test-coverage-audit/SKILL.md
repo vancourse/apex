@@ -112,7 +112,7 @@ The audit passes if all 5 passes meet their conditions. Fail any → fix before 
 
 ## Cross-references
 
-- **`apex:test-strategy`** — the methodology being audited (8-layer model, mocking policy, tiering, principles, 17 rules)
+- **`apex:test-strategy`** — the methodology being audited (8-layer model, mocking policy, tiering, principles, 18 rules)
 - **`apex:prd-review`** Pass 2 — PRD owns the scenarios list (input to Pass 1 here)
 - **`apex:impl-plan-review`** Pass 3 — impl plan owns the test plan per layer (input to Pass 2 here)
 - **`apex:ai-pre-review-checklist`** Steps 6 (test quality) + 7 (consumer tracing) — pair with this skill at PRE-PR phase. ai-pre-review-checklist focuses on per-test quality; test-coverage-audit focuses on the test set's coverage and architecture
