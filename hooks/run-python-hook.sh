@@ -30,6 +30,24 @@ fi
 target="$here/$script"
 [ -f "$target" ] || exit 0
 
+# DEFER TO THE REPO'S OWN COPY. apex ships session_collisions.py and
+# artifact_templates.py for repos that have no equivalent; a repo carrying its
+# own version of the same file is authoritative, and running both answers one
+# question twice.
+#
+# Measured 2026-08-13 in a repo that has both: the session received TWO collision
+# reports at startup — one from the repo's current version, one from apex's fork,
+# which had drifted and omitted a whole section. The artifact-template check fired
+# twice on every `gh pr create`. Neither copy knew about the other.
+#
+# The repo's copy wins rather than apex's because the repo's is the one its own
+# tests pin and its own contributors edit; apex's is a portable default.
+repo_root="${CLAUDE_PROJECT_DIR:-}"
+if [ -n "$repo_root" ] && [ -f "$repo_root/.claude/hooks/$script" ]; then
+  cat >/dev/null 2>&1
+  exit 0
+fi
+
 for candidate in python3 python py; do
   if command -v "$candidate" >/dev/null 2>&1; then
     exec "$candidate" "$target"
