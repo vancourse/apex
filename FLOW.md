@@ -57,7 +57,8 @@ Architecture amendments: when `apex:design-feature` Pass 4 finds the feature can
                 ┌──────────────────▼──────────────────┐
                 │  HOOKS (always-on, automatic)       │
                 │   • apex-primer (SessionStart) →    │ injects apex methodology primer on new/cleared/compacted sessions
-                │   • suggest-skill-on-prompt   →     │ injects review-skill reminders
+                │   • session-baseline (SessStart) →  │ snapshots what was already dirty, so the Stop nudge counts only your edits
+                │   • suggest-skill-on-prompt   →     │ on announced phase transitions (design / plan / build) + subtractive traps
                 │   • suggest-skill-on-edit     →     │ on API-surface paths
                 │   • guard-security-paths      →     │ on auth/creds/oauth/secrets paths
                 │   • guard-dependency-bump     →     │ on lockfiles / dep manifests

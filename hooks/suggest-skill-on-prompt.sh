@@ -1,29 +1,39 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: scans the user's prompt for language / domain
-# keywords and injects a reminder to invoke the matching review skill(s).
+# UserPromptSubmit hook: routes a prompt to the PHASE GATE it is entering.
 #
-# Silent if no keywords match. Always exits 0.
+# What this hook does NOT do, deliberately: it does not try to decide whether a
+# message is "about Python" or "about TypeScript" or "about an API" and demand
+# the matching review skill. That version was measured at 0 for 3 — across three
+# consecutive messages it demanded a code review on an explicitly read-only
+# audit request, on a message answering audit questions, and on a status report
+# containing no code, because it matched the characters `.py` inside filenames.
+# A grep over prose cannot tell you what a message is about. It can tell you
+# what the author just SAID THEY WERE DOING, which is a different and much
+# narrower claim, and it is the only claim the patterns below make:
+#
+#   "let's design this"     -> you are entering DESIGN
+#   "ready to plan"         -> you are entering IMPL-PLANNING
+#   "start implementing"    -> you are entering BUILD
+#   "shrink this / support  -> you are about to choose a SHAPE, and this
+#    a new kind"               framing reliably hides an existing primitive
+#
+# Each of those is a phase transition the author announced in the imperative,
+# and each has a freeze that must already have happened. The gates are a
+# cross-prompt BACKSTOP: the same hand-offs are stated as mandatory in the
+# author skills and commands, which is the enforcement. This catches the case
+# where the transition arrives in a new prompt rather than inside one turn.
+#
+# Precision discipline for anything added here: match a stated intention, never
+# a topic. A hook that fires wrongly does not merely waste a process — it
+# teaches you to ignore hooks generally, which is how the correct ones stop
+# working.
+#
+# Silent if no phase transition is announced. Always exits 0.
 
 set -u
 
 input=$(cat)
 context=""
-
-# Python — language + common framework keywords.
-if echo "$input" | grep -qiE '\.py\b|\bpython\b|\bpytest\b|\bpydantic\b|\bfastapi\b|\basyncio\b|\bsqlalchemy\b'; then
-  context="Invoke the apex:python-review skill."
-fi
-
-# TypeScript / React — language + common framework keywords.
-if echo "$input" | grep -qiE '\.tsx?\b|\btypescript\b|\breact\b|\bzustand\b|\bzod\b|\bplaywright\b'; then
-  context="${context:+$context }Invoke the apex:typescript-review skill."
-fi
-
-# API surface — endpoint / payload / handler / response-shape keywords.
-# Fires during planning, implementation, and review phases.
-if echo "$input" | grep -qiE '\bendpoint\b|\bpayload\b|\bhandler\b|\broute(s|r)?\b|\brequest model\b|\bresponse model\b|\bapi design\b|\bapi shape\b|\bapi surface\b|\b/api/\b'; then
-  context="${context:+$context }Invoke the apex:api-surface-review skill (runs at planning, implementation, and review — not just review)."
-fi
 
 # Subtractive-design traps — "shrink/bloated PR", "support a new kind/scope/source", "add a flag/field/enum".
 # These framings reliably hide an existing primitive and pull toward additive machinery, so nudge
@@ -51,6 +61,12 @@ if echo "$input" | grep -qiE 'start (implement|build|cod)(ing)?|begin (implement
   context="${context:+$context }Before implementation/coding, ensure apex:impl-plan-review has run + FROZEN the implementation plan (layered PR stack, sequencing, per-layer tests, rollout, reversibility). A drafted implementation plan is authored, not frozen."
 fi
 
-[ -n "$context" ] && printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
+# Emit (if anything to say). jq -Rs JSON-encodes the message, the same pattern
+# apex-primer.sh and suggest-skill-on-edit.sh use: a raw printf with the text
+# interpolated can produce invalid JSON the harness then drops SILENTLY, with a
+# zero exit — a gate that stops firing and says nothing about it.
+if [ -n "$context" ]; then
+  printf '%s' "$context" | jq -Rs '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:.}}' 2>/dev/null
+fi
 
 exit 0
