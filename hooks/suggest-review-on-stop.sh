@@ -52,6 +52,27 @@ untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null)
 diff_files=$(printf '%s\n%s\n' "$tracked_files" "$untracked_files" | sort -u | sed '/^$/d')
 [ -z "$diff_files" ] && exit 0
 
+# SUBTRACT WHAT WAS ALREADY DIRTY WHEN THIS SESSION STARTED.
+#
+# `git diff` at the repo root sees the whole checkout, and several agent sessions
+# routinely share one. Without this, the nudge counts their work as yours:
+# measured 2026-08-13, a session that had written no Python was told "573 lines
+# across 13 files" and asked to review changes belonging to three other sessions.
+#
+# `snapshot-dirty-baseline.sh` writes the list at SessionStart. When it is absent
+# — an older install, a session that started before this hook existed, no git at
+# snapshot time — nothing is subtracted and the behaviour is exactly as before,
+# which is the fail-open direction for an advisory nudge.
+baseline="${marker_dir}/apex-dirty-baseline-${safe_session_id}"
+if [ -s "$baseline" ]; then
+  diff_files=$(comm -13 <(sort -u "$baseline") <(printf '%s\n' "$diff_files" | sort -u))
+  [ -z "$diff_files" ] && exit 0
+  # Re-derive both source lists from the survivors, so the line counts below
+  # measure this session's work rather than the whole tree's.
+  tracked_files=$(comm -12 <(printf '%s\n' "$tracked_files" | sort -u) <(printf '%s\n' "$diff_files" | sort -u))
+  untracked_files=$(comm -12 <(printf '%s\n' "$untracked_files" | sort -u) <(printf '%s\n' "$diff_files" | sort -u))
+fi
+
 # Count lines: tracked-file insertions+deletions (vs HEAD) plus the total
 # line count of untracked language files. (Every line of a brand-new file
 # is effectively an "insertion" for review-volume purposes.)

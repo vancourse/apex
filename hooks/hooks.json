@@ -14,17 +14,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_collisions.py"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/snapshot-dirty-baseline.sh"
           }
         ]
-      }
-    ],
-    "UserPromptSubmit": [
+      },
       {
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-skill-on-prompt.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_collisions.py"
           }
         ]
       }
@@ -91,6 +89,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-review-on-stop.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-skill-on-prompt.sh"
           }
         ]
       }
