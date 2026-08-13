@@ -4,7 +4,7 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.5.0] — 2026-08-13
 
 Seven learnings from one engineering postmortem, folded into the gates that should have caught them. Five strengthened an existing rule with the measurement it lacked; one is new; one was split — the half apex owns was folded in, the half `superpowers:systematic-debugging` owns was left there.
 
