@@ -387,6 +387,91 @@ def test_baseline_is_silent_and_open_outside_a_git_repo(tmp_path, marker_dir):
 
 
 # --------------------------------------------------------------------------
+# suggest-skill-on-prompt.sh — phase transitions, never topics
+# --------------------------------------------------------------------------
+
+PROMPT_HOOK = HOOKS / "suggest-skill-on-prompt.sh"
+
+# The three message shapes the removed review-keyword matcher was measured
+# firing on — a read-only audit request, a message answering audit questions,
+# and a status report containing no code — each naming files, which is the
+# mechanism: it matched the characters `.py` inside a filename. Every one of
+# these DOES fire the old matcher and must not fire this one. They are the
+# regression suite for the rule that replaced it: match a stated intention,
+# never a topic.
+MEASURED_FALSE_POSITIVES = [
+    "Audit hooks/format-on-save.sh and hooks/session_collisions.py in this repo "
+    "and report back. Read-only — do not change anything, do not open a PR.",
+    "Answering your four questions: (1) yes, hooks/_hooklib.py is shared; "
+    "(2) session_collisions.py is the duplicated one; (3) no; (4) ruff 0.14.14.",
+    "Status: the audit of _hooklib.py and artifact_templates.py is written up "
+    "and the figures are measured. Nothing is committed yet.",
+]
+
+
+def _prompt(text: str) -> str:
+    result = _run(
+        ["bash", str(PROMPT_HOOK)], json.dumps({"prompt": text}), _base_env(), HOOKS
+    )
+    assert result.returncode == 0, "a UserPromptSubmit hook must never fail closed"
+    if not result.stdout.strip():
+        return ""
+    payload = json.loads(result.stdout)
+    out = payload["hookSpecificOutput"]
+    # additionalContext under the wrong event name is dropped by the harness
+    # silently, with a zero exit — indistinguishable from having nothing to say.
+    assert out["hookEventName"] == "UserPromptSubmit"
+    return out["additionalContext"]
+
+
+@pytest.mark.parametrize("message", MEASURED_FALSE_POSITIVES)
+def test_prompt_hook_says_nothing_about_prose_that_merely_mentions_code(message):
+    """The measured 0-for-3. A filename is not an intention."""
+    assert _prompt(message) == ""
+
+
+def test_prompt_hook_no_longer_demands_a_review_for_a_topic():
+    """`.py` inside a filename was the whole basis of the deleted matcher."""
+    assert _prompt("Take a look at hooks/format-on-save.sh and _hooklib.py") == ""
+    assert _prompt("What does the pytest suite cover in TypeScript?") == ""
+
+
+def test_prompt_hook_gates_the_design_transition():
+    context = _prompt("Let's design the new export pipeline")
+    assert "apex:prd-review" in context
+
+
+def test_prompt_hook_gates_the_impl_planning_transition():
+    context = _prompt("The design is frozen — ready to plan")
+    assert "apex:design-review" in context
+
+
+def test_prompt_hook_gates_the_build_transition():
+    context = _prompt("Plan looks good, start implementing")
+    assert "apex:impl-plan-review" in context
+
+
+def test_prompt_hook_nudges_recon_on_a_subtractive_trap():
+    context = _prompt("This PR is bloated — can we shrink it?")
+    assert "apex:recon" in context
+
+
+def test_prompt_hook_concatenates_without_losing_a_gate():
+    """Two transitions in one message must yield two nudges, not the last one."""
+    context = _prompt("This module is too big — let's design a smaller one")
+
+    assert "apex:recon" in context
+    assert "apex:prd-review" in context
+
+
+def test_prompt_hook_emits_valid_json_for_a_message_full_of_metacharacters():
+    """The old raw-printf emit produced invalid JSON the harness drops silently."""
+    context = _prompt('Let\'s design a "thing" with a \\backslash\tand a\nnewline')
+
+    assert "apex:prd-review" in context  # parsed, so the JSON survived
+
+
+# --------------------------------------------------------------------------
 # hooks.json — the registrations these behaviours depend on
 # --------------------------------------------------------------------------
 
@@ -419,7 +504,6 @@ def test_no_hook_references_a_script_that_is_not_shipped():
         for group in groups:
             for hook in group["hooks"]:
                 command = hook["command"]
-                assert "suggest-skill-on-prompt" not in command
                 name = command.replace("${CLAUDE_PLUGIN_ROOT}/hooks/", "").split()
                 assert (HOOKS / name[0]).is_file(), f"missing hook: {name[0]}"
                 if len(name) > 1:  # run-python-hook.sh <script>.py

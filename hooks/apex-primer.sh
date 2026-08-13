@@ -5,14 +5,13 @@
 # and points to FLOW.md for the canonical phase × skill matrix.
 #
 # Why this exists: every other advisory apex hook fires *reactively* on user
-# or agent activity (PreToolUse/Edit, PostToolUse, Stop). The primer fires
-# *proactively* once per fresh context — so the
-# agent knows apex exists before the first prompt arrives, instead of
-# discovering it through a keyword-matched skill suggestion that may or may
-# not happen on the first turn.
+# or agent activity (UserPromptSubmit, PreToolUse/Edit, PostToolUse, Stop).
+# The primer fires *proactively* once per fresh context — so the agent knows
+# apex exists before the first prompt arrives, instead of waiting on a phase
+# transition that may or may not be announced on the first turn.
 #
 # Schema followed: stdout JSON with hookSpecificOutput.additionalContext,
-# same pattern as hooks/suggest-skill-on-edit.sh.
+# same pattern as hooks/suggest-skill-on-prompt.sh.
 
 set -u
 
