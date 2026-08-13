@@ -15,6 +15,11 @@
 # - "Changes" includes both tracked diff vs HEAD AND brand-new untracked
 #   language files — new-file work is the most common "review needed" case
 #   and `git diff` alone would silently skip it.
+# - "Changes" means changes THIS SESSION made. hooks/session-baseline.sh
+#   snapshots the already-dirty paths at SessionStart; anything still matching
+#   that snapshot byte-for-byte belonged to somebody else and is dropped
+#   before any counting. Without it, a worktree shared by concurrent sessions
+#   makes every session accountable for every other session's edits.
 # - Skip cases (silent exit 0): no session_id, no git repo, no diff, no
 #   matching language files, threshold not met, marker already present.
 #
@@ -39,6 +44,14 @@ marker_dir="${TMPDIR:-/tmp}"
 marker="${marker_dir}/apex-suggest-review-${safe_session_id}"
 [ -f "$marker" ] && exit 0
 
+# Written by hooks/session-baseline.sh at SessionStart. Absent means the
+# snapshot could not be taken (no git repo then, hook installed mid-session,
+# a session that predates this file) — in which case every changed path is
+# treated as ours, which is exactly the behaviour before this was added.
+# Fail-open in the direction of nudging: a missed baseline should not silence
+# a review, it should only cost precision.
+baseline="${marker_dir}/apex-session-baseline-${safe_session_id}"
+
 # Anchor to the git repo root (the hook may fire from any CWD).
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -z "$repo_root" ] && exit 0
@@ -49,6 +62,32 @@ cd "$repo_root" || exit 0
 # is the most common "review needed" scenario, so we must merge both lists.
 tracked_files=$(git diff --name-only HEAD 2>/dev/null)
 untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null)
+
+# Drop the paths that look exactly as they did when this session started.
+# Reads a file list on stdin and writes back the subset this session moved.
+mine() {
+  if [ ! -f "$baseline" ]; then
+    cat
+    return
+  fi
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if [ -f "$f" ]; then
+      sha=$(git hash-object "$f" 2>/dev/null)
+    else
+      sha="-"   # deleted now; the baseline records deletions the same way
+    fi
+    # An exact line match means byte-identical content at the same path, so
+    # this session did not touch it. A file that was already dirty and got
+    # edited again hashes differently and stays — its whole diff vs HEAD is
+    # then counted, which over-states that one file but never invents one.
+    grep -qxF "${sha:--}	${f}" "$baseline" 2>/dev/null && continue
+    printf '%s\n' "$f"
+  done
+}
+
+tracked_files=$(printf '%s\n' "$tracked_files" | sed '/^$/d' | mine)
+untracked_files=$(printf '%s\n' "$untracked_files" | sed '/^$/d' | mine)
 diff_files=$(printf '%s\n%s\n' "$tracked_files" "$untracked_files" | sort -u | sed '/^$/d')
 [ -z "$diff_files" ] && exit 0
 

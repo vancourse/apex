@@ -4,15 +4,15 @@
 # agent that apex is installed, names the phase pipeline + entry points,
 # and points to FLOW.md for the canonical phase × skill matrix.
 #
-# Why this exists: every other apex hook in this plugin fires *reactively*
-# on user or agent activity (UserPromptSubmit, PreToolUse/Edit, PostToolUse,
-# Stop). The primer fires *proactively* once per fresh context — so the
+# Why this exists: every other advisory apex hook fires *reactively* on user
+# or agent activity (PreToolUse/Edit, PostToolUse, Stop). The primer fires
+# *proactively* once per fresh context — so the
 # agent knows apex exists before the first prompt arrives, instead of
 # discovering it through a keyword-matched skill suggestion that may or may
 # not happen on the first turn.
 #
 # Schema followed: stdout JSON with hookSpecificOutput.additionalContext,
-# same pattern as hooks/suggest-skill-on-prompt.sh.
+# same pattern as hooks/suggest-skill-on-edit.sh.
 
 set -u
 

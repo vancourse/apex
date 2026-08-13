@@ -15,16 +15,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_collisions.py"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
+          },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-skill-on-prompt.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-baseline.sh"
           }
         ]
       }
