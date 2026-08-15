@@ -9,7 +9,9 @@ body:
         the claim, so an unassigned open issue is genuinely unclaimed.
         Close it from the PR with `Closes #<n>` rather than by hand.
 
-        **Set the milestone.** It is the release this work item lands in.
+        **Set the milestone.** It is the release this work item lands in — and this
+        issue should be exactly one numbered step of that milestone's demo. See
+        `apex:release-loop`.
 
   - type: dropdown
     id: kind
@@ -48,8 +50,14 @@ body:
     attributes:
       label: Done when
       description: >
-        Observable conditions, one per line. "Tests pass" is not one of them —
-        name what a reader could check.
+        Observable conditions, one bullet per line. Each one must be **falsifiable** —
+        an observation that could come out the other way. "The golden test compares
+        both lanes and asserts the rows match" can fail. "A decision is recorded"
+        cannot: it is true the moment anyone says it is, which is how design work gets
+        counted as delivery. If a bullet cannot fail, it is not acceptance — rewrite it
+        as the observation that would prove it, or say plainly that this issue has no
+        checkable end. "Tests pass" is the same defect wearing a test's clothes: name
+        which test, over which input, asserting what.
       placeholder: |
         - <endpoint> returns <shape> for <case>
         - <package> is imported by <production caller>

@@ -37,8 +37,14 @@ jobs:
       - name: install pytest
         run: pip install pytest
       - name: hooks must compile
-        run: python -m py_compile hooks/_hooklib.py hooks/artifact_templates.py hooks/session_collisions.py
+        run: python -m py_compile hooks/_hooklib.py hooks/artifact_templates.py hooks/session_collisions.py hooks/acceptance_checklist.py hooks/issue_cap.py hooks/session_output_gate.py
       - name: hooks.json must be valid JSON
         run: python -c "import json; json.load(open('hooks/hooks.json'))"
       - name: hook suite
         run: python -m pytest hooks/tests/ -q
+      # The gates ship to other repos, so nothing in apex imports them and a broken
+      # one produces no diff here — the same silent-failure shape as the hooks above.
+      # `templates/**` was already in this workflow's paths filter; only the suite was
+      # missing, so these tests existed and never ran.
+      - name: gate suite
+        run: python -m pytest templates/gates/tests/ -q

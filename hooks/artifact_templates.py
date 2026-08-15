@@ -42,7 +42,6 @@ ceremonial one.
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
 import sys
@@ -52,13 +51,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _hooklib import (  # noqa: E402
+    command_key,
     emit,
     fail_open,
     find_repo_root,
+    flag_values,
     headings,
+    invocation_index,
+    plugin_root,
     read_payload,
     relative_to_root,
     run,
+    submitted_body,
     warn_once,
 )
 
@@ -241,20 +245,6 @@ def _discover_issue_forms(root: Path, rule: GhRule) -> list[IssueForm]:
     return forms
 
 
-def _flag_values(tokens: list[str], start: int, names: tuple[str, ...]) -> list[str]:
-    """Every value given for `names`, honouring `--flag v`, `--flag=v` and repeats."""
-    values = []
-    for index in range(start, len(tokens)):
-        token = tokens[index]
-        if token in names and index + 1 < len(tokens):
-            values.append(tokens[index + 1])
-        else:
-            for name in names:
-                if name.startswith("--") and token.startswith(f"{name}="):
-                    values.append(token.split("=", 1)[1])
-    return values
-
-
 def _select_issue_form(
     tokens: list[str], start: int, forms: list[IssueForm], rule: GhRule
 ) -> tuple[str, str]:
@@ -272,21 +262,20 @@ def _select_issue_form(
     """
     by_file = {form.filename: form for form in forms}
 
-    for value in _flag_values(tokens, start, ("--template", "-T")):
+    for value in flag_values(tokens, start, ("--template", "-T")):
         candidate = Path(value).name
         for filename, form in by_file.items():
             if candidate in (filename, Path(filename).stem):
                 return form.path, f"`--template {value}` names it"
 
     requested = {
-        value.strip().lower()
-        for value in _flag_values(tokens, start, ("--label", "-l"))
+        value.strip().lower() for value in flag_values(tokens, start, ("--label", "-l"))
     }
     for form in forms:
         if hit := sorted(lab for lab in form.labels if lab.lower() in requested):
             return form.path, f"`--label {hit[0]}` is the label this form applies"
 
-    for value in _flag_values(tokens, start, ("--title", "-t")):
+    for value in flag_values(tokens, start, ("--title", "-t")):
         for form in forms:
             if form.title_prefix and value.startswith(form.title_prefix):
                 return form.path, f"the title starts with `{form.title_prefix}`"
@@ -298,19 +287,6 @@ def _select_issue_form(
         "no `--template`, `--label` or title prefix matched, so this is the default"
         + hint,
     )
-
-
-def _plugin_root() -> Path:
-    """apex's own directory. `hooks/` sits directly under it.
-
-    `CLAUDE_PLUGIN_ROOT` is what the harness sets, so it wins; deriving from
-    `__file__` is the fallback that keeps the hook working when it is run directly,
-    which is how the tests drive it.
-    """
-    override = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parent.parent
 
 
 def _resolve_template(root: Path, name: str) -> tuple[Path, str] | None:
@@ -325,7 +301,7 @@ def _resolve_template(root: Path, name: str) -> tuple[Path, str] | None:
     local = root / "docs" / "templates" / name
     if local.is_file():
         return local, f"docs/templates/{name}"
-    shipped = _plugin_root() / "templates" / name
+    shipped = plugin_root() / "templates" / name
     if shipped.is_file():
         return shipped, f"apex's templates/{name}"
     return None
@@ -363,66 +339,6 @@ def _required_sections(root: Path, relative: str, is_form: bool) -> list[str]:
         for line in text.splitlines()
         if line.strip().startswith("#")
     ]
-
-
-def _invocation_index(tokens: list[str], rule: GhRule) -> int | None:
-    """Where `gh <sub> create` is actually *invoked*, as consecutive exact tokens.
-
-    A substring match over the raw command is not good enough. The first version
-    used one, and fired on a `git commit` whose message merely *mentioned*
-    `gh issue create` — then read that commit's `-F -` as a body flag and reported
-    every section missing. Tokenising and requiring exact, consecutive tokens keeps
-    quoted prose (``"`gh issue create`,"`` tokenises with the backticks attached)
-    from being mistaken for a command.
-    """
-    span = len(rule.invocation)
-    for index in range(len(tokens) - span + 1):
-        if tuple(tokens[index : index + span]) == rule.invocation:
-            return index
-    return None
-
-
-def _submitted_body(command: str, root: Path, start: int = 0) -> tuple[str, str] | None:
-    """What is being submitted as the body: `(kind, value)`, or None if no body flag.
-
-    `kind` is one of:
-
-    * ``"text"``       — the body itself, read inline or from a file we could open.
-    * ``"unreadable"`` — a `--body-file` we could not open; `value` is the path.
-
-    That distinction is load-bearing. A hook sees the command *before* the shell
-    expands it, so `--body-file "$SP/body.md"` arrives with `$SP` unexpanded and
-    cannot be read. Collapsing that into an empty body made every section look
-    absent and produced a confident, totally wrong "you are missing all 7 sections"
-    — a false positive that trains the reader to ignore the check, which is worse
-    than not checking at all.
-    """
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        return None
-    for index, token in enumerate(tokens):
-        value = None
-        if index < start:
-            # A body flag before the gh invocation belongs to some other command —
-            # `git commit -F -` is not submitting a PR body.
-            continue
-        if token in ("--body", "-b", "--body-file", "-F") and index + 1 < len(tokens):
-            value = tokens[index + 1]
-        elif token.startswith(("--body=", "--body-file=")):
-            value = token.split("=", 1)[1]
-        else:
-            continue
-        if token in ("--body", "-b") or token.startswith("--body="):
-            return ("text", value)
-        candidate = Path(value)
-        for probe in (candidate, root / candidate):
-            try:
-                return ("text", probe.read_text(encoding="utf-8"))
-            except OSError:
-                continue
-        return ("unreadable", value)
-    return None
 
 
 def _render_doc(rel: Path, rule: DocRule, template: str, source: str) -> str:
@@ -550,7 +466,7 @@ def _handle_bash(payload: dict, session: str) -> None:
         (
             (rule, index)
             for rule in GH_RULES
-            if (index := _invocation_index(tokens, rule)) is not None
+            if (index := invocation_index(tokens, rule.invocation)) is not None
         ),
         None,
     )
@@ -573,10 +489,10 @@ def _handle_bash(payload: dict, session: str) -> None:
         fail_open()
 
     context = _render_gh(
-        rule, template, chosen_because, required, _submitted_body(command, root, start)
+        rule, template, chosen_because, required, submitted_body(command, root, start)
     )
     # Keyed on the command so a corrected retry is checked again rather than muted.
-    if context is None or warn_once(session, f"gh-{rule.id}-{hash(command)}"):
+    if context is None or warn_once(session, f"gh-{rule.id}-{command_key(command)}"):
         fail_open()
     emit(context)
 

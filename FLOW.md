@@ -342,6 +342,7 @@ ui-design-review                     ✓¹⁴               ✓¹⁴
 cicd-review                                            ✓¹⁵                                                ✓¹⁵   (SHIP)
 deployment-review                           ✓¹⁶        ✓¹⁶                                                       (SHIP)
 release-readiness                                                                                                (SHIP=8)
+release-loop                                                                                                     (WRAPS 1-8)
 memory-note                                                                                                          after
 
 superpowers:systematic-debugging   — side path; fires on bug discovery (any phase)
@@ -356,6 +357,7 @@ apex:incident-retro                — side path; post-release, on a RESOLVED in
 apex:autonomous-fix                — side path; the rails an unattended/supervised agent must satisfy before a bug-fix PR (wraps any runner; draft-only). Unattended counterpart to ai-pre-review-checklist.
 apex:detect-stack                  — side path; profiles bug-loop tooling (tracker / observability / reproduce) into a routing-only apex.profile.toml (/apex:detect-stack).
 apex:investigate-bug               — side path; stack-adaptive read-only diagnosis — routes via apex.profile.toml, reproduces, hands to autonomous-fix P3→P4. Parent of a project's bug-bot.
+apex:release-loop                  — WRAPS the pipeline at release granularity: a release is a milestone whose done is a numbered, operator-runnable demo; issues map 1:1 to demo steps with FALSIFIABLE `Done when`; the first PR is the demo's walking skeleton (walls before rooms); the milestone CLOSES on the demo, backstopped by a scheduled milestone_completion_gate. apex's only EXIT gate — every other gate above guards an entry condition. Sits around phases 1-7 and hands to release-readiness at 8.
 apex:project-bootstrap             — upstream of EVERYTHING (/apex:new): greenfield scaffold (official generator) or ADOPT mode; routes decisions to architecture-design, the CI baseline to cicd-review, and queues the walking-skeleton PRD
 apex:council-review                — side path; three-seat review council (steelman / security adversary / operability skeptic) for the FOUR highest-stakes freezes only — arch freeze, auth/payment/tenant/crypto design freeze, irreversible migration, public API freeze. One round; ≥2-seat agreement = blocker; explicit disagreement goes to the human verbatim. Extends adversarial-pair; never a persona swarm.
 ```
