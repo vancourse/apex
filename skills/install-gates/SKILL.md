@@ -48,9 +48,11 @@ Also record the repo's Python situation: `pr_body_check.py` needs **Python 3.11+
 Copy from the plugin's [`templates/gates/`](../../templates/gates/) into the target repo. `ci/` is the suggested home — both scripts resolve the repo root through `git rev-parse --show-toplevel` and fall back to their parent directory, so any depth works, but `ci/` is what every example here assumes:
 
 ```
-templates/gates/pr_body_check.py   ->  ci/pr_body_check.py
-templates/gates/pre_pr_check.py    ->  ci/pre_pr_check.py
-templates/gates/tests/             ->  ci/tests/            (optional, recommended)
+templates/gates/pr_body_check.py             ->  ci/pr_body_check.py
+templates/gates/pre_pr_check.py              ->  ci/pre_pr_check.py
+templates/gates/acceptance_check.py          ->  ci/acceptance_check.py
+templates/gates/milestone_completion_gate.py ->  ci/milestone_completion_gate.py
+templates/gates/tests/                       ->  ci/tests/            (optional, recommended)
 ```
 
 Copy the tests too unless the user declines. They cost one directory and they are the only thing standing between a live gate and a **silently dead** one: a check that stopped reading git, or lost an import in a refactor, looks exactly like a check with nothing to report. The suite drives both scripts against real temporary repositories precisely because the predicate tests cannot prove the gate is wired to anything.
@@ -106,6 +108,47 @@ jobs:
 ```
 
 `PR_AUTHOR_TYPE` is what exempts bots — a dependency bot cannot write a reuse verdict, and blocking its lockfile bump helps nobody.
+
+**Add the acceptance step to the same job** when the repo works in issues and milestones (`apex:release-loop`). It needs a token, because it reads the issues the body closes:
+
+```yaml
+      - name: PR answers the acceptance criteria of the issues it closes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: python ci/acceptance_check.py
+```
+
+### Step 3b — Wire the completion gate on a **scheduled** lane
+
+This one cannot go in `pr-gates.yml`, and the reason is not stylistic. The condition it watches — a milestone whose issues are all closed, still sitting open — becomes true *after* the final PR merges, which is exactly when no PR lane is running. Put it on a schedule, in its own workflow or as a scheduled job in an existing one:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 9 * * 1-5"
+
+jobs:
+  milestones:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Finished milestones are closed (gate)
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python ci/milestone_completion_gate.py
+```
+
+**This is CI wiring, not plugin wiring** — apex ships the script and this snippet, and the consuming repo adds the step. A plugin cannot install CI, which is the premise of this whole skill. Do **not** add the completion gate to branch protection: it is a scheduled report about the tracker, not a verdict on any PR, and requiring it would block every merge on the state of an unrelated milestone.
+
+The measurement behind it: one repo's first 33 days ended at **47 milestones open, 0 closed, 11 of them holding zero open issues**. Nothing was broken and every issue had closed correctly — there was simply no moment that said "this release is done".
 
 **GitLab CI — the same contract in its dialect:**
 

@@ -39,6 +39,10 @@ I FIRE THESE AUTOMATICALLY based on phase + file paths (NOT in the slash menu �
               cicd-review (editing .github/workflows / gitlab-ci / Jenkinsfile —
               least-privilege, SHA-pinned actions, OIDC) · deployment-review
               (deploy workflows / IaC / env promotion — rollback before deploy)
+  Release:    release-loop (starting/resuming/closing a versioned unit of work —
+              the milestone-demo loop and the EXIT gate apex otherwise lacks:
+              done is a numbered operator-runnable demo, issues map 1:1 to its
+              steps, and finished milestones get closed mechanically)
   Council:    council-review (by name — three-seat review for the four highest-
               stakes freezes only: arch · auth/payment design · irreversible
               migration · public API. One round; disagreement goes to YOU.)

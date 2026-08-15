@@ -254,8 +254,8 @@ def test_checks_issue_bodies_against_the_form_fields(repo: pathlib.Path) -> None
 # ------------------------------------------------------------------- issue-form routing
 #
 # `.github/ISSUE_TEMPLATE/` holds more than one form. Checking every issue against
-# `work-item.yml` reported a correctly-formed defect as missing all seven work-item
-# fields — a confident false positive, which is the failure mode that teaches a
+# `work-item.yml` reported a correctly-formed defect as missing every work-item
+# field — a confident false positive, which is the failure mode that teaches a
 # reader to ignore the check entirely.
 
 _DEFECT_BODY = """### Where observed
@@ -268,6 +268,10 @@ A thing.
 Another thing.
 ### Reproduction
 Steps.
+### Consecutive runs (intermittent only)
+3 fail / 5 runs, isolated.
+### Regression guard
+tests/ingest/test_loader.py::test_quoted_newlines
 ### Blast radius
 Small.
 ### Which gate should have caught this?
@@ -297,8 +301,8 @@ def test_a_defect_is_checked_against_the_defect_form(
 ) -> None:
     """Every signal that says "this is a defect" must route to defect.yml.
 
-    The body carries all seven defect fields and none of work-item's, so a wrong
-    route is unmissable: it reports seven missing sections instead of none.
+    The body carries every defect field and none of work-item's, so a wrong route is
+    unmissable: it reports every section missing instead of none.
     """
     body = _defect_body(repo)
     context = _context(_bash(f'gh issue create {flags} --body-file "{body}"', cwd=repo))

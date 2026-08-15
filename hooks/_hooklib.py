@@ -17,8 +17,10 @@ than one that occasionally blocks work.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -100,6 +102,19 @@ def relative_to_root(target: Path, root: Path) -> Path | None:
         return None
 
 
+def command_key(command: str) -> str:
+    """A stable `warn_once` key for one shell command.
+
+    `hash()` is the obvious thing to reach for and it is wrong here. Python salts
+    string hashing per interpreter process, and every hook invocation IS a new
+    process — so a key built from `hash(command)` differs on every call, the marker
+    file is never found again, and the once-per-command muting silently does nothing.
+    It looks like it works because the observable symptom is a hook that speaks, which
+    is also what a hook with something new to say looks like.
+    """
+    return hashlib.sha256(command.encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def warn_once(session_id: str, key: str) -> bool:
     """True when this (session, key) has already been warned.
 
@@ -117,6 +132,93 @@ def warn_once(session_id: str, key: str) -> bool:
     except OSError:
         return False
     return False
+
+
+def plugin_root() -> Path:
+    """apex's own directory. `hooks/` sits directly under it.
+
+    `CLAUDE_PLUGIN_ROOT` is what the harness sets, so it wins; deriving from
+    `__file__` is the fallback that keeps the hooks working when they are run
+    directly, which is how the tests drive them.
+    """
+    override = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent
+
+
+def invocation_index(tokens: list[str], invocation: tuple[str, ...]) -> int | None:
+    """Where `gh <sub> <verb>` is actually *invoked*, as consecutive exact tokens.
+
+    A substring match over the raw command is not good enough. The first version of
+    this used one, and fired on a `git commit` whose message merely *mentioned*
+    `gh issue create` — then read that commit's `-F -` as a body flag and reported
+    every section missing. Tokenising and requiring exact, consecutive tokens keeps
+    quoted prose (``"`gh issue create`,"`` tokenises with the backticks attached)
+    from being mistaken for a command.
+    """
+    span = len(invocation)
+    for index in range(len(tokens) - span + 1):
+        if tuple(tokens[index : index + span]) == invocation:
+            return index
+    return None
+
+
+def flag_values(tokens: list[str], start: int, names: tuple[str, ...]) -> list[str]:
+    """Every value given for `names`, honouring `--flag v`, `--flag=v` and repeats."""
+    values = []
+    for index in range(start, len(tokens)):
+        token = tokens[index]
+        if token in names and index + 1 < len(tokens):
+            values.append(tokens[index + 1])
+        else:
+            for name in names:
+                if name.startswith("--") and token.startswith(f"{name}="):
+                    values.append(token.split("=", 1)[1])
+    return values
+
+
+def submitted_body(command: str, root: Path, start: int = 0) -> tuple[str, str] | None:
+    """What is being submitted as the body: `(kind, value)`, or None if no body flag.
+
+    `kind` is one of:
+
+    * ``"text"``       — the body itself, read inline or from a file we could open.
+    * ``"unreadable"`` — a `--body-file` we could not open; `value` is the path.
+
+    That distinction is load-bearing. A hook sees the command *before* the shell
+    expands it, so `--body-file "$SP/body.md"` arrives with `$SP` unexpanded and
+    cannot be read. Collapsing that into an empty body made every section look
+    absent and produced a confident, totally wrong "you are missing all 7 sections"
+    — a false positive that trains the reader to ignore the check, which is worse
+    than not checking at all.
+    """
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens):
+        value = None
+        if index < start:
+            # A body flag before the gh invocation belongs to some other command —
+            # `git commit -F -` is not submitting a PR body.
+            continue
+        if token in ("--body", "-b", "--body-file", "-F") and index + 1 < len(tokens):
+            value = tokens[index + 1]
+        elif token.startswith(("--body=", "--body-file=")):
+            value = token.split("=", 1)[1]
+        else:
+            continue
+        if token in ("--body", "-b") or token.startswith("--body="):
+            return ("text", value)
+        candidate = Path(value)
+        for probe in (candidate, root / candidate):
+            try:
+                return ("text", probe.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+        return ("unreadable", value)
+    return None
 
 
 def headings(markdown: str) -> list[str]:
