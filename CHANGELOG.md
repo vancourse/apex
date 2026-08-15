@@ -4,7 +4,7 @@ All notable changes to apex are documented here. Format follows [Keep a Changelo
 
 ---
 
-## [Unreleased]
+## [0.6.0] — 2026-08-15
 
 The **exit** half of the SDLC. Every gate apex had guarded an *entry* condition — may this work start, is it declared, is it reviewed, is it releasable — and none guarded the mechanical moment a release is declared **done**. Measured on a real repo over its first 33 days: **47 milestones open, 0 closed, 11 of them holding zero open issues**, three of those releases of the very component its operator believed was incomplete. Nothing was broken; every issue had closed correctly through `Closes #N`. There was simply no moment anywhere saying "this release is done, stop touching it", so the tracker could not display success and the project felt permanently incomplete. **A process that cannot say *done* converts finished work into felt failure.**
 
