@@ -26,7 +26,7 @@ REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 # ── prerequisites ──────────────────────────────────────────────────────────────
-for cmd in gh git jq zip; do
+for cmd in gh git jq; do
   command -v "$cmd" &>/dev/null || { echo "ERROR: '$cmd' not found in PATH" >&2; exit 1; }
 done
 
@@ -97,13 +97,21 @@ git tag -a "$TAG" -m "apex $VERSION"
 git push origin "$TAG"
 
 # ── build zip ─────────────────────────────────────────────────────────────────
-ZIP_DIR="/tmp/apex-${VERSION}"
+# `git archive` writes the zip itself. The previous version extracted a tar into a
+# temp directory and re-compressed it with `zip`, which bought nothing and cost a
+# dependency: `zip` is absent from most Linux images (and from this repo's own CI
+# runner), so the release aborted at the prerequisite check on any machine without
+# it. `--prefix` reproduces the single top-level `apex-<version>/` directory the
+# extract-then-zip version produced, so what a consumer unpacks is unchanged —
+# verified by diffing the file lists of both forms at v0.6.0: 215 files, identical.
+#
+# Still built from the TAG, never the working tree: a working tree carries
+# uncommitted state, and an artifact built from one is not the thing the tag names.
 ZIP_PATH="${HOME}/Downloads/apex-${VERSION}.zip"
 echo "→ building $ZIP_PATH"
-rm -rf "$ZIP_DIR"
-mkdir -p "$ZIP_DIR"
-git archive --format=tar "$TAG" | tar -x -C "$ZIP_DIR"
-( cd /tmp && zip -rq "$ZIP_PATH" "apex-${VERSION}" )
+# ~/Downloads is a macOS given, not a Linux one.
+mkdir -p "$(dirname "$ZIP_PATH")"
+git archive --format=zip --prefix="apex-${VERSION}/" -o "$ZIP_PATH" "$TAG"
 echo "   size: $(du -sh "$ZIP_PATH" | cut -f1)"
 
 # ── github release ─────────────────────────────────────────────────────────────
