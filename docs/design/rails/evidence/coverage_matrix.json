@@ -1,0 +1,138 @@
+[
+ {
+  "root_cause": "wiring_integration",
+  "share_of_escapes_pct": 15.7,
+  "best_catch": "boot_smoke_real_wiring: booting the real composition root caught 42 of 88 commit fixes and 41 gaps, including 22 built_not_wired; real-backend e2e caught 23 more",
+  "apex_has_mechanism": "No executable mechanism. Prose only: rules/landing-a-component.md, the impl-plan template Wiring section, and the consumer step of ai-pre-review-checklist (1 Skill call).",
+  "jarvis_enforced": "advisory",
+  "worked": "No. fleet-smoke runs on schedule only and is not in gate.needs. It found registry_meta never installed, the audit_event owner defect and the create-role defect, then sat red for 37 consecutive scheduled runs while master was green. The modules-are-consumed gate is satisfied by any __init__ import (#2348, #2400). The 2026-08-10 wiring audit (~13 mount fixes) and all 63 built_not_wired gaps were found after merge."
+ },
+ {
+  "root_cause": "deploy_env_config",
+  "share_of_escapes_pct": 10.5,
+  "best_catch": "deploy_preflight caught 50 of 90 commit fixes; boot_smoke caught 16 more",
+  "apex_has_mechanism": "deployment-review and cicd-review skills, with 0 uses in jarvis. The cicd-review nudge never fired: the path hook is inert on Windows backslash paths.",
+  "jarvis_enforced": "advisory",
+  "worked": "Partly. The image gate blocks and is 75% real-defect precise, and it ended Dockerfile COPY rot. Env forwarding has no derived parity check: renderer, compose, validator and settings drift was re-fixed 9 times in 7 days (16bc6e14c5..5ed0b7c8fb), and --sync lost 4 then 12 keys (ca0371b19c, 82188d5caa). The Azure cutover took 11 fixes after two review rounds (4fab171e46..42f5e75242). nexusiq had 20 deploy_preflight-catchable fixes and no CI to catch them."
+ },
+ {
+  "root_cause": "harness_self",
+  "share_of_escapes_pct": 10.4,
+  "best_catch": "The gate's own planted-defect test plus a false-positive measurement on the real tree before enabling (unit_test, 57 of 103)",
+  "apex_has_mechanism": "hook-tests.yml, which covers apex's own hooks only and not Windows paths; test-strategy rule 18 (0 uses)",
+  "jarvis_enforced": "prose_only",
+  "worked": "No. The 'planted defects and FP rate first' rule lives only in CLAUDE.md. The Windows scheduler job was red on 7 of 7 pushes on day one. Sherpa gate B: 214 failures, 0 successes, 0 product defects. purser-e2e: 101 reds from one time bomb. Docs train: 186 failures, 0 product defects. Milestone gate: 20 of 20 red, unread. Harness defects are 44% of all CI job failures. One meta-test (test_hook_delivery_channel) blocks, and it covers delivery channels only."
+ },
+ {
+  "root_cause": "contract_drift",
+  "share_of_escapes_pct": 8.9,
+  "best_catch": "static_types_or_codegen (27 of 71) and contract_test (26 of 71)",
+  "apex_has_mechanism": "polymorphic-type-modeling and protocol-first-workflow skills (prose, mentioned in 1 file each)",
+  "jarvis_enforced": "blocking",
+  "worked": "Yes where a gate exists. wire_contract_baseline_gate and ci/contract_gate (38 real failures across 27 branches) are the clearest contract-first wins. Escapes cluster at unpinned seams: the UI vs engine health vocabulary (b2b8b3de0b, 1f6541bc0c), private copies of the authority vocabulary (79a91bae01, 8d8eaccdb1), and 23 Hearth routes that bypass response_model (#2326). nexusiq had no such gate (event names f8ec8f0a10; script contract changed over 4 rounds)."
+ },
+ {
+  "root_cause": "security_privacy",
+  "share_of_escapes_pct": 8.5,
+  "best_catch": "Unit test under the production DB role (19), seam/threat design review (16), code review (15)",
+  "apex_has_mechanism": "threat-model, security-review and multi-tenancy skills (prose). threat-model was effective: the two-pass STRIDE in #1580. security-review and multi-tenancy had 0 calls.",
+  "jarvis_enforced": "blocking",
+  "worked": "Partly. Deny hooks (secret_env 95 denials) and census tests (binder inventory, handle census, RLS coverage) caught real regressions. But the suite ran as the postgres superuser, so FORCE RLS was ignored (605eb1fc10, 02feadf311, #2414, #2419 P0). The RLS gate scanned *.py only (d71d2cd8b2). 30 security gaps sat at the edge and at seams: CSP #2379, CSRF #2381, per-route authz #2235, anonymous access #2229, offboarding #2359-#2365. 21 real household amounts were committed as fixtures (#2527)."
+ },
+ {
+  "root_cause": "error_handling",
+  "share_of_escapes_pct": 6.8,
+  "best_catch": "Unit test with a raising or rejecting stub (30 of 52); a result type that forces error handling",
+  "apex_has_mechanism": "python-review and typescript-review flag broad excepts (advisory skills; effective per slice)",
+  "jarvis_enforced": "prose_only",
+  "worked": "No. In #2240, 42 of ~90 useLoad call sites ignore the error. #2295-#2300 are fallbacks that return absent, -1 or a healthy status. c4331de4ee caught a 404 into a simulated passkey success. In nexusiq, a3331425ec silently failed all agent executions. No type forces failure handling."
+ },
+ {
+  "root_cause": "state_lifecycle",
+  "share_of_escapes_pct": 5.7,
+  "best_catch": "Unit test under two pinned clocks with a non-UTC member (22 of 43)",
+  "apex_has_mechanism": "None",
+  "jarvis_enforced": "none",
+  "worked": "No. The clock seam was re-fixed about 7 times, one caller each (5f4bc2a10a, 3c6fd79918, 39226fcfbb, eeae3969c7, 3fa83301f6, 445af1719b, 9ae818e008). The dated walkthrough corpus expired and produced 101 identical reds (#1892). Pulse ran every member on UTC (#2232). No design document defines which notion of now each figure uses."
+ },
+ {
+  "root_cause": "domain_rule",
+  "share_of_escapes_pct": 5.4,
+  "best_catch": "golden_real_data_diff (23 of 32 commit fixes) plus a cross-surface parity test",
+  "apex_has_mechanism": "None",
+  "jarvis_enforced": "none",
+  "worked": "No. These defects were found by the operator running the real ledger: roughly 50 of 113 fixes in the 08-31..09-14 batch were detected by the operator on real data. One concept was implemented 2 to 10 times: income x4, ledger frontier x6-7, month arithmetic x8-10. Cross-surface parity tests arrived only with the Purser H1 feature freeze on 2026-10-04. The privacy rule keeps real data out of CI, and nothing replaced that check locally."
+ },
+ {
+  "root_cause": "test_defect",
+  "share_of_escapes_pct": 5,
+  "best_catch": "Mutation-checking the test itself (unit_test 41 of 49)",
+  "apex_has_mechanism": "test-strategy skill rules (0 uses in jarvis)",
+  "jarvis_enforced": "prose_only",
+  "worked": "No. Tests supply their own precondition (4324b7e6ce, 2a607b105c). Fixtures fabricate shapes (aa35c6f224, be15ae3325, f76075ca10). Guards are tautological (2eb1dc8b77, 7d44209e75). One walkthrough asserted text taken from the POST response (1c70281fc2). nexusiq still has 64 'status_code != 404' assertions at HEAD after the pattern was banned in prose."
+ },
+ {
+  "root_cause": "ux_truthfulness",
+  "share_of_escapes_pct": 4.9,
+  "best_catch": "e2e_user_journey (15 of 33)",
+  "apex_has_mechanism": "ui-design-review skill (0 uses)",
+  "jarvis_enforced": "blocking",
+  "worked": "Only in Purser. The Purser walkthrough has been required since 09-04 and caught real honesty regressions: the pencil mark, the stale-balance mark, the trust chip. Elsewhere nothing caught them: 24 fake_or_pretends gaps, including the Larsen household greeting real families (f54578e266), 'ALWAYS ON' alerts that never send (#2231), ALL QUIET over a 503 (#2238), and release ids on household screens (#2217)."
+ },
+ {
+  "root_cause": "external_integration",
+  "share_of_escapes_pct": 4.3,
+  "best_catch": "e2e or a live/recorded provider contract smoke (16), plus a design review of the determinism boundary (12)",
+  "apex_has_mechanism": "verify-ports skill (light use)",
+  "jarvis_enforced": "none",
+  "worked": "No. nexusiq's MiniMax/Ollama layer was re-fixed about 12 times in 12 days, mocks stayed green while live calls returned 400 (e2a9040a26), and the trade analyst took about 15 prompt commits. In jarvis, a dependabot vitest upgrade stayed red for 24 days and was never fixed."
+ },
+ {
+  "root_cause": "ui_behavior",
+  "share_of_escapes_pct": 3.5,
+  "best_catch": "e2e_user_journey (22 of 31)",
+  "apex_has_mechanism": "rules/frontend.md and ui-design-review (0 uses)",
+  "jarvis_enforced": "blocking",
+  "worked": "Mixed. The frontend job has the highest precision of any job (80% real defects). Sherpa geometry produced 0 product defects in 216 failures. No gate runs at 375px or tests back and reload (#2219, #2218). nexusiq had e2e specs but no journey asserting one bubble per reply, and the duplicate-bubble bug was fixed 4 times in 3 days."
+ },
+ {
+  "root_cause": "docs_drift",
+  "share_of_escapes_pct": 3.4,
+  "best_catch": "code_review (20 of 34) and claims-match-code tests",
+  "apex_has_mechanism": "None",
+  "jarvis_enforced": "blocking",
+  "worked": "Per claim only. test_ci_lanes, test_working_notes_commands and the test_*_claims_match_the_code tests each pin one measured lie. The release skill still says pr_body_check refuses PRs, which is false. The process README says CLAUDE.md is 1,900 words; it is 9,160. 31% of the status yard's 'ready' rows were stale. One stale prompt led sessions to build CO6c three times."
+ },
+ {
+  "root_cause": "data_persistence",
+  "share_of_escapes_pct": 3.4,
+  "best_catch": "boot_smoke including migrate-from-previous-release and boot-twice (10 of 25)",
+  "apex_has_mechanism": "data-migration-review and postgres-review skills (0 to 2 file mentions)",
+  "jarvis_enforced": "blocking",
+  "worked": "Partly. The handle census and read-cut caught 35 job failures on 21 branches. But migration rehearsal was never automated: 0272d9dc40 failed every dev candidate image. The custody migration was not idempotent on restart (b2d5292078). LIMIT 2000 silently dropped 56% of rows (88e3a8a592)."
+ },
+ {
+  "root_cause": "spec_gap",
+  "share_of_escapes_pct": 2.2,
+  "best_catch": "design_review_of_seams and acceptance criteria in the spec",
+  "apex_has_mechanism": "prd-review (effective: real send-backs) and cross-artifact-consistency (0 calls)",
+  "jarvis_enforced": "blocking",
+  "worked": "Narrowly. design_coverage_gate covers one design. scenario_coverage was added only after tenancy scenarios 18-22 survived two impl-plan-review rounds with no owner (#1467)."
+ },
+ {
+  "root_cause": "other",
+  "share_of_escapes_pct": 0.9,
+  "best_catch": "code_review",
+  "apex_has_mechanism": "n/a",
+  "jarvis_enforced": "none",
+  "worked": "Not actionable: compound or unclassifiable commits."
+ },
+ {
+  "root_cause": "performance",
+  "share_of_escapes_pct": 0.7,
+  "best_catch": "design_review_of_seams (state inherited resource defaults explicitly)",
+  "apex_has_mechanism": "None; the wave-2 performance-review skill was never built",
+  "jarvis_enforced": "none",
+  "worked": "Rare. Found in use: a pool exhaustion hang froze /readyz for 30 seconds (8f760da1e5), and a 90-second wait in nexusiq (41f4d5478d)."
+ }
+]

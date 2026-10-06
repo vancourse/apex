@@ -1,0 +1,242 @@
+[
+ {
+  "ref": "jarvis e854e76289",
+  "summary": "Apps mounted under the fleet root never ran their sub-app lifespans. Requests returned 500 while /readyz reported healthy.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring (request every mounted app once)"
+ },
+ {
+  "ref": "jarvis d1ad2720b1 (#1055)",
+  "summary": "The Purser frontend under /apps/purser fetched origin-absolute /api paths. The shell SPA fallback answered 200 text/html, so every screen died on JSON parse. The mock-first GUI seam never exercised the served path.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring / e2e_user_journey on the built bundle under the real mount"
+ },
+ {
+  "ref": "jarvis c26832080a",
+  "summary": "The fleet worker drained an empty topic set, so extraction.requested jobs stayed pending forever. The scheduling design had listed 'an unregistered topic sits pending' as a security property.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring (every produced topic has a handler)"
+ },
+ {
+  "ref": "jarvis 7f98347cd3",
+  "summary": "The passkey RP identity was never forwarded through the compose env allowlist. The container booted healthy and every enrolment and login on the fleet failed silently.",
+  "root_cause": "deploy_env_config",
+  "earliest_catch": "deploy_preflight (app-read settings vs compose-forwarded vars)"
+ },
+ {
+  "ref": "jarvis 605eb1fc10",
+  "summary": "Nine dataplane tenant tables had zero RLS policies and no GUC binding. The suite ran as postgres, so FORCE RLS was ignored and every test passed.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "unit_test under the production NOSUPERUSER NOBYPASSRLS role"
+ },
+ {
+  "ref": "jarvis 18bc907fd2 -> 7cd205043b",
+  "summary": "RESET leaves the tenant GUC as an empty string, not NULL, so unbound sessions could read and write text-keyed tenant tables. The first fix's nullif did not cover a widened 'OR shared' arm, which leaked shared rows.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "unit_test with the vendor premise measured and predicate composition cases enumerated"
+ },
+ {
+  "ref": "jarvis f222ae1d9b (#362)",
+  "summary": "A queued job's RLS tenant was taken from the envelope without a check. The scheduling design had written this down as intended behaviour.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "design_review_of_seams (provenance: who stamps the field, who may trust it)"
+ },
+ {
+  "ref": "jarvis 5d85ad30b1 / 2b7ff62abc / 8be7672509",
+  "summary": "Rate limiter, three defects in 8 days: a rollback erased brute-force counts, the async twin admitted 9 of 9 against a limit of 3, and the IP axis keyed on the proxy peer, making one bucket for the whole household.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "unit_test (N parallel admits at cap+k; a parity suite shared by both twins; a simulated proxy)"
+ },
+ {
+  "ref": "jarvis 9f5fa69c35",
+  "summary": "Every dataplane Join query crashed through the real tool because a Join was unhashable in the nomination hash. Layer-2 tests called executor.run directly and never went through the real caller.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "e2e_user_journey (scenario test through the only real caller)"
+ },
+ {
+  "ref": "jarvis 6437998b77 -> 9f1bdb165e",
+  "summary": "Conformance enforcement refused every read after a household added or skipped a field. Master was red for 20 hours, dev-jarvis froze, and documents vanished.",
+  "root_cause": "contract_drift",
+  "earliest_catch": "unit_test listing every supported mutation of the enforced shape"
+ },
+ {
+  "ref": "jarvis 88e3a8a592",
+  "summary": "LedgerStore's default LIMIT 2000 silently left the oldest 56% of 4,548 rows out of every rollup.",
+  "root_cause": "data_persistence",
+  "earliest_catch": "golden_real_data_diff / a fixture larger than every default limit"
+ },
+ {
+  "ref": "jarvis 4d4c7e8ade",
+  "summary": "Capital summed liabilities as idle cash even though LIQUID_KINDS already existed. A new engine re-derived the rule instead of calling its owner.",
+  "root_cause": "domain_rule",
+  "earliest_catch": "golden_real_data_diff plus a concept-owner arch gate"
+ },
+ {
+  "ref": "jarvis 7de1a0348f / 5857575cd5",
+  "summary": "Runway shipped for a month with 2 of the 4 inputs in PRD F6's formula, and its caption kept naming two. The implementing issue's Done-when omitted the formula.",
+  "root_cause": "domain_rule",
+  "earliest_catch": "acceptance_criteria_in_spec (formula copied verbatim as a planted-household test)"
+ },
+ {
+  "ref": "jarvis 39226fcfbb / 3c6fd79918 / 445af1719b",
+  "summary": "Budgets were derived only via the CLI and filed under the data month while screens read today's month. Budget showed 0.00, and the month rollover turned 4 tests red repo-wide.",
+  "root_cause": "state_lifecycle",
+  "earliest_catch": "unit_test under two pinned clocks"
+ },
+ {
+  "ref": "jarvis #1892 (purser-e2e shortfall card)",
+  "summary": "The walkthrough's dated corpus expired on 2026-09-02 because when_for(None) reads the wall clock. That produced 101 identical reds across 29 branches, which CLAUDE.md misrecorded as 'never green'.",
+  "root_cause": "harness_self",
+  "earliest_catch": "unit_test (pinned as-of in the test corpus and in the server env)"
+ },
+ {
+  "ref": "jarvis #1962 (sherpa gate B)",
+  "summary": "Sherpa gate B: 214 failures and 0 successes across 56 branches. The cause was a text line sitting exactly on its wrap point, with 0 product defects; diagnosis took 5 commits and 2 wrong theories.",
+  "root_cause": "harness_self",
+  "earliest_catch": "gate false-positive measurement on the real tree before enabling"
+ },
+ {
+  "ref": "jarvis 0272d9dc40",
+  "summary": "CREATE OR REPLACE VIEW cannot drop a column on an existing database, so every dev candidate image failed its health gate. 'Migration rehearsal' existed only as a checklist word.",
+  "root_cause": "data_persistence",
+  "earliest_catch": "deploy_preflight (apply to a DB migrated to the previous release)"
+ },
+ {
+  "ref": "jarvis 4324b7e6ce -> 2a607b105c -> 6fc2a90a95",
+  "summary": "Hook override tests injected the env var through a path no agent can reach. The gate then compared session labels to the wrong string and refused 4 of 7 live owners.",
+  "root_cause": "test_defect",
+  "earliest_catch": "unit_test against real data (63 labels vs 93 worktrees)"
+ },
+ {
+  "ref": "jarvis gap #2226",
+  "summary": "A freshly enrolled Hearth member could never sign in because the member id was never handed from enrolment to login. The runbook's proof stopped at the verification code, and every e2e used /dev/login.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "e2e_user_journey written from the receiving side, dev login off"
+ },
+ {
+  "ref": "jarvis gap #2240",
+  "summary": "Twelve Purser screens hang on 'Loading...' forever when their main read fails. 42 of about 90 useLoad call sites destructure only data.",
+  "root_cause": "error_handling",
+  "earliest_catch": "static_types_or_codegen (a result type that forces error handling) plus a rejecting-stub test"
+ },
+ {
+  "ref": "jarvis gap #2238",
+  "summary": "The shell ignores the dataplane-disabled 503 and shows ALL QUIET over empty screens. A design review had found this class on 2026-07-26 and left the remedy to the builder.",
+  "root_cause": "ux_truthfulness",
+  "earliest_catch": "e2e_user_journey (503-disabled state row)"
+ },
+ {
+  "ref": "jarvis gap #2245 / #2234",
+  "summary": "Sherpa, with about 60k words of docs, is mounted on no fleet: the renderer never writes JARVIS_APP_SHERPA, and the Twilio env names collide with a platform boot check.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring with every app flag ON"
+ },
+ {
+  "ref": "jarvis gap #2246",
+  "summary": "Pulse's no-dosing guardrail sits behind a narrator the fleet never wires, and the assistant composes Pulse tools without it. The safety acceptance criterion passed only as a unit test.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke plus e2e through the fleet with a scripted model"
+ },
+ {
+  "ref": "jarvis gap #2235",
+  "summary": "Any signed-in Purser member could mint an enrolment grant and hold a passkey for another member, and there was no way to list or revoke passkeys.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "design_review_of_seams (route x actor authorization matrix)"
+ },
+ {
+  "ref": "jarvis gap #2270 / #2357",
+  "summary": "The desktop composition root registered no schedules and omitted read_seam, so 'Show email' returned 404. Acceptance (#2118) had listed two hand-picked parity fields.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring with derived root parity"
+ },
+ {
+  "ref": "jarvis gap #2249",
+  "summary": "Purser ALERTS toggles confirmed the change, but three alert classes have no detector and rows exist only because the demo seed creates them.",
+  "root_cause": "ux_truthfulness",
+  "earliest_catch": "e2e_user_journey plus a production-caller acceptance line"
+ },
+ {
+  "ref": "jarvis gap #2217",
+  "summary": "Household screens showed release ids, rule ids and developer notes ('PLANNED · R2', 'WIRES AT R3'), exactly as the design handoff prescribed.",
+  "root_cause": "ux_truthfulness",
+  "earliest_catch": "e2e_user_journey (scan rendered text for internal identifiers)"
+ },
+ {
+  "ref": "jarvis gaps #2359-#2365",
+  "summary": "Offboarding: a removed member kept a push device and extension pairing for 90 days, plus mailbox grants and scan schedules, and a Sherpa link could revive them. Nothing consumes circles.membership.removed.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "design_review_of_seams (who loses what when a member leaves) plus a removal test"
+ },
+ {
+  "ref": "jarvis gaps #2531 / #2540",
+  "summary": "Six ledger-frontier implementations and four income filters disagree across Purser surfaces, and no test compares the surfaces with each other.",
+  "root_cause": "domain_rule",
+  "earliest_catch": "golden_real_data_diff / cross-surface parity over one planted ledger"
+ },
+ {
+  "ref": "jarvis gap #2527",
+  "summary": "21 real household amounts and ids were committed as test fixtures, because the pre-commit scanner recognised money only with a '$'.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "runtime_assertion_or_monitoring (pre-push compare against actual store values)"
+ },
+ {
+  "ref": "jarvis gaps #2348 / #2400",
+  "summary": "1,175 lines of toolbox-approvals had zero production callers. The modules-are-consumed gate was satisfied by an __init__ re-export.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "acceptance_criteria_in_spec (a named production-caller test that fails when the call site is removed)"
+ },
+ {
+  "ref": "nexusiq f8ec8f0a10",
+  "summary": "Seven modules never triggered because event names drifted. The governing design's §14.1 table taught the wrong strings, and unmatched events fell back silently to chat.",
+  "root_cause": "contract_drift",
+  "earliest_catch": "contract_test (bidirectional emit/subscribe registry)"
+ },
+ {
+  "ref": "nexusiq 4c6197e890 -> da6ca4ab88 -> 25100234a4 -> 7c98a8b471",
+  "summary": "Tool scripts lacked run(), then lacked TOOL_DEFINITION (first on two, then six more). Each new contract test covered only the attribute that had just broken.",
+  "root_cause": "contract_drift",
+  "earliest_catch": "contract_test over every attribute the executor reads"
+ },
+ {
+  "ref": "nexusiq 62ec8ade82 / 971fb1cd3d / 2fb1f0c8d9",
+  "summary": "The LLM scanner overwrote the user's watchlist, and nothing seeded it on boot. It was fixed three times before an owner service arrived four months later.",
+  "root_cause": "data_persistence",
+  "earliest_catch": "design_review_of_seams (data-ownership table; user-authored stores read-only to agents)"
+ },
+ {
+  "ref": "nexusiq c5e02130e1 / 233a1a89e0",
+  "summary": "The dream nightly job was registered with callable=lambda: None. DreamModule and TradingAlerts were never invoked behind a green 470-test suite; the 2026-04-10 audit against code found it.",
+  "root_cause": "wiring_integration",
+  "earliest_catch": "boot_smoke_real_wiring (called-in-production test)"
+ },
+ {
+  "ref": "nexusiq e2a9040a26 / c22544ceb2",
+  "summary": "Every mock-based test passed while live Ollama returned 400. An earlier commit had bent the step_85 test to assert the buggy JSON string.",
+  "root_cause": "external_integration",
+  "earliest_catch": "contract_test against a live or recorded provider call"
+ },
+ {
+  "ref": "nexusiq 67de17ab29 / 641b093ad9 / 1ce78a5ba9",
+  "summary": "The frontend called port 8000 while the backend served 9001. The port was duplicated in 8 places, and the developer guides disagreed with the README.",
+  "root_cause": "deploy_env_config",
+  "earliest_catch": "boot_smoke_real_wiring (frontend and backend co-booted from a clean checkout)"
+ },
+ {
+  "ref": "nexusiq 9ea98f3f1f / 91a3f2f78b / 0b22e93bba / f871a5b8f2",
+  "summary": "Duplicate chat bubbles and leaked metadata were fixed four times in three days. No journey asserted one bubble per reply.",
+  "root_cause": "ui_behavior",
+  "earliest_catch": "e2e_user_journey"
+ },
+ {
+  "ref": "nexusiq af3cd63cf6",
+  "summary": "Ended about 15 trade-analyst prompt commits in two days: a dedup guard, a per-tool cap moved 4->2->4, and a model-tier flip and revert. Fixed by moving fetch and save into deterministic code.",
+  "root_cause": "external_integration",
+  "earliest_catch": "design_review_of_seams (code vs model determinism boundary)"
+ },
+ {
+  "ref": "nexusiq 936b984923",
+  "summary": "Path traversal via user_id and metric_id, seeded by the HealthKit spec's own example path. The wiring tests only asserted status_code != 404.",
+  "root_cause": "security_privacy",
+  "earliest_catch": "code_review plus a lint banning the non-404 assertion"
+ }
+]

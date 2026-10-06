@@ -1,0 +1,95 @@
+{
+ "scoreboard": [
+  {
+   "key": "A",
+   "name": "Draft A — Minimal mechanisms",
+   "judge1": {
+    "yes": 20,
+    "partial": 19,
+    "no": 1
+   },
+   "judge2": {
+    "yes": 19,
+    "partial": 20,
+    "no": 1
+   },
+   "mean_score_of_40": 29.3,
+   "attack_verdict": "adopt_with_fixes",
+   "must_fix": 9
+  },
+  {
+   "key": "B",
+   "name": "Draft B — Scaffold first: the process is whatever the kit's CI enforces",
+   "judge1": {
+    "yes": 21,
+    "partial": 18,
+    "no": 1
+   },
+   "judge2": {
+    "yes": 21,
+    "partial": 19,
+    "no": 0
+   },
+   "mean_score_of_40": 30.3,
+   "attack_verdict": "adopt_with_fixes",
+   "must_fix": 9
+  },
+  {
+   "key": "C",
+   "name": "Draft C — Loop First",
+   "judge1": {
+    "yes": 20,
+    "partial": 19,
+    "no": 1
+   },
+   "judge2": {
+    "yes": 18,
+    "partial": 21,
+    "no": 1
+   },
+   "mean_score_of_40": 29,
+   "attack_verdict": "graft_parts",
+   "must_fix": 7
+  }
+ ],
+ "final_v1": {
+  "backtest": {
+   "yes": 21,
+   "partial": 18,
+   "no": 1
+  },
+  "attack": {
+   "verdict": "adopt_with_fixes",
+   "must_fix": 8
+  }
+ },
+ "drafts": [
+  {
+   "key": "A",
+   "name": "Draft A — Minimal mechanisms",
+   "path": "C:/Users/vanka/AppData/Local/Temp/claude/C--Users-vanka-devenv-repos-jarvis/8da7c932-4922-438c-bee5-9cb613951218/scratchpad/design/draft-A-minimal-mechanisms.md",
+   "thesis": "Only four things in this toolchain can refuse (a PreToolUse deny, a Stop block, a GitHub required check, a git hook); everything else is context and the evidence says context does not bind (22 of 32 CLAUDE.md rules prose-only, 35% of corrections repeated a written rule, 13% nudge follow-through). The design spends its whole budget on seventeen mechanisms that occupy those four slots, each named for the defect class it stops and registered in gates.toml with a planted defect, measured FP count and required-by date; it promotes the one instrument aimed at the 35% seam family (booting the real composition roots) from schedule-only to required; it deletes everything in apex, CLAUDE.md and the jarvis hooks with no firing record; and it inverts the operator's side so a session loads at most 1,500 words of standing prose and the push/PR/merge ceremony is replaced by two artifacts per line of work (an intent read-back before the first commit, a walk receipt at the end) plus one \"used:\" comment per release.",
+   "mechanisms": 18,
+   "context_budget": 6000,
+   "ceremony": "None required. The session claims, writes intent.md (shown in its first message; the operator may say 'hold' or nothing), builds, runs rails check (marker), runs rails review (review.json), pushes (pre-push honours the marker and the leak check), opens one Ready PR per line of work with the body sections injected, arms auto-squash and binds the PR monitor, and cannot end the turn until the PR is armed and every work item is done-with-artifact, dropped-with-reason, or carries a structured stop_reason (decision_needed with a recommended-option brief, blocked with a receipt, or hold). The operator reads two artifacts per line of work: the intent read-back and the walk receipt (.rails/walk/<sha>.json with target, SHA, URL and frames). Per release, the operator uses the app once and leaves one 'used: <task> <date>' comment on the milestone; the oracle run and walk at the closing SHA are the session's. Approve, push, merge and 'did you refresh' messages are not waited for; the 878 approvals and 630 git/PR messages in the dedup counts are the budget this frees."
+  },
+  {
+   "key": "B",
+   "name": "Draft B — Scaffold first: the process is whatever the kit's CI enforces",
+   "path": "C:/Users/vanka/AppData/Local/Temp/claude/C--Users-vanka-devenv-repos-jarvis/8da7c932-4922-438c-bee5-9cb613951218/scratchpad/design/draft-B-scaffold-first.md",
+   "thesis": "The escaped defects are seams (35%), the harness itself (19%) and re-derived rules or wrong clocks (18%); prose caught none of it and apex's nudges were followed 13% of the time, while deny hooks, census gates and required checks worked. So the process is not a document but a starter kit (rails-kit) whose generated code and CI make the right structure the only one that compiles, boots and merges: one schema source generates wire, typed client and settings; every real composition root boots in a required job; every screen has a state matrix and a result-typed loader; every domain concept has one owner and a gate; catalogue and status are generated or absent. A plugin (rails, the reworked apex) binds sessions through one dispatcher that wraps Bash and PowerShell, normalises backslashes and announces its own absence; a one-page contract resolves the conflicting rules; an intent file gates the first commit and a walk receipt gates the end of a turn. Every mechanism names its failing facility, its cost per PR and the defect it cites, and a ledger test deletes any that cannot.",
+   "mechanisms": 31,
+   "context_budget": 4500,
+   "ceremony": "Zero operator messages in the default path. After rails check passes, the session pushes, opens one PR per worktree, arms auto-squash and binds the PR monitor so the session (not the operator) is woken on red or conflict; the operator's only word is 'hold', written to .rails/hold. The operator's attention per PR is optional reading of a generated body (Intent, Walk link, Mechanisms table). Per milestone, the operator does one real task on the named target and the session records the accept receipt; the local oracle runs on the operator's store in ~1 minute. Agent-side cost per PR: ~2 min for the intent file once per branch, 1-5 min rails check, 2-6 min walk on UI/server paths, 5-10 min two-voice review on seam-path PRs only; CI adds 3-5 min boot on app/toolbox/runtime/deploy paths."
+  },
+  {
+   "key": "C",
+   "name": "Draft C — Loop First",
+   "path": "C:/Users/vanka/AppData/Local/Temp/claude/C--Users-vanka-devenv-repos-jarvis/8da7c932-4922-438c-bee5-9cb613951218/scratchpad/design/draft-C-loop-first.md",
+   "thesis": "The defects that reached the operator escaped because nothing in the build was attached to the moment the operator would have caught them: the first commit (built the wrong thing, 170), the sentence that claims something (52 operator catches + 251 agent retractions), and the end of a turn (stopped instead of acting, 88; done but the screen disagreed, 111). This design makes those three moments the gates using the only four facilities that can fail: a PreToolUse deny on `git commit` until `.rails/intent.json` exists with door+instrument acceptance lines and a human ack (written only by UserPromptSubmit, which the agent cannot forge); a Stop hook that blocks once per turn on offer-shaped endings with open work, done-wording without a walk artifact at HEAD on the named target, and claim-shaped sentences with no receipt; a git pre-push hook that pushes by default and refuses only `hold`, a missing intent, or a store-backed leak; and a required `gate` check whose new jobs (boot every real root, root parity, env parity, codegen diff, concept owner, clock lint, walk on the planted household) carry required-by dates in a manifest that fails every PR once the date passes. Ceremony inverts — push, one PR per line of work, auto-squash armed, PR monitor wakes the session — so the operator's per-PR cost falls from ~5 messages to one (the intent ack) plus the word `hold`. Everything that cannot fail (primer, phase nudges, 17 commands, ~30 skills, 6 rule files, 9,160-word CLAUDE.md, retro-debt nag, graph-first mandate) is deleted, and a rule-admission test forbids new prose without its enforcer in the same PR.",
+   "mechanisms": 36,
+   "context_budget": 6000,
+   "ceremony": "One operator message: the intent acknowledgement — any message after the session ends its first turn showing .rails/intent.json (builds / not built / retired paths / screen of record / target / acceptance lines with door+instrument / clocks / silent defaults); it is usually the same message that redirects scope. Optionally the single word `hold` (and `release`). No push approval, no PR approval, no merge approval, no 'did you refresh', no CI watching — the session pushes every commit, opens one PR per line of work, arms auto-squash and binds a monitor that wakes the session on red. Milestone close costs one more operator message per milestone (`used #N <task>`), which is the layer-6 definition of done. Measured today: ~2.2 ceremony messages per new-work message plus 339 bare approvals (33–40% of all operator messages)."
+  }
+ ]
+}
