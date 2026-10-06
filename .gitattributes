@@ -1,0 +1,9 @@
+# Hook and CLI scripts run under sh/python on every OS: keep LF even with core.autocrlf.
+git-hooks/* text eol=lf
+bin/rails text eol=lf
+bin/rails-githook text eol=lf
+hooks/*.py text eol=lf
+rails/**/*.py text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+bin/rails.cmd text eol=crlf

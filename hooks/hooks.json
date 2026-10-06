@@ -1,24 +1,14 @@
 {
+  "description": "rails: one dispatcher for every event. The gate registry is hooks/gates.toml.",
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|clear|compact",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/apex-primer.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_collisions.py"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-baseline.sh"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rails_hook.py\" SessionStart",
+            "timeout": 30
           }
         ]
       }
@@ -28,75 +18,32 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-skill-on-prompt.sh"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rails_hook.py\" UserPromptSubmit",
+            "timeout": 15
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|Agent|Task",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scan-secrets-on-edit.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-skill-on-edit.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-security-paths.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-dependency-bump.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh artifact_templates.py"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh session_output_gate.py"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh artifact_templates.py"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh acceptance_checklist.py"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-python-hook.sh issue_cap.py"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rails_hook.py\" PreToolUse",
+            "timeout": 30
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/format-on-save.sh"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rails_hook.py\" PostToolUse",
+            "timeout": 15
           }
         ]
       }
@@ -106,7 +53,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/suggest-review-on-stop.sh"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/rails_hook.py\" Stop",
+            "timeout": 15
           }
         ]
       }

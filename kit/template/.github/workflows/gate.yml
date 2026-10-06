@@ -1,0 +1,19 @@
+# The one required check. It does not run the lanes -- `rails check` ran them on
+# the laptop and posted a status per lane. `gate` demands a success status, on
+# the head SHA, for exactly the lanes lanes.toml (read from the BASE branch)
+# selects for this diff.
+name: gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  statuses: read
+  pull-requests: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: vancourse/apex/actions/verify-lanes@__RAILS_REF__

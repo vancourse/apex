@@ -1,0 +1,6 @@
+[
+  { "screen": "summary", "id": "summary.add" },
+  { "screen": "summary", "id": "summary.amount" },
+  { "screen": "summary", "id": "summary.note" },
+  { "screen": "summary", "id": "summary.refresh" }
+]

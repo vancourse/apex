@@ -1,0 +1,53 @@
+# One row per route the composed app serves, and the status each actor gets.
+#
+# tests/test_auth_matrix.py enumerates routes FROM THE COMPOSED APP -- not from
+# this file -- so a new route without a row fails, and a row whose route is gone
+# fails. Actors:
+#   anonymous     no X-Member header
+#   member        a planted member of the route's household
+#   other_member  a planted member of ANOTHER household
+# Cross-household policy: 403 (the member is known; the household is not theirs).
+#
+# Every `str` path or query parameter is also fed ../, %2e%2e, empty, 4 KB and NUL
+# as `member` and must get a 4xx -- generated, no row needed.
+
+[actors]
+household = "hh_scratch"  # the route's household; scratch, so writes never touch the parity corpus
+member = "m_kit"
+other_member = "m_aroha"
+
+[[route]]
+method = "GET"
+path = "/api/health"
+anonymous = 200
+member = 200
+other_member = 200
+
+[[route]]
+method = "GET"
+path = "/api/me"
+anonymous = 401
+member = 200
+other_member = 200
+
+[[route]]
+method = "GET"
+path = "/api/households/{household_id}/summary"
+anonymous = 401
+member = 200
+other_member = 403
+
+[[route]]
+method = "GET"
+path = "/api/households/{household_id}/entries"
+anonymous = 401
+member = 200
+other_member = 403
+
+[[route]]
+method = "POST"
+path = "/api/households/{household_id}/entries"
+anonymous = 401
+member = 201
+other_member = 403
+body = { amount_cents = 100, note = "auth matrix" }

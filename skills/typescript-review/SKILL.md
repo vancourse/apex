@@ -1,6 +1,6 @@
 ---
 name: typescript-review
-description: Generic TypeScript/React code review rules — types, control flow, hooks, components, stores, testing, error handling, hygiene, AI code smells. Routing table inside; load only the rule file matching the current task. Fires when investigating a specific TS/React anti-pattern, auditing a diff for review, or planning a refactor — NOT for every TS/TSX edit. In projects that have a project-specific pre-PR skill, prefer that as the entry point; it cross-references rule files here. Keywords: typescript anti-pattern, react review, code review, refactor, frontend review, hooks, zod, zustand, playwright.
+description: TypeScript/React review rules (types, hooks, state, tests, errors). Load the rule file for the task at hand.
 ---
 
 # TypeScript & React Review Rules
@@ -21,14 +21,14 @@ the current task — do not load all of them.
 | React hooks — deps, stale closures, AbortController, cleanup  | `rules/react-hooks.md`            |
 | React components — props, dialogs, mutations, routing, a11y   | `rules/react-components.md`       |
 | Zustand (or similar) stores — atomic updates, cleanup         | `rules/zustand-stores.md`         |
-| **Test methodology** (8-layer model, mocking policy, PRD↔mirror, scenarios-first, CI tiering, isolation, 18 rules) | invoke **`apex:test-strategy`** |
+| **Test methodology** (8-layer model, mocking policy, PRD↔mirror, scenarios-first, CI tiering, isolation, 18 rules) | invoke **`rails:test-strategy`** |
 | TS/React testing tooling (Vitest vi.mock vs MSW, @testing-library/react + user-event, TanStack Query fresh client, Zod test payloads) | `rules/testing.md`                |
 | Playwright e2e — state-based waits, isolation, selectors      | `rules/playwright-e2e.md`         |
 | Imports, dead code, speculative exports, PR discipline        | `rules/code-hygiene.md`           |
 | AI-assisted code (speculative defaults, three-state null)     | `rules/ai-code-smells.md`         |
 | FE doing server-domain work (classify, synthesise, transform) | `rules/frontend-backend-layering.md` |
-| **PR-time security audit** (secrets / authn+authz / input validation + output encoding / dep vuln + supply chain / audit log) | invoke **`apex:security-review`** |
-| **Design-phase threat modeling** (STRIDE against feature attack surface) | invoke **`apex:threat-model`** |
+| **PR-time security audit** (secrets / authn+authz / input validation + output encoding / dep vuln + supply chain / audit log) | invoke **`rails:security-review`** |
+| **Design-phase threat modeling** (STRIDE against feature attack surface) | invoke **`rails:threat-model`** |
 | TS/React security tooling (no secrets in localStorage; XSS / dangerouslySetInnerHTML; CSP; cookie flags HttpOnly+Secure+SameSite; CSRF tokens; open-redirect validation; postMessage origin checks; iframe sandbox; SRI; error-tracker filters) | `rules/security.md` |
 
 ## When multiple topics apply

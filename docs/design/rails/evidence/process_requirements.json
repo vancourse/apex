@@ -1,0 +1,122 @@
+[
+ {
+  "id": "PR-01",
+  "requirement": "Every PR touching apps/, toolbox-*, runtime/, deploy/ or the compose file must pass a REQUIRED job that does all of the following: boots every composition root (fleet, standalone, desktop) from the built image with every app flag ON; connects as the production DB role (NOSUPERUSER NOBYPASSRLS, pooled factory); migrates from the previous release's schema; boots a second time; and sends one request to every registered route, nav item and mounted app. The job fails on any 5xx, any 404 for a registered route, any text/html answer to an /api path, and any registered schedule or produced topic with no handler.",
+  "evidence": "Booting the real root was the cheapest catch for 130 defects (12.9%). fleet-smoke is 16.4% real-defect precise but runs on schedule only, sat red for 37 consecutive runs, and gates nothing. Cases: e854e76289, d1ad2720b1, c26832080a, 0272d9dc40, b2d5292078, #2245. 17 gaps_02 records name boot smoke as the cheapest catch.",
+  "defect_share_addressed_pct": 12.9
+ },
+ {
+  "id": "PR-02",
+  "requirement": "Composition-root parity is a generated test. It introspects the fleet root's config fields, seams/protocols, schedules, migrations and env vars, and fails when any other root (desktop, standalone, preview, CLI) omits one without a written exclusion. Hand-enumerated parity lists do not satisfy acceptance.",
+  "evidence": "#2270 (desktop root has no schedules), #2357 (read_seam missing), eeae3969c7 (as_of only in the standalone root), #2303, #2295, #2306, #2315. eccdf50b32 passed only on the superuser :9999 preview. #2118's acceptance listed two hand-picked fields.",
+  "defect_share_addressed_pct": 3.5
+ },
+ {
+  "id": "PR-03",
+  "requirement": "Each runtime setting is declared once, with name, type, owner and per-environment value. The secrets renderer, compose file, fleet validator and app settings are generated from that declaration or checked against it. A test fails when an app reads a variable that compose does not forward, when compose forwards one the renderer never writes, or when a name collides with a platform variable.",
+  "evidence": "9 env fixes in 7 days (16bc6e14c5..5ed0b7c8fb). --sync lost 4 then 12 keys (ca0371b19c, 82188d5caa). The RP id was never forwarded (7f98347cd3). Twilio names collided with a platform variable (#2234). nexusiq duplicated its port in 8 places (67de17ab29, 641b093ad9, 1ce78a5ba9).",
+  "defect_share_addressed_pct": 10.5
+ },
+ {
+  "id": "PR-04",
+  "requirement": "Every user-facing control has a real-backend e2e step that activates it and asserts its effect survives a reload or is visible from a second session. A control whose effect has no production caller must render the designed not-available state. Reachability shown by grep, by a route's existence or by a mock client does not count.",
+  "evidence": "e2e was the earliest catch for 136 defects (13.5%). #2251 (reachability acceptance only grepped client.ts), #2227 (wizard edits lived in React state while the screen said saved), #2249 (toggles with no detector), #2253. nexusiq chat bubble defect fixed 4 times.",
+  "defect_share_addressed_pct": 13.5
+ },
+ {
+  "id": "PR-05",
+  "requirement": "Every screen has a state-matrix test covering loading, real-empty, load-failed, write-failed, 401/expired, 503-disabled, backend-not-mounted, partial, 375px width, and back/forward/reload. Each state runs against a stub client that returns that response and asserts the visible text. Data-loading hooks return a result type whose error branch the compiler forces callers to handle. `?? []` on a fetch result fails lint.",
+  "evidence": "#2240 (42 of ~90 useLoad sites ignore the error; 12 screens hang), #2238 (ALL QUIET over a 503), #2241 (failed load shown as an empty workspace), #2213, #2219 (lays out at 1180px on a 375px screen), #2218, nexusiq 79a1ca5e8b.",
+  "defect_share_addressed_pct": 10.3
+ },
+ {
+  "id": "PR-06",
+  "requirement": "A user-visible number cannot merge unless its oracle is declared (it equals the sum of its drill rows and equals every other surface showing the same concept) and a cross-surface parity test over one planted dataset passes in CI. Before a milestone closes, a local checker runs on the operator's real store and reports zero oracle violations by rule id and row id, with no amounts leaving the machine. Its output is attached to the close.",
+  "evidence": "A golden real-data diff was the earliest catch for 57 defects (5.7%), including 23 of 32 domain-rule commit fixes and 36 of ~159 Purser items. #2540 notes 'no test compares these surfaces'. #2215's demo step could be satisfied by $0. 83f2eeec9e: 2,363 of 2,473 rows had an inverted sign.",
+  "defect_share_addressed_pct": 5.7
+ },
+ {
+  "id": "PR-07",
+  "requirement": "Domain concepts (income, spend, liquidity, ledger frontier, month arithmetic, account role, currency conversion, settlement) are listed in a registry, each with exactly one owning function and a pinning test. An arch gate fails any re-implementation outside the owner, for example arithmetic on period strings or a private kind set.",
+  "evidence": "The Purser H1 census found income implemented x4, ledger frontier x6-7, month arithmetic x8-10, rounding x10 and account kinds x9. Single-concept fixes: 4d4c7e8ade (liquidity), 0789605f06 (currency mixing), 79f9595900 (17 of 21 category names disagreed).",
+  "defect_share_addressed_pct": 5.4
+ },
+ {
+  "id": "PR-08",
+  "requirement": "Time is passed as a typed Clock that names which notion of now it is: data frontier, wall clock, pinned as-of, or member timezone. Engines and screens may not read the wall clock directly (enforced by lint). Every engine test runs under two pinned clocks and a non-UTC member, and every dated corpus pins as-of in both the server's and the test runner's environment.",
+  "evidence": "The clock seam was re-fixed about 7 times (5f4bc2a10a, 3c6fd79918, 39226fcfbb, eeae3969c7, 3fa83301f6, 445af1719b, 9ae818e008). #1892: 101 identical reds when the corpus expired. #2232 (Pulse on UTC), #2286, #2287. nexusiq fab00dfce8, 5b805e51ab.",
+  "defect_share_addressed_pct": 5.7
+ },
+ {
+  "id": "PR-09",
+  "requirement": "Every acceptance line names its door (for example 'through the app, on a fresh fleet install, as a household member, no CLI') and its instrument: DB role, connection factory, DB state, data set, and client (real backend or mock). acceptance_check rejects a line missing either. A line whose instrument is a mock, dev harness, /dev/login or standalone root cannot close an issue.",
+  "evidence": "#2266 (vocabulary installed only via the operator CLI), #2226 (every Hearth e2e used /dev/login), #2227 (driven against STUDIO_DEV), milestone 39 closures held only under the mock, and the superuser RLS rigs. Gaps that are built_not_wired, never_built or fake total 112 of 233.",
+  "defect_share_addressed_pct": 11.1
+ },
+ {
+  "id": "PR-10",
+  "requirement": "A new module, capability, lever or sink merges only with a named production caller reachable from a deployed composition root, proven by a test that fails when that call site is deleted. Import reachability or an allowlist row does not count. A Null or no-op default injected by a production root fails the boot check.",
+  "evidence": "#2348 (1,175 lines with zero callers; modules-are-consumed satisfied by an __init__ import), #2400 and #2404 (18 orphaned modules kept alive by re-exports), revoke levers with no caller (#2359, #2362-#2364), NullAudit in production (#2315), a kill switch with no writer (#2320), nexusiq c5e02130e1 (callable=lambda: None) and 233a1a89e0.",
+  "defect_share_addressed_pct": 6.3
+ },
+ {
+  "id": "PR-11",
+  "requirement": "A milestone closes only with a demo-run artifact (command log or screenshots) produced at the closing SHA on the target deployment. Every demo step must be an observation that could come out the other way, and every figure step must state a reconciling expectation, for example 'interest total equals the sum of interest rows and is non-zero'. The completion check refuses closes recorded as 'demo not re-run'.",
+  "evidence": "R3 closed on issue count while its only interrupt could never fire (#1064). R8, R13 and R20 closed without running their demos. #2215's demo was satisfiable by $0. 189 jarvis-uat issues were filed days after R9-R20 closed as demo done. Ontology R1-R5 closed in 1-2 days each with run demos.",
+  "defect_share_addressed_pct": 4.9
+ },
+ {
+  "id": "PR-12",
+  "requirement": "A new or changed CI job, gate or hook merges only with five things: a planted defect that turns it red; its false-positive count on the current tree; a test case from outside its own list or file population; a test on the developer's OS path style and shell (Windows backslashes, PowerShell and Bash); and a date by which it becomes required or is deleted. A non-required job that is red on 3 consecutive runs files an issue automatically and must be made required or deleted within 7 days.",
+  "evidence": "harness_self 105 plus test_defect 50 = 15.4% of defects. 44% of CI job failures are harness defects. Sherpa gate B: 214 failures, 0 successes. Windows scheduler: red on 7 of 7 runs on day one. Install Chromium step: 20 PRs failed in 2 days. Docs train: 186 failures, 0 product defects. The RLS gate scanned *.py only (d71d2cd8b2). Three apex hooks are inert on Windows. The milestone gate was red 20 of 20 runs, unread.",
+  "defect_share_addressed_pct": 15.4
+ },
+ {
+  "id": "PR-13",
+  "requirement": "Database tests default to the production role (NOSUPERUSER NOBYPASSRLS) through the production connection factory. Every security or tenancy test prints and asserts current_user, rolsuper, rolbypassrls and the bound tenant GUC alongside its result. Vendor-semantics premises (for example what RESET leaves in a GUC) are recorded with the version and command they were measured on.",
+  "evidence": "605eb1fc10 (nine tables with no RLS policy), 02feadf311, the 796efcd919..61dfead5de chain, eccdf50b32, #2414 and #2419 (P0), 18bc907fd2 (RESET leaves an empty string, not NULL), and the 2026-08-19 superuser probes that produced two wrong security conclusions.",
+  "defect_share_addressed_pct": 3
+ },
+ {
+  "id": "PR-14",
+  "requirement": "Every mounted route appears in an auth matrix of actor by action (call, mint, list, revoke, and for whom), checked by tests over the composed fleet. The tests include an unauthenticated caller (expect 401) and a member acting on another member's credentials (expect 403). A member-removal test asserts that every grant, device, pairing, schedule and link for that member is gone. The boot smoke asserts CSP, nosniff and Origin/CSRF refusal.",
+  "evidence": "#2229 (anonymous requests served health data), #2235 (any member can mint an enrolment grant for another), #2384, the offboarding cluster #2359-#2365, #2379 (no CSP), #2381 (no CSRF), #2380, #2375. 30 security gaps plus 16 jarvis security fixes that a seam review would have caught first.",
+  "defect_share_addressed_pct": 4.6
+ },
+ {
+  "id": "PR-15",
+  "requirement": "Every identifier that crosses a component (event name, tool attribute, enum or state value, authority, health vocabulary, DTO field, route path) has one declaration site that both sides import or generate from. A bidirectional test asserts that every emitted event has a subscriber and every subscriber has a publisher, that every UI state can be produced by the engine, and that every attribute the executor reads exists on every registered tool. An unmatched identifier raises instead of falling back.",
+  "evidence": "contract_drift is 90 defects (8.9%). nexusiq: f8ec8f0a10 (7 modules never triggered), the 4c6197e890..7c98a8b471 script-contract chain, 79a1ca5e8b. jarvis: b2b8b3de0b and 1f6541bc0c (health vocabulary), 79a91bae01 and 8d8eaccdb1 (authority copies), 9b5a638bab (6 of 10 signals), #2326.",
+  "defect_share_addressed_pct": 8.9
+ },
+ {
+  "id": "PR-16",
+  "requirement": "Fixtures exceed every default limit in the code under test (page size, LIMIT, ceilings) and assert their own landed row count. A fixture may not supply any value, key, member or env var that the production path does not supply. Seed and demo data use at least two households and a non-zero timezone offset.",
+  "evidence": "88e3a8a592 (LIMIT 2000 dropped 56% of rows), #2220 (500-row cap), #2296 (10-page ceiling), aa35c6f224 (fixture handed in the schedule member), eab4a2c6e7, f76075ca10, 4324b7e6ce (the test injected its own override), #2232 (demo seeded on UTC), #2338 (demo initials on every household's digest).",
+  "defect_share_addressed_pct": 5
+ },
+ {
+  "id": "PR-17",
+  "requirement": "Any feature with a model in the loop declares five things: a context inventory (now, timezone, identity, capability names); which stores the model may write (user-authored stores are read-only in the tool layer, with a test); a per-execution loop budget; the boundary between code and model judgment; and an output strip-list. It is accepted against a recorded or live call per configured model and a golden set of 5-20 real inputs, not a mock end_turn caller.",
+  "evidence": "external_integration is 43 defects (4.3%). nexusiq: about 15 trade-analyst prompt commits ending in af3cd63cf6, about 12 provider fixes, e2a9040a26 (mocks passed, live returned 400), fab00dfce8 (no clock), 725466d280 (loops), 62ec8ade82 (watchlist wiped), 7+ studio planner fixes in one day. jarvis: 147f574f61 (ScriptedClient checked the name, not usability).",
+  "defect_share_addressed_pct": 4.3
+ },
+ {
+  "id": "PR-18",
+  "requirement": "Every source PR gets a two-voice review: one cooperative and one adversarial reviewer, neither with access to the other's output, each reading the diff and the primary artifacts it touches. Every must-fix lands as a commit in the PR, or as an issue with a falsifiable done-when, before merge. For seam or trust-boundary designs the same pair runs before freeze, capped at two rounds and judged against code.",
+  "evidence": "Code review was the earliest catch for 63 defects and seam design review for 112 (17.4% combined). #2413: 46 two-voice reviews, 9 distinct must-fix defects. #2223, #2429, #1580 (two STRIDE passes found three issues neither held alone). python-review found 4 defects in #2159 and 5 in #2170. Shell DESIGN_REVIEW F1 was left to the builder and recurred as #2238. Resource design: rev 7 over 71 commits.",
+  "defect_share_addressed_pct": 17.4
+ },
+ {
+  "id": "PR-19",
+  "requirement": "A prose rule is admitted only with its enforcing gate or hook in the same change. CLAUDE.md has a word ceiling checked by a test. Status, roadmap, HANDOFF and app-card content is generated from code, issues and milestones, or deleted. Any document claim about current behaviour cites a test or is marked UNVERIFIED.",
+  "evidence": "docs_drift is 34 defects (3.4%). 22 of 32 CLAUDE.md rules are prose only. CLAUDE.md regrew from 1,962 to 9,160 words. The release skill falsely says pr_body_check refuses PRs. 31% of status yard rows were stale. CO6c was built three times from one stale prompt. #2267 rests on a false design claim. Pulse's index says nothing has shipped. 17% of spec traces were the spec prescribing the defect.",
+  "defect_share_addressed_pct": 3.4
+ },
+ {
+  "id": "PR-20",
+  "requirement": "When two open PRs touch a common file, the second to merge runs that file's tests on the merged tree before merging.",
+  "evidence": "MappingRegistry.register 'ratified_by' (#482, two PRs green alone, red merged on master 08-03), 55e43ead17, the ENFORCED/LEGACY conflict on 2026-08-25 (merge-tree clean, both branches green, merged result red). push:master runs no Python suite.",
+  "defect_share_addressed_pct": 1
+ }
+]

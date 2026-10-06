@@ -1,0 +1,14 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-pipe-mask",
+    "cwd": "C:\\Users\\dev\\repos\\app",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "uv run pytest -q ci/ 2>&1 | tail -40",
+      "description": "Run the ci suite"
+    }
+  },
+  "expect": "deny"
+}

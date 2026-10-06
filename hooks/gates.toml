@@ -1,0 +1,322 @@
+# The rails gate registry (plugin half). Design R19.
+#
+# A gate runs only if it has a row here, and a row earns its place with:
+#   cites       the defects / measurements that justify it
+#   planted     a hook payload (tests/planted/<file>.json) the gate MUST refuse;
+#               tests/test_gates_registry.py feeds it to the dispatcher with the
+#               row forced to enforce mode and fails if nothing is refused
+#   fp_count    false positives measured, and fp_measured_on says where
+#   class       lockout (data leaving, shared refs, another session's tree:
+#               never expires on silence) | friction (deleted after 60 silent days)
+#   mode        enforce | shadow (log would-deny, refuse nothing)
+#   shadow_until  ISO date: shadow until then, enforce after (7 days for a new deny)
+#
+# Operator switches (from your own shell, never set by an agent):
+#   RAILS_SHADOW_ALL=1        every gate logs instead of refusing
+#   RAILS_GATES_OFF=a,b       named gates do not run
+
+# --- session state and the operator's words --------------------------------
+
+[[gate]]
+name = "state"
+module = "state"
+events = ["SessionStart"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+cites = ["R30: ~124 relays; 26 claims dropped by a main-checkout release", "R20: SessionStart output budget 600 tokens"]
+planted = ""
+fp_count = 0
+fp_measured_on = "n/a (notice only)"
+
+[[gate]]
+name = "prompt_words"
+module = "prompt_words"
+events = ["UserPromptSubmit"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+cites = ["decision 13.2: hold is the only push word", "R22: ceremony share 35% of operator messages"]
+planted = ""
+fp_count = 0
+fp_measured_on = "n/a (records state, refuses nothing)"
+
+[[gate]]
+name = "receipt_writer"
+module = "receipt_writer"
+events = ["PostToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+cites = ["R25: self-certified artifacts; 17/20 overrides", "forged = a receipt with no firing"]
+planted = ""
+fp_count = 0
+fp_measured_on = "n/a (records, refuses nothing)"
+
+# --- refusals new in R1: shadow for 7 days before they refuse ----------------
+
+[[gate]]
+name = "claim_edit"
+module = "claim_edit"
+events = ["PreToolUse"]
+tools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R23: wrong worktree 12 (op); unclaimed sessions 58% -> 90% while advisory"]
+planted = "tests/test_session_gates.py::test_claim_edit_planted"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "leak_dispatch"
+module = "leak_dispatch"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell", "Agent", "Task"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["#2527: 21 real amounts reached git past a $-shaped scanner", "R31: gh api --input unchecked"]
+planted = "tests/test_session_gates.py::test_leak_dispatch_planted"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "intent_shown"
+module = "intent_shown"
+events = ["Stop"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R24: misread intent 84 + built the wrong thing 55 (op)"]
+planted = "tests/test_session_gates.py::test_intent_shown_planted"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "turn_end"
+module = "turn_end"
+events = ["Stop"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R28: stopped early 70 (op); claimed done 58 (op); 44% follow-through of the advisory nudge"]
+planted = "tests/test_session_gates.py::test_turn_end_planted"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "store_guard"
+module = "store_guard"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell", "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R2 reference deny: receipts, snapshot and markers are written by the CLI only", "R25: forged = a receipt no command was seen writing"]
+planted = "tests/test_session_gates.py::test_store_guard_planted"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+# --- pre-push refusals: run by rails/githooks.py, never by the dispatcher ----
+
+[[gate]]
+name = "prepush_hold"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "lockout"
+mode = "enforce"
+cites = ["decision 13.2: hold is the operator's only push word", "push consent was 49% of operator messages 2026-08-07..11"]
+planted = "tests/test_githooks_leak.py::test_hold_refuses_and_operator_skips_marker_and_hold_never_leak"
+fp_count = 0
+fp_measured_on = "n/a: fires only on the operator's own word"
+
+[[gate]]
+name = "prepush_marker"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R3: local/CI drift; ~20,800 billed CI minutes in 2026-09 replaced by local lanes"]
+planted = "tests/test_githooks_leak.py::test_push_without_marker_refused"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "prepush_leak"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["#2527: 21 real amounts reached git past a $-shaped scanner", "R31: fail closed when the snapshot is missing or stale"]
+planted = "tests/test_githooks_leak.py::test_commit_message_is_checked"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+# --- ported deny family (R2) and the shadow denies beside it ----------------
+# Rows below this line are owned by the gate port (rails/gates/<name>.py).
+
+[[gate]]
+name = "pipe_mask"
+module = "pipe_mask"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-08-10: pytest exited 4 and 124 while the notification said 0; a piped gh pr edit failure lost a finished PR body", "jarvis pipe_mask_gate: 720 denials in 229 sessions", "Windows PowerShell 5.1, measured 2026-10-06: native | Select-Object -First 1 killed the native command after one line, $LASTEXITCODE -1"]
+planted = "tests/planted/pipe_mask.json"
+fp_count = 1
+fp_measured_on = "live 2026-10-06, windows: `cat pytest.ini | tail -3` denied by the original's bare \\bpytest\\b (the port requires pytest as the command word); jarvis ci/test_pipe_mask_gate.py cases"
+
+[[gate]]
+name = "secret_env"
+module = "secret_env"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-08-13: a live STUDIO_MODEL_API_KEY printed by a docker exec env dump despite a hand-written sed redaction; a live key leaked twice", "jarvis secret_env_gate: 95 denials in 47 sessions, 18 in subagents"]
+planted = "tests/planted/secret_env.json"
+fp_count = 1
+fp_measured_on = "jarvis ci/test_secret_env_gate.py + live firing 2026-08..10, windows: 1 documented FP (the gate's own commit message, bare os.environ) fixed before the port"
+
+[[gate]]
+name = "secret_file_touch"
+module = "secret_file_touch"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell", "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-09-15: deploy/fleet/.env.dev surfaced in full as an unredacted harness system note after names-only cut/grep touches", "jarvis secret_file_touch_gate: 26 denials, 21 inside subagents"]
+planted = "tests/planted/secret_file_touch.json"
+fp_count = 0
+fp_measured_on = "jarvis ci/test_secret_file_touch_gate.py + live firing 2026-09..10, windows"
+
+[[gate]]
+name = "heredoc_write"
+module = "heredoc_write"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis commit 1ac6639f: a heredoc'd gh --body quote truncated the section check", "recurring: doubled backslashes collapse in an unquoted heredoc body (ci/test_control_bytes.py, same cause)", "jarvis heredoc_write_gate: 23 denials"]
+planted = "tests/planted/heredoc_write.json"
+fp_count = 0
+fp_measured_on = "jarvis ci/test_heredoc_write_gate.py + live firing 2026-08..10, windows"
+
+[[gate]]
+name = "stash"
+module = "stash"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-08-19: refs/stash is shared by 9 live worktrees; a stash->build->pop cycle returned 'No stash entries found'", "jarvis 2026-09-02: the bold prose rule was broken four turns after a session quoted it", "claude-code#40117: git stash among the bypasses despite a written rule"]
+planted = "tests/planted/stash.json"
+fp_count = 0
+fp_measured_on = "jarvis ci/test_stash_gate.py + live firing 2026-09..10 (2 denials), windows"
+
+[[gate]]
+name = "merged_pr_push"
+module = "merged_pr_push"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-09-20: #2185 and #2187 merged while a later push landed on a branch no PR watched, twice in one hour", "a memory note written after the first did not prevent the second"]
+planted = "tests/planted/merged_pr_push.json"
+fp_count = 0
+fp_measured_on = "jarvis ci/test_merged_pr_push_gate.py + live firing 2026-09..10 (2 denials), windows"
+
+[[gate]]
+name = "detached_server"
+module = "detached_server"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = ""
+cites = ["jarvis 2026-08-07: a detached http.server held a worktree for nine hours; git worktree remove failed half-way and left an orphan", "six sessions, four ports (8791 x16, 8911, 8792, 8772)"]
+planted = "tests/planted/detached_server.json"
+fp_count = 0
+fp_measured_on = "jarvis ci/test_detached_server_gate.py + live firing 2026-08..10 (2 denials), windows"
+
+[[gate]]
+name = "destructive"
+module = "destructive"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = ""
+cites = ["apex guard-destructive.sh: 33 blocks, mostly false positives (whole-line regex)", "apex #38: blocked safe force-pushes and its own bug report; allowed a bare git push --force on the default branch"]
+planted = "tests/planted/destructive.json"
+fp_count = 7
+fp_measured_on = "apex #38, 2026-08-05: 7 FPs verified against the shell regex (3 force-push, 3 .env, its own issue body); the tokenised port runs them as allowed cases in tests/gates/test_destructive.py, windows"
+
+[[gate]]
+name = "merge_by_effect"
+module = "merge_by_effect"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R2: 49 --admin merges in 9 days while pr_body_check taught the bypass (#1023)", "decision 13.1: keep the admin bypass actor (ruleset 20597822, RepositoryRole 5, bypass_mode always) and deny every agent merge path by effect"]
+planted = "tests/planted/merge_by_effect.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "status_forge"
+module = "status_forge"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R25: self-certified artifacts; statuses are posted from receipts by rails check --post", "decision 7: an artifact the agent writes proves nothing by itself"]
+planted = "tests/planted/status_forge.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+[[gate]]
+name = "second_pr"
+module = "second_pr"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-13"
+cites = ["R27: 'one PR per line of work' restated 25+ times by the operator", "duplicate PRs squash-landed empty commits whose messages claimed work"]
+planted = "tests/planted/second_pr.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-06"

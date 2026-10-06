@@ -1,0 +1,13 @@
+# What a root may omit, and until when. tests/test_root_parity.py fails an
+# omission with no row here, a row without a reason, and a row past `expires`.
+#
+#   root     a key of roots/registry.py ROOTS
+#   kind     seam | schedule | config
+#   name     the seam, schedule or ENV name omitted
+
+[[exclude]]
+root = "app"
+kind = "config"
+name = "MIGRATE_DATABASE_URL"
+reason = "read by the migrate CLI (python -m __app__.migrate), which runs before the server, never by it"
+expires = "__EXPIRES__"

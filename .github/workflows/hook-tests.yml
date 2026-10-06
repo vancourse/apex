@@ -1,50 +1,40 @@
-# apex's Python hooks — the suite that keeps them honest.
-#
-# A hook is uniquely easy to break silently: it has no importers, it produces no
-# diff, and these three are fail-open by construction, so a dead hook emits
-# nothing and exits 0 — indistinguishable from a healthy one with nothing to say.
-# A dropped `import json` did exactly that once, and only a suite like this caught
-# it. `session_collisions.py` has the sharper version of the same edge: silence is
-# its *normal* output, so "it ran and said nothing" can never be read as health.
-#
-# Paths-scoped, like conformance-lint: this fires only when the hooks, their
-# tests, their registration, or the templates they inject actually change.
+# The plugin's own suite, on Linux AND Windows (design R19): the hooks run on a
+# Windows box with PowerShell 5.1 and backslash paths, and a gate calibrated only
+# on Linux is the Sherpa gate-B story. apex is a public repo: these minutes are free.
 name: hook-tests
 
 on:
   push:
-    paths:
-      - "hooks/**"
-      - "templates/**"
-      - ".github/workflows/hook-tests.yml"
+    branches: [main]
   pull_request:
-    paths:
-      - "hooks/**"
-      - "templates/**"
-      - ".github/workflows/hook-tests.yml"
 
 permissions:
   contents: read
 
 jobs:
-  python-hooks:
-    runs-on: ubuntu-latest
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: git identity for the tests' throwaway repos
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "ci"
       - name: install pytest
-        run: pip install pytest
-      - name: hooks must compile
-        run: python -m py_compile hooks/_hooklib.py hooks/artifact_templates.py hooks/session_collisions.py hooks/acceptance_checklist.py hooks/issue_cap.py hooks/session_output_gate.py
-      - name: hooks.json must be valid JSON
-        run: python -c "import json; json.load(open('hooks/hooks.json'))"
-      - name: hook suite
-        run: python -m pytest hooks/tests/ -q
-      # The gates ship to other repos, so nothing in apex imports them and a broken
-      # one produces no diff here — the same silent-failure shape as the hooks above.
-      # `templates/**` was already in this workflow's paths filter; only the suite was
-      # missing, so these tests existed and never ran.
-      - name: gate suite
-        run: python -m pytest templates/gates/tests/ -q
+        run: python -m pip install pytest
+      - name: package compiles
+        run: python -m compileall -q rails hooks bin/rails bin/rails-githook
+      - name: hooks.json is valid and registers only the dispatcher
+        run: python -c "import json; h=json.load(open('hooks/hooks.json')); cmds={c['command'] for e in h['hooks'].values() for m in e for c in m['hooks']}; assert all('rails_hook.py' in c for c in cmds), cmds"
+      - name: suite (kit tests run in kit.yml)
+        run: python -m pytest tests -q --ignore=tests/kit

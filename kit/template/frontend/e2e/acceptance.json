@@ -1,0 +1,24 @@
+[
+  {
+    "step": "a1",
+    "screen": "summary",
+    "text_expected": "Export CSV",
+    "why": "The skeleton deliberately has no Export CSV control. This line fails honestly until it is built."
+  },
+  {
+    "step": "a2",
+    "screen": "summary",
+    "text_expected": "Month total for 2026-02"
+  },
+  {
+    "step": "a3",
+    "screen": "summary",
+    "text_expected": "60.24",
+    "why": "Aroha's February in Auckland: 19.99 + 31.50 + 8.75 -- including an entry UTC files under January."
+  },
+  {
+    "step": "a4",
+    "screen": "summary",
+    "text_expected": "bus pass"
+  }
+]

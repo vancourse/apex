@@ -1,0 +1,8 @@
+# Numeric contract fields no concept owns YET. A dated debt, not a parking lot:
+# tests/test_concepts.py fails a row past `expires`, a row without a reason, and
+# a row naming a field that no longer exists.
+#
+# [[unowned]]
+# column = "Model.field"
+# reason = "why no concept owns it yet"
+# expires = "YYYY-MM-DD"

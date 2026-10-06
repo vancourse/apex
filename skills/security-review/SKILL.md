@@ -1,31 +1,31 @@
 ---
 name: security-review
-description: PR-time security audit of the implementation against the threat model. 5-pass — secrets management, authentication + authorization (per-layer, fail-closed), input validation + output encoding, dependency vulnerability scan + supply-chain integrity, audit log + observability for security events. Plus inline adversarial counter-pass at every step. Pairs with apex:threat-model (design-phase threat model produces the contract this audit verifies) and apex:architecture-design Passes 3 + 7 (the system-level security model). Fires at the PRE-PR phase, before opening a PR that touches auth / data access / external input / cryptography / sensitive paths. Keywords: security review, security audit, secrets, authn, authz, OWASP, CVE, supply chain, dependency vuln, audit log.
+description: Pre-PR security pass for auth, data access, external input, secrets and dependencies.
 ---
 
 # Security Review
 
-PR-time security audit. Verifies the implementation actually mitigates the threats identified at design time (`apex:threat-model`), against the system-level security model from `apex:architecture-design` Passes 3 + 7.
+PR-time security audit. Verifies the implementation actually mitigates the threats identified at design time (`rails:threat-model`), against the system-level security model from `rails:architecture-design` Passes 3 + 7.
 
 Distinct from:
 
-- **`apex:python-review/rules/security.md`** and **`apex:typescript-review/rules/security.md`** — language-specific tooling rules; loaded as needed during review
-- **`apex:threat-model`** — design-phase modeling; produces the *contract*; this skill verifies adherence
-- **`apex:ai-pre-review-checklist`** Step 2 (layering) — touches security at layering level; this skill is the dedicated security gate
+- **`rails:python-review/rules/security.md`** and **`rails:typescript-review/rules/security.md`** — language-specific tooling rules; loaded as needed during review
+- **`rails:threat-model`** — design-phase modeling; produces the *contract*; this skill verifies adherence
+- **`rails:ai-pre-review-checklist`** Step 2 (layering) — touches security at layering level; this skill is the dedicated security gate
 - **Claude Code built-in `/security-review`** — file-focused, useful for ad-hoc; this skill is integrated into the apex flow
 
 ## When to invoke
 
-- PRE-PR phase, after `apex:ai-pre-review-checklist` and before `apex:pr-discipline` §1 (ask before push)
+- PRE-PR phase, after `rails:ai-pre-review-checklist` and before `rails:pr-discipline` §1 (ask before push)
 - ANY PR that touches: auth/credentials/oauth/secrets paths (guard-security-paths hook nudges this), database schema, external-input handling (uploads, webhooks, API endpoints), cryptography, audit-log emission, role/permission checks, environment variables
 - Periodically on a tagged "security sweep" — even when the PR doesn't *obviously* touch security paths
 
 Pairs with:
 
-- **`apex:threat-model`** — the design-time output this audit verifies
-- **`apex:architecture-design`** Pass 3 + Pass 7 + the resulting ADRs 0003 + 0007 — the system-level invariants
-- **`apex:python-review/rules/security.md`** / **`apex:typescript-review/rules/security.md`** — tooling-specific patterns
-- **`apex:responding-to-review`** — security findings go through normal review-response discipline
+- **`rails:threat-model`** — the design-time output this audit verifies
+- **`rails:architecture-design`** Pass 3 + Pass 7 + the resulting ADRs 0003 + 0007 — the system-level invariants
+- **`rails:python-review/rules/security.md`** / **`rails:typescript-review/rules/security.md`** — tooling-specific patterns
+- **`rails:responding-to-review`** — security findings go through normal review-response discipline
 
 ## Adversarial counter-pass — read this first
 
@@ -35,11 +35,11 @@ Every pass below has an inline adversarial counter-pass. Security review without
 
 Before running the 5 passes, load:
 
-- The feature's threat model (from `apex:threat-model` — typically a "Threat Model" section in the design doc)
+- The feature's threat model (from `rails:threat-model` — typically a "Threat Model" section in the design doc)
 - ADR-0003 (auth + data classification) and ADR-0007 (system-level threat model)
 - Any prior security findings on this feature or adjacent code (search `audit_events`, security tickets)
 
-If the threat model is missing, that's the first finding — STOP and push back upstream to `apex:threat-model` before continuing.
+If the threat model is missing, that's the first finding — STOP and push back upstream to `rails:threat-model` before continuing.
 
 ## The 5 passes
 
@@ -146,7 +146,7 @@ If the threat model is missing, that's the first finding — STOP and push back 
 
 ## Adversarial pair pattern (for high-stakes PRs)
 
-For PRs touching auth / payment / multi-tenant data / admin actions / cryptography, dispatch the security review as **two parallel agents** via `apex:adversarial-pair` (apex's canonical dispatch mechanic):
+For PRs touching auth / payment / multi-tenant data / admin actions / cryptography, dispatch the security review as **two parallel agents** via `rails:adversarial-pair` (apex's canonical dispatch mechanic):
 
 - **Cooperative agent** — runs the 5 passes in defense mode. Confirms mitigations are present.
 - **Adversarial agent** — runs the same in attack mode. Each counter-pass becomes the lens. Treats the PR as an unfamiliar code base they're paid to find holes in.
@@ -159,7 +159,7 @@ The security review passes if:
 
 - All 5 passes meet pass conditions
 - Adversarial counter-pass findings are addressed
-- Every threat from `apex:threat-model`'s output has a corresponding mitigation in the diff (or an explicit accepted residual risk)
+- Every threat from `rails:threat-model`'s output has a corresponding mitigation in the diff (or an explicit accepted residual risk)
 - Audit log + alerts cover the high-risk paths
 
 Fail any → fix before opening / re-requesting review on the PR. Security findings are the highest-priority blockers — a failing security review should block merge regardless of other gates.
@@ -168,6 +168,6 @@ Fail any → fix before opening / re-requesting review on the PR. Security findi
 
 After passing:
 
-- `apex:pr-discipline` §1 (ask before push, draft default)
-- `apex:pr-review-primer` (description template) — security-relevant findings noted in the PR body
-- `apex:copilot-review-loop` — Copilot's pattern-matching catches some classes this gate doesn't; both run as complementary
+- `rails:pr-discipline` §1 (ask before push, draft default)
+- `rails:pr-review-primer` (description template) — security-relevant findings noted in the PR body
+- `rails:copilot-review-loop` — Copilot's pattern-matching catches some classes this gate doesn't; both run as complementary
