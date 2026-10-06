@@ -212,3 +212,38 @@ def test_verifier_treats_unlistable_diff_as_every_lane():
         "backend",
         "frontend",
     ]
+
+
+def test_advisory_lane_reports_but_does_not_gate_until_its_date(repo, commit, py):
+    import datetime as dt
+
+    (repo / "lanes.toml").write_text(
+        f"""
+[settings]
+base = "origin/main"
+[[lane]]
+name = "checks"
+always = true
+command = ["{py}", "-c", "print('ok')"]
+[[lane]]
+name = "image"
+always = true
+advisory_until = "2999-01-01"
+command = ["{py}", "-c", "import sys; sys.exit(9)"]
+""",
+        encoding="utf-8",
+    )
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    out = io.StringIO()
+    assert check.check(repo, out=out) == 0, out.getvalue()
+    assert "ADVISORY image" in out.getvalue()
+    assert receipts.has_marker(store.find_repo(repo), sha, full=True)
+    cfg = lanes.load(repo / "lanes.toml")
+    assert [l.name for l in verify.required(cfg, ["src/a.py"])] == ["checks"]
+    after = dt.date(2999, 1, 2)
+    assert [l.name for l in verify.required(cfg, ["src/a.py"], today=after)] == ["checks", "image"]
+
+
+def test_an_advisory_lane_without_a_parseable_date_gates():
+    lane = lanes.Lane(name="x", advisory_until="soon")
+    assert lane.advisory() is False

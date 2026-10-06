@@ -28,6 +28,7 @@ Schema::
     timeout_min = 20
     quick = false                     # included in `rails check --quick`
     needs = ["postgres"]              # prerequisites: docker | postgres | node | pnpm | uv
+    advisory_until = "2026-10-20"     # optional: runs and reports, gates nothing, until this date
 
 Globs: ``**`` spans any number of path segments (including none), ``*`` and
 ``?`` stay inside one segment, a trailing ``/`` matches everything under that
@@ -36,6 +37,7 @@ directory. Stdlib only — this module is also run by the CI verifier.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -54,6 +56,19 @@ class Lane:
     timeout_min: float = 30
     quick: bool = False
     needs: list[str] = field(default_factory=list)
+    advisory_until: str = ""  # ISO date: runs and reports, but gates nothing, until then
+
+    def advisory(self, today: "_dt.date | None" = None) -> bool:
+        """True while this lane is advisory. A lane that has never been green on the
+        machine that runs it reports before it gates, and only until a fixed date:
+        an advisory lane with no date is a reporting job nobody reads."""
+        if not self.advisory_until:
+            return False
+        today = today or _dt.date.today()
+        try:
+            return today < _dt.date.fromisoformat(self.advisory_until)
+        except ValueError:
+            return False
 
 
 @dataclass
@@ -129,6 +144,7 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 timeout_min=float(raw.get("timeout_min", 30)),
                 quick=bool(raw.get("quick", False)),
                 needs=list(raw.get("needs", [])),
+                advisory_until=str(raw.get("advisory_until", "")),
             )
         )
     return LaneConfig(

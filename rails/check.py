@@ -201,6 +201,7 @@ def check(
         print("  nothing selected", file=out)
     log_dir = repo.leaf_dir / "logs" / sha[:12]
     failed: list[str] = []
+    advisory_failed: list[str] = []
     passed: list[str] = []
     for lane in selected:
         why = missing_prerequisite(lane)
@@ -216,7 +217,7 @@ def check(
                 secs=0,
                 why=why,
             )
-            failed.append(lane.name)
+            (advisory_failed if lane.advisory() else failed).append(lane.name)
             continue
         print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
         log_path = log_dir / f"{lane.name}.log"
@@ -244,7 +245,10 @@ def check(
             if tail:
                 print("  ---- last lines ----", file=out)
                 print("\n".join("  | " + line for line in tail.splitlines()), file=out)
-            failed.append(lane.name)
+            (advisory_failed if lane.advisory() else failed).append(lane.name)
+    for name in advisory_failed:
+        lane = config.lane(name)
+        print(f"  ADVISORY {name}: failed or could not run; it gates nothing until {lane.advisory_until}", file=out)
     whole_selection = not only
     if not failed and whole_selection and not dirty:
         path = receipts.write_marker(repo, sha, tree_sha, passed, quick=quick)

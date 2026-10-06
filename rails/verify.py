@@ -90,12 +90,10 @@ class Api:
         return self.get(f"git/commits/{sha}")["tree"]["sha"]
 
 
-def required(
-    config: lanes_mod.LaneConfig, changed: list[str] | None
-) -> list[lanes_mod.Lane]:
-    if changed is None:
-        return list(config.lanes)
-    return lanes_mod.select(config, changed).selected
+def required(config: lanes_mod.LaneConfig, changed: list[str] | None, today=None) -> list[lanes_mod.Lane]:
+    """The lanes this diff must prove: selected, and not advisory today."""
+    lanes = list(config.lanes) if changed is None else lanes_mod.select(config, changed).selected
+    return [lane for lane in lanes if not lane.advisory(today)]
 
 
 def evaluate(config, needed, statuses, tree_sha) -> tuple[list[str], list[str]]:
