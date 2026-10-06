@@ -248,7 +248,10 @@ def check(
             (advisory_failed if lane.advisory() else failed).append(lane.name)
     for name in advisory_failed:
         lane = config.lane(name)
-        print(f"  ADVISORY {name}: failed or could not run; it gates nothing until {lane.advisory_until}", file=out)
+        print(
+            f"  ADVISORY {name}: failed or could not run; it gates nothing until {lane.advisory_until}",
+            file=out,
+        )
     whole_selection = not only
     if not failed and whole_selection and not dirty:
         path = receipts.write_marker(repo, sha, tree_sha, passed, quick=quick)
@@ -299,6 +302,16 @@ def post(cwd: Path, *, out=sys.stdout, rerun: bool = True) -> int:
             print(
                 f"  skip  {lane_name:<14} ran over a dirty tree; re-run on the commit",
                 file=out,
+            )
+            continue
+        advisory = any(
+            lane.name == lane_name and lane.advisory() for lane in config.lanes
+        )
+        if advisory and row.get("exit") != 0:
+            # A red status for a lane that gates nothing reads as a broken PR and
+            # wakes every CI monitor. It is reported locally and in the PR body.
+            print(
+                f"  skip  {lane_name:<14} advisory and not green; not posted", file=out
             )
             continue
         state = "success" if row.get("exit") == 0 else "failure"

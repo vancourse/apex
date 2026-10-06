@@ -247,3 +247,31 @@ command = ["{py}", "-c", "import sys; sys.exit(9)"]
 def test_an_advisory_lane_without_a_parseable_date_gates():
     lane = lanes.Lane(name="x", advisory_until="soon")
     assert lane.advisory() is False
+
+
+def test_post_skips_an_advisory_lane_that_is_not_green(repo, commit, py, monkeypatch):
+    (repo / "lanes.toml").write_text(
+        f"""
+[settings]
+base = "origin/main"
+[[lane]]
+name = "checks"
+always = true
+command = ["{py}", "-c", "print('ok')"]
+[[lane]]
+name = "image"
+always = true
+advisory_until = "2999-01-01"
+command = ["{py}", "-c", "import sys; sys.exit(9)"]
+""",
+        encoding="utf-8",
+    )
+    commit(repo, "src/a.py", "x = 1\n")
+    check.check(repo, out=io.StringIO())
+    posted = []
+    monkeypatch.setattr(check, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check, "gh_api", lambda top, path, method="GET", payload=None: posted.append(payload["context"]))
+    out = io.StringIO()
+    assert check.post(repo, out=out, rerun=False) == 0
+    assert posted == ["rails/checks"]
+    assert "advisory and not green; not posted" in out.getvalue()
