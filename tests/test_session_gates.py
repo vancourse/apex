@@ -485,3 +485,76 @@ def test_ship_body_puts_each_close_on_its_own_line(repo):
     rid = store.find_repo(repo)
     body = ship.compose_body("Intent here.", ["12", "#34"], rid, "deadbeef" * 5)
     assert "Closes #12\n\nCloses #34" in body
+
+
+def _ship_fixture(repo, git, commit, monkeypatch):
+    """A repo with a bare origin, a sealed full marker, and gh faked at the module seam."""
+    import subprocess as sp
+
+    remote = repo.parent / "origin.git"
+    sp.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    git(repo, "config", f"url.{remote.as_posix()}.insteadOf", "https://github.com/acme/app.git")
+    sha = commit(repo, "a.txt", "x\n")
+    rid = store.find_repo(repo)
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    calls = {"api": [], "gh": [], "merge": []}
+
+    def fake_gh(top, *args, check=True, timeout=60):
+        calls["gh"].append(args)
+        return ""  # `gh pr view`: no open PR yet
+
+    def fake_api(top, path, *, method="GET", payload=None, timeout=60):
+        calls["api"].append((path, method, payload))
+        if path == "repos/acme/app":
+            return {"default_branch": "main"}
+        return {"number": 7, "html_url": "https://github.com/acme/app/pull/7"}
+
+    real_run = sp.run
+
+    def fake_run(args, *a, **kw):
+        if args and args[0] == "gh":
+            calls["merge"].append(args)
+            return sp.CompletedProcess(args, 0, "", "")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(ship, "gh", fake_gh)
+    monkeypatch.setattr(ship, "gh_api", fake_api)
+    monkeypatch.setattr(ship.subprocess, "run", fake_run)
+    import rails.check as check_mod
+
+    monkeypatch.setattr(check_mod, "post", lambda top, out=None: 0)
+    return rid, sha, calls
+
+
+def test_ship_opens_one_pr_through_the_api_and_arms_it(repo, git, commit, monkeypatch):
+    import io
+
+    rid, sha, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    out = io.StringIO()
+    code = ship.ship(repo, title="Export CSV — the summary", body="b", base=None, closes=["12"], out=out)
+    assert code == 0, out.getvalue()
+    created = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls"]
+    assert len(created) == 1 and created[0][2]["title"] == "Export CSV — the summary"
+    assert "Closes #12" in created[0][2]["body"]
+    assert calls["merge"] == [["gh", "pr", "merge", "7", "--auto", "--squash"]]
+    pr = store.read_json(rid.leaf_dir / "pr.json")
+    assert pr["number"] == 7 and pr["armed"] is True and pr["sha"] == sha
+
+
+def test_ship_no_arm_leaves_the_pr_unarmed(repo, git, commit, monkeypatch):
+    import io
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    assert ship.ship(repo, title="t", body="b", base="main", closes=[], arm=False, out=io.StringIO()) == 0
+    assert calls["merge"] == []
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False
+
+
+def test_ship_refuses_without_the_full_marker(repo, commit):
+    import io
+
+    commit(repo, "a.txt", "x\n")
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body="b", base=None, closes=[], out=out) == 1
+    assert "no full check marker" in out.getvalue()

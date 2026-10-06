@@ -84,7 +84,7 @@ def changed_files(cwd: Path, base_sha: str, rev: str = "HEAD") -> list[str]:
 
 def origin_slug(cwd: Path) -> str | None:
     """`owner/repo` from the origin remote URL (https or ssh), or None."""
-    url = git(cwd, "remote", "get-url", "origin", check=False)
+    url = git(cwd, "config", "--get", "remote.origin.url", check=False)  # raw: insteadOf must not change identity
     m = re.search(r"github\.com[:/]+([^/]+)/([^/\s]+?)(?:\.git)?/?$", url)
     return f"{m.group(1)}/{m.group(2)}" if m else None
 

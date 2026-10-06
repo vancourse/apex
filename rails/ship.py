@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 from rails import leak, receipts, store, work
-from rails.gitutil import GitError, branch, dirty_tracked, gh, head, toplevel
+from rails.gitutil import GitError, branch, dirty_tracked, gh, gh_api, head, origin_slug, toplevel
 
 
 def _intent_title_body(top: Path) -> tuple[str, str]:
@@ -85,6 +85,7 @@ def ship(
     body: str,
     base: str | None,
     closes: list[str],
+    arm: bool = True,
     out=sys.stdout,
 ) -> int:
     repo = store.find_repo(cwd)
@@ -157,34 +158,41 @@ def ship(
         except ValueError:
             pass
     if number is None:
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".md", delete=False, encoding="utf-8"
-        ) as fh:
-            fh.write(full_body)
-            body_file = fh.name
-        args = [
-            "pr",
-            "create",
-            "--title",
-            title,
-            "--body-file",
-            body_file,
-            "--head",
-            br,
-        ]
-        if base:
-            args += ["--base", base]
+        # Through the API with an ASCII-escaped JSON body, never argv: on Windows a
+        # non-ASCII title passed as an argument arrives mangled (178 issues, 2026-09-26).
+        slug = origin_slug(top)
+        if slug is None:
+            print("rails ship: origin is not a GitHub remote", file=out)
+            return 2
         try:
-            url = gh(top, *args).strip().splitlines()[-1]
-        except GitError as exc:
-            print(f"rails ship: gh pr create failed: {exc}", file=out)
+            if not base:
+                base = gh_api(top, f"repos/{slug}")["default_branch"]
+            created = gh_api(
+                top,
+                f"repos/{slug}/pulls",
+                method="POST",
+                payload={"title": title, "head": br, "base": base, "body": full_body, "draft": False},
+            )
+        except (GitError, KeyError, TypeError) as exc:
+            print(f"rails ship: creating the PR failed: {exc}", file=out)
             return 1
-        m = re.search(r"/pull/(\d+)", url)
-        number = int(m.group(1)) if m else None
+        number, url = created.get("number"), created.get("html_url", "")
     if number is None:
         print("rails ship: could not determine the PR number", file=out)
         return 1
-    armed = gh(top, "pr", "merge", str(number), "--auto", "--squash", check=False)
+    armed = False
+    if arm:
+        done = subprocess.run(
+            ["gh", "pr", "merge", str(number), "--auto", "--squash"],
+            cwd=str(top),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        armed = done.returncode == 0
+        if not armed:
+            print(f"  could not arm auto-merge: {done.stderr.strip()[:300]}", file=out)
     store.write_json(
         repo.leaf_dir / "pr.json",
         {
@@ -192,7 +200,7 @@ def ship(
             "url": url,
             "branch": br,
             "state": "OPEN",
-            "armed": True,
+            "armed": armed,
             "sha": sha,
             "monitor": "unbound",
             "at": int(time.time()),
@@ -206,12 +214,12 @@ def ship(
     from rails.check import post
 
     post(top, out=out)
-    receipts.write(repo, "ship", sha=sha, pr=number)
+    receipts.write(repo, "ship", sha=sha, pr=number, armed=armed)
     print(f"rails ship: PR #{number} {url}", file=out)
-    print(
-        "  armed: auto-squash" + ("" if armed is not None else " (could not confirm)"),
-        file=out,
-    )
+    if arm:
+        print("  armed: auto-squash" if armed else "  NOT armed (see above)", file=out)
+    else:
+        print("  not armed (--no-arm): it waits for a named outside step; say which in the PR body", file=out)
     print(
         "  next: bind the monitor (ccd_pr bind_pr + set_monitor), then `rails work monitor-bound`",
         file=out,
@@ -225,11 +233,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--body-file", default="")
     ap.add_argument("--base", default=None)
     ap.add_argument("--closes", action="append", default=[])
+    ap.add_argument("--no-arm", action="store_true", help="open it Ready but do not arm: it waits on an outside step")
     args = ap.parse_args(argv)
     body = Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
     try:
         return ship(
-            Path.cwd(), title=args.title, body=body, base=args.base, closes=args.closes
+            Path.cwd(), title=args.title, body=body, base=args.base, closes=args.closes, arm=not args.no_arm
         )
     except GitError as exc:
         print(f"rails ship: {exc}")
