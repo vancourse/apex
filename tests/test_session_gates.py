@@ -558,3 +558,23 @@ def test_ship_refuses_without_the_full_marker(repo, commit):
     out = io.StringIO()
     assert ship.ship(repo, title="t", body="b", base=None, closes=[], out=out) == 1
     assert "no full check marker" in out.getvalue()
+
+
+def test_ship_leak_check_follows_the_leak_gates_shadow(repo, git, commit, monkeypatch):
+    import io
+
+    from rails import githooks
+
+    (repo / "rails").mkdir()
+    (repo / "rails" / "leak.toml").write_text("[snapshot]\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "leak config")
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    monkeypatch.setattr(githooks, "_shadowed", lambda name: True)
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body="b", base="main", closes=[], arm=False, out=out) == 0
+    assert "rails shadow: leak check would refuse" in out.getvalue()
+    monkeypatch.setattr(githooks, "_shadowed", lambda name: False)
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body="b", base="main", closes=[], arm=False, out=out) == 1
+    assert "could not look" in out.getvalue()

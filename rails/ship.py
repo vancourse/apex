@@ -134,8 +134,15 @@ def ship(
             leak.allowlist_for(top),
         )
         if result.code != leak.EXIT_CLEAN:
-            print("rails ship: refused - " + result.report(), file=out)
-            return 1
+            from rails.githooks import _log, _shadowed
+
+            if _shadowed("leak_dispatch"):
+                # The same 7-day shadow as the dispatcher's leak gate: log, do not refuse.
+                _log(repo, "leak_dispatch", "would-deny")
+                print("  [rails shadow: leak check would refuse] " + result.report().splitlines()[0], file=out)
+            else:
+                print("rails ship: refused - " + result.report(), file=out)
+                return 1
     br = branch(top)
     if not br:
         print("rails ship: detached HEAD; ship from a branch", file=out)
