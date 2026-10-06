@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git stash:*)",
+      "PowerShell(git stash:*)",
+      "Bash(git push --force:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./.rails/**)",
+      "Write(./.rails/**)"
+    ]
+  }
+}

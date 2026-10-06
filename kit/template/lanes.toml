@@ -1,0 +1,42 @@
+# Which checks a diff needs -- read by `rails check` on the laptop and by the
+# verifier in CI (from the BASE branch), so "what ran" and "what is required"
+# are one function of one file. Schema: rails/lanes.py in the rails plugin.
+
+[settings]
+base = "origin/main"
+status_prefix = "rails/"
+all_lanes_on = ["lanes.toml", "pyproject.toml", "uv.lock", "settings.toml", "frontend/package.json", "frontend/pnpm-lock.yaml"]
+
+[[lane]]
+name = "backend"
+paths = ["src/**", "contracts/**", "migrations/**", "tests/**", "oracle/**", "fixtures/**", "scripts/**", "deploy/**", "wire/**", "*.toml", "concepts/**"]
+command = ["uv", "run", "pytest", "-q"]
+env = { DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres" }
+timeout_min = 15
+quick = true
+needs = ["uv", "postgres"]
+
+[[lane]]
+name = "frontend"
+paths = ["frontend/**"]
+paths_ignore = ["frontend/e2e/**"]
+command = ["pnpm", "--dir", "frontend", "run", "check"]
+timeout_min = 10
+quick = true
+needs = ["node", "pnpm"]
+
+[[lane]]
+name = "walk"
+paths = ["frontend/**", "src/**", "contracts/**", "migrations/**", "fixtures/**", "scripts/walk.py"]
+command = ["uv", "run", "python", "scripts/walk.py"]
+env = { DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres" }
+timeout_min = 15
+needs = ["uv", "postgres", "node", "pnpm"]
+
+[[lane]]
+name = "gen"
+always = true
+command = ["uv", "run", "python", "scripts/gen.py", "all", "--check"]
+timeout_min = 5
+quick = true
+needs = ["uv", "node"]

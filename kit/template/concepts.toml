@@ -1,0 +1,68 @@
+# Domain concepts: one owner each, one independent oracle, one examples table.
+#
+#   name          the concept; <Figure concept="..."> only accepts these (frontend/src/gen/concepts.ts)
+#   unit          cents | count  -- how <Figure> formats it
+#   columns       every contract field that carries it (Model.field)
+#   entity        the stored column it is computed from
+#   owner         the ONE function that computes it (module:function)
+#   pinning_test  the test that runs the examples (path::test_name)
+#   oracle        the independent recomputation (oracle/checker.py)
+#   examples      inputs -> expected over the PLANTED corpus; planted values only
+#   examples_hash sha256 of the examples, canonical JSON. tests/test_concepts.py
+#                 fails when they differ: changing an expected value is a decision,
+#                 so it changes the hash in the same diff (`rails approve` pins it).
+#
+# Every numeric contract field is listed in some row's `columns` or in
+# concepts/unowned.toml with an expiry (tests/test_concepts.py).
+
+[[concept]]
+name = "month_total"
+unit = "cents"
+columns = ["Summary.month_total_cents"]
+entity = "entries.amount_cents"
+owner = "__app__.ledger:month_total"
+pinning_test = "tests/test_surface_parity.py::test_month_total_examples"
+oracle = "oracle.checker:month_total"
+examples_hash = "sha256:4da9f56f0ea656242795421b27263efd128d609191fece669f15195a6d5eafe8"
+
+[[concept.example]]
+household = "hh_harbour"
+month = "2026-01"
+expected = 6710
+
+[[concept.example]]
+household = "hh_harbour"
+month = "2026-02"
+expected = 6024
+
+[[concept.example]]
+household = "hh_meadow"
+month = "2026-01"
+expected = 12650
+
+[[concept.example]]
+household = "hh_meadow"
+month = "2026-02"
+expected = 7500
+
+[[concept]]
+name = "entry_amount"
+unit = "cents"
+columns = ["Entry.amount_cents", "NewEntry.amount_cents"]
+entity = "entries.amount_cents"
+owner = "__app__.ledger:add_entry"
+pinning_test = "tests/test_surface_parity.py::test_entry_amount_examples"
+oracle = "oracle.checker:entry_amount"
+examples_hash = "sha256:ab1e37e2b3e56264148ad040410ae7639a9fd7f4bb144432962a3650093d602d"
+
+[[concept.example]]
+household = "hh_harbour"
+month = "2026-02"
+note = "bus pass"
+expected = 1999
+
+[[concept.example]]
+household = "hh_meadow"
+month = "2026-01"
+note = "late snack"
+expected = 650

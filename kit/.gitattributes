@@ -1,0 +1,3 @@
+# The template's generated files are compared byte-for-byte with their
+# regeneration in every generated app: keep LF on every checkout, Windows included.
+* text=auto eol=lf

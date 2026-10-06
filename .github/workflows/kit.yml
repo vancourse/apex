@@ -1,0 +1,64 @@
+# The starter kit, proven: generate it with `rails new`, run the generated app's
+# backend suite, frontend check and planted walk, then plant each seam defect in
+# a fresh copy and require the test that guards it to FAIL (tests/kit/test_kit.py).
+#
+# Paths-scoped: the kit only changes when the template, the generator or this
+# proof changes.
+name: kit
+
+on:
+  pull_request:
+    paths:
+      - "kit/**"
+      - "rails/new.py"
+      - "tests/kit/**"
+      - ".github/workflows/kit.yml"
+  push:
+    paths:
+      - "kit/**"
+      - "rails/new.py"
+      - "tests/kit/**"
+      - ".github/workflows/kit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      RAILS_KIT_INSTALL_BROWSERS: "1"  # the walk test installs chromium (with OS deps) into the generated app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install pytest
+        run: pip install pytest
+      - name: kit
+        run: python -m pytest tests/kit -q -m kit -rfEs

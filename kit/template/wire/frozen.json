@@ -1,0 +1,163 @@
+{
+  "models": {
+    "Entry": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_cents": {
+          "title": "Amount Cents",
+          "type": "integer"
+        },
+        "household_id": {
+          "title": "Household Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "note": {
+          "title": "Note",
+          "type": "string"
+        },
+        "occurred_on": {
+          "format": "date",
+          "title": "Occurred On",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "household_id",
+        "member_id",
+        "amount_cents",
+        "occurred_on",
+        "note"
+      ],
+      "title": "Entry",
+      "type": "object"
+    },
+    "EntryList": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "household_id": {
+          "title": "Household Id",
+          "type": "string"
+        },
+        "month": {
+          "title": "Month",
+          "type": "string"
+        }
+      },
+      "required": [
+        "household_id",
+        "month",
+        "entries"
+      ],
+      "title": "EntryList",
+      "type": "object"
+    },
+    "Health": {
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "enum": [
+            "wall",
+            "pinned"
+          ],
+          "title": "Clock",
+          "type": "string"
+        },
+        "status": {
+          "const": "ok",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "clock"
+      ],
+      "title": "Health",
+      "type": "object"
+    },
+    "Me": {
+      "additionalProperties": false,
+      "properties": {
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "household_id": {
+          "title": "Household Id",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "household_id",
+        "display_name"
+      ],
+      "title": "Me",
+      "type": "object"
+    },
+    "NewEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_cents": {
+          "title": "Amount Cents",
+          "type": "integer"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount_cents"
+      ],
+      "title": "NewEntry",
+      "type": "object"
+    },
+    "Summary": {
+      "additionalProperties": false,
+      "properties": {
+        "household_id": {
+          "title": "Household Id",
+          "type": "string"
+        },
+        "month": {
+          "title": "Month",
+          "type": "string"
+        },
+        "month_total_cents": {
+          "title": "Month Total Cents",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "household_id",
+        "month",
+        "month_total_cents"
+      ],
+      "title": "Summary",
+      "type": "object"
+    }
+  }
+}

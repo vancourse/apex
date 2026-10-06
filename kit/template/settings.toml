@@ -1,0 +1,90 @@
+# Every setting, declared ONCE. Nothing else lists environment names by hand.
+#
+#   uv run python scripts/gen.py settings
+#
+# regenerates src/__app__/settings.py, deploy/compose.env.yml,
+# deploy/preflight_names.txt and frontend/src/gen/settings.ts from this file.
+# tests/test_settings_parity.py fails when any of them is stale, and when code
+# under src/ reads an environment name that is not declared here.
+#
+# Fields:
+#   name       ENV_NAME (the field is its lower-case form)
+#   type       str | int | bool | url
+#   required   the server refuses to start without it (compose: ${NAME:?})
+#   default    used when unset (not allowed on a required row)
+#   secret     never logged, never returned, never sent to the frontend
+#   consumers  server | frontend | compose | preflight
+#   test_only  a server setting that compose must NOT forward (production keeps the default)
+
+[[setting]]
+name = "DATABASE_URL"
+type = "url"
+required = true
+secret = true
+consumers = ["server", "compose", "preflight"]
+doc = "DSN the server connects with: the app role (NOSUPERUSER NOBYPASSRLS), never the table owner."
+
+[[setting]]
+name = "MIGRATE_DATABASE_URL"
+type = "url"
+default = ""
+secret = true
+consumers = ["server", "preflight"]
+doc = "DSN of the schema owner, read only by `python -m __app__.migrate`."
+
+[[setting]]
+name = "AS_OF"
+type = "str"
+default = ""
+consumers = ["server", "compose"]
+doc = "ISO-8601 instant that pins the clock (planted runs, the walk). Empty means the wall clock."
+
+[[setting]]
+name = "ALLOW_DEV_AUTH"
+type = "bool"
+default = false
+consumers = ["server", "compose"]
+doc = "DEV ONLY: accept planted member tokens in X-Member. The root refuses to boot without an auth seam."
+
+[[setting]]
+name = "STATIC_DIR"
+type = "str"
+default = ""
+consumers = ["server", "compose"]
+doc = "Built frontend served at / (the walk lane). Empty serves the API only."
+
+[[setting]]
+name = "HOST"
+type = "str"
+default = "127.0.0.1"
+consumers = ["server", "compose"]
+doc = "Bind address."
+
+[[setting]]
+name = "PORT"
+type = "int"
+default = 8000
+consumers = ["server", "compose"]
+doc = "Bind port."
+
+[[setting]]
+name = "ADMIT_RACE_WINDOW_MS"
+type = "int"
+default = 0
+consumers = ["server"]
+test_only = true
+doc = "Widens the admit check-to-insert window so a missing lock is caught by tests/test_caps_parallel.py."
+
+[[setting]]
+name = "REQUEST_TIMEOUT_MS"
+type = "int"
+default = 8000
+consumers = ["frontend"]
+doc = "The frontend gives up on a request after this long and renders the failed state."
+
+[[setting]]
+name = "API_BASE"
+type = "str"
+default = ""
+consumers = ["frontend"]
+doc = "Origin prefix for API calls. Empty means same origin."
