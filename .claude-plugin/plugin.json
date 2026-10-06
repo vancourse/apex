@@ -1,17 +1,17 @@
 {
-  "name": "apex",
-  "version": "0.6.0",
-  "description": "Opinionated SDLC framework — plan before coding, reconnaissance before design, adversarial design checklist, phase-routed skill gates, hooks for workflow automation. Pairs custom review skills with curated third-party plugin dependencies.",
+  "name": "rails",
+  "version": "1.0.0",
+  "description": "The rails: one hook dispatcher, local-first CI (lanes on the laptop, CI verifies statuses), push without ceremony, a leak check keyed on destination, the session loop, and a starter kit whose walls are tests.",
   "author": {
     "name": "shadowhunter99",
     "email": "shadowhunter99@gmail.com"
   },
   "keywords": [
     "sdlc",
-    "methodology",
-    "code-review",
-    "planning",
-    "design-review",
-    "pr-review"
+    "harness",
+    "local-first-ci",
+    "hooks",
+    "starter-kit",
+    "claude-code"
   ]
 }

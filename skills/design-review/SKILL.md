@@ -1,6 +1,6 @@
 ---
 name: design-review
-description: Adversarial re-pass + freeze ceremony for a design produced by apex:design-feature. Walks the 5+1 passes from the attack lens, cold, in a separate cognitive step from authoring — so the steelman voice of design and the attack voice of review don't blur into a self-congratulatory pass. Adds explicit design-freeze readiness — the gate between "design drafted" and "implementation plan may begin." Pairs with apex:design-feature (upstream — authors the design) and apex:impl-plan (downstream — frozen design enters impl-plan author step). Fires after design-feature completes, before invoking impl-plan. Keywords: design review, design freeze, adversarial design, design audit, design pair review.
+description: Cold adversarial pass over a spec or design before build: one pass, surviving objections become issues, then build.
 ---
 
 # Design Review
@@ -9,23 +9,23 @@ The gate between "we have a design" and "we have a FROZEN design." Re-walks desi
 
 ## When to invoke
 
-- `apex:design-feature` just produced a design draft and you're about to move to implementation planning
-- Before invoking `apex:impl-plan` — impl plans against an un-frozen design are wasted work
+- `rails:design-feature` just produced a design draft and you're about to move to implementation planning
+- Before invoking `rails:impl-plan` — impl plans against an un-frozen design are wasted work
 - A frozen design needs re-validation (architecture amendment landed; PRD changed)
 
 Pairs with:
 
-- **`apex:design-feature`** (upstream) — authored the design (the steelman pass)
-- **`apex:prd-review`** (further upstream) — owns the scenarios this design must satisfy
-- **`apex:threat-model`** — owns Pass 6's STRIDE output if the feature has attack surface
-- **`apex:impl-plan`** (downstream) — implementation plan against the frozen design
-- **`apex:impl-plan-review`** (further downstream) — review of that plan
+- **`rails:design-feature`** (upstream) — authored the design (the steelman pass)
+- **`rails:prd-review`** (further upstream) — owns the scenarios this design must satisfy
+- **`rails:threat-model`** — owns Pass 6's STRIDE output if the feature has attack surface
+- **`rails:impl-plan`** (downstream) — implementation plan against the frozen design
+- **`rails:impl-plan-review`** (further downstream) — review of that plan
 
-Distinct from `apex:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass; for non-trivial designs the heavier *two-attacker* dispatch pattern below (one walking the 6 passes, one running `apex:threat-model`) is the default. See the §"Adversarial pair pattern" section at the bottom for the dispatch mechanics — that pattern is **distinct from `apex:adversarial-pair`'s cooperative+adversarial framing** because `design-review` is itself already the adversarial half of `design-feature`'s authoring voice.
+Distinct from `rails:design-feature`'s inline adversarial counter-passes: those are the cheap version run alongside authoring (same agent, same session — the attack voice contaminated by the just-spent author voice). This skill is the explicit second cognitive pass; for non-trivial designs the heavier *two-attacker* dispatch pattern below (one walking the 6 passes, one running `rails:threat-model`) is the default. See the §"Adversarial pair pattern" section at the bottom for the dispatch mechanics — that pattern is **distinct from `rails:adversarial-pair`'s cooperative+adversarial framing** because `design-review` is itself already the adversarial half of `design-feature`'s authoring voice.
 
 ## Adversarial counter-pass — read this first
 
-The review IS the adversarial pass. Run each of the 5+1 passes below in attack mode. The cooperative half is already in the design-feature output; if you can't see it cleanly stated, the design wasn't authored — go back to `apex:design-feature`.
+The review IS the adversarial pass. Run each of the 5+1 passes below in attack mode. The cooperative half is already in the design-feature output; if you can't see it cleanly stated, the design wasn't authored — go back to `rails:design-feature`.
 
 The cooperative half asked: *"does this design hold together?"*
 This review asks: *"what is this design getting away with?"*
@@ -71,9 +71,9 @@ Walk each listed scenario. Then:
 
 ### Pass 6 — Attack surface
 
-Confirm `apex:threat-model` ran and the 6-category STRIDE output (Spoofing / Tampering / Repudiation / Information disclosure / DoS / Elevation of privilege) is appended to the design.
+Confirm `rails:threat-model` ran and the 6-category STRIDE output (Spoofing / Tampering / Repudiation / Information disclosure / DoS / Elevation of privilege) is appended to the design.
 
-For any feature touching auth, payment, multi-tenant data, admin actions, or cryptography — confirm the **heavier two-agent threat-model** was dispatched (per `apex:threat-model`'s "when to invoke heavier" criteria), not just the cheap inline version. If only the cheap version ran on a heavyweight-criteria feature, fail this pass and dispatch the heavier pattern.
+For any feature touching auth, payment, multi-tenant data, admin actions, or cryptography — confirm the **heavier two-agent threat-model** was dispatched (per `rails:threat-model`'s "when to invoke heavier" criteria), not just the cheap inline version. If only the cheap version ran on a heavyweight-criteria feature, fail this pass and dispatch the heavier pattern.
 
 If the feature has no attack surface, state that explicitly with one-line justification ("internal-only operator tool, no external input, no PII").
 
@@ -95,14 +95,14 @@ Audit, don't re-run. If either is absent or perfunctory, fail and return to desi
 
 ## Design freeze readiness
 
-After all 6 passes' adversarial findings are addressed (or explicitly accepted with rationale) + scans audited — **mark the design FROZEN.** From this moment on, design changes require a delta amendment (a commit to the design doc), just like PRD amendments. The freeze is what makes `apex:impl-plan` a tractable exercise rather than a moving target.
+After all 6 passes' adversarial findings are addressed (or explicitly accepted with rationale) + scans audited — **mark the design FROZEN.** From this moment on, design changes require a delta amendment (a commit to the design doc), just like PRD amendments. The freeze is what makes `rails:impl-plan` a tractable exercise rather than a moving target.
 
 A frozen design tells the impl-plan author what to build, the test-strategy author what scenarios to mirror, and the threat-model author what surface to defend. None of those downstream skills should be reinventing those decisions.
 
 If the design hasn't passed:
 
 - 1-2 findings → minor revisions, re-run the affected pass
-- ≥3 findings or any unresolved failure mode / broken invariant → back to `apex:design-feature`, reshape
+- ≥3 findings or any unresolved failure mode / broken invariant → back to `rails:design-feature`, reshape
 
 ### Bound the loop — this ceremony runs at most TWICE for one design
 
@@ -129,21 +129,21 @@ So:
   break or key-custody violation at round 2 means escalate to the owner and hold
   — not another authoring cycle.
 
-This is the artifact-review analog of `apex:copilot-review-loop`'s 5-round cap,
+This is the artifact-review analog of `rails:copilot-review-loop`'s 5-round cap,
 and it carries the same caveat: the cap is about **loop termination, not about
 lowering the quality bar.** Surviving findings get *recorded*, not dropped. See
-`apex:apex-flow` §12 for the cross-skill rule.
+`rails:apex-flow` §12 for the cross-skill rule.
 
 ## Adversarial pair pattern (DEFAULT for non-trivial designs)
 
 For a trivial design (no attack surface, single-PR's worth of work, no external input) the inline 6-pass walk above — one agent — is enough. For anything non-trivial — features touching auth, payment, multi-tenant data, cryptography, or any trust-boundary crossing — the pair is **the default, not an escalation.** Dispatch two parallel adversarial agents (Task tool, `isolation: "worktree"`):
 
 - **Adversarial agent A** — walks the 6 passes in attack mode against the design doc.
-- **Adversarial agent B** — runs `apex:threat-model` heavyweight pattern independently on the attack surface.
+- **Adversarial agent B** — runs `rails:threat-model` heavyweight pattern independently on the attack surface.
 
 Both run in isolated worktrees with the design doc as input. They report independently. Reconcile their findings. Most real design weaknesses surface only when the attack lens is run separately from the authoring lens and the threat lens is run separately from the architectural lens.
 
-(Note: this is a *two-attacker on different inputs* pair — distinct from `apex:adversarial-pair`'s canonical *cooperative + adversarial on the same input* framing. The dispatch mechanic — parallel Task calls with worktree isolation — is the same; the framings differ because `design-review` is itself already the adversarial half of `design-feature`'s cooperative authoring voice. For non-design artifacts the canonical cooperative+adversarial pair via `apex:adversarial-pair` applies instead.)
+(Note: this is a *two-attacker on different inputs* pair — distinct from `rails:adversarial-pair`'s canonical *cooperative + adversarial on the same input* framing. The dispatch mechanic — parallel Task calls with worktree isolation — is the same; the framings differ because `design-review` is itself already the adversarial half of `design-feature`'s cooperative authoring voice. For non-design artifacts the canonical cooperative+adversarial pair via `rails:adversarial-pair` applies instead.)
 
 Skipping the pair on a non-trivial design is a deviation that must be explicitly justified in the design doc ("single-author review accepted because …"), not a silent default.
 
@@ -157,7 +157,7 @@ The design is frozen-ready if:
 - The adversarial pair (now the default for non-trivial designs) was dispatched — or its omission is explicitly justified in the design doc
 - **This is review round 1 or 2 for this design** — round 2 is the cap (see §"Bound the loop"). Note the round number in the review output, so the next reviewer knows which round they're on
 
-Fail any → don't freeze. Reshape via `apex:design-feature` before invoking `apex:impl-plan`.
+Fail any → don't freeze. Reshape via `rails:design-feature` before invoking `rails:impl-plan`.
 
 **Unless this was round 2** — then the cap fires instead of a third reshape: freeze the design, record the surviving findings as known-open issues against the implementation, and let code settle them. The one exception is an unresolved trust-boundary break or key-custody violation: escalate to the owner and hold, don't author another round.
 
@@ -165,7 +165,7 @@ Fail any → don't freeze. Reshape via `apex:design-feature` before invoking `ap
 
 Once frozen:
 
-- **`apex:impl-plan`** — write the implementation plan against the frozen design
-- **`apex:impl-plan-review`** — review of that plan (structurally parallel to this skill)
-- **`apex:api-surface-review`** — run against the proposed API shape before the impl plan locks endpoint shapes, if the feature exposes an API
-- **`apex:polymorphic-type-modeling`** — run if the design adds a new variant to an existing discriminated union
+- **`rails:impl-plan`** — write the implementation plan against the frozen design
+- **`rails:impl-plan-review`** — review of that plan (structurally parallel to this skill)
+- **`rails:api-surface-review`** — run against the proposed API shape before the impl plan locks endpoint shapes, if the feature exposes an API
+- **`rails:polymorphic-type-modeling`** — run if the design adds a new variant to an existing discriminated union

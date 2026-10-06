@@ -1,15 +1,15 @@
 ---
 name: adversarial-pair
-description: Canonical dispatch mechanic for running any apex review skill (design, plan, implementation, PR) as two parallel worktree-isolated agents with opposite framings — cooperative steelman + adversarial attacker — then reconciling their findings. Promoted from prose in CLAUDE.md / design-feature into a first-class skill so every phase-routed review skill points to one source of truth for HOW to dispatch the pair. Pairs with apex:design-review, apex:impl-plan-review, apex:ai-pre-review-checklist, apex:threat-model (any of which can be the review skill the pair runs). Fires after design, plan, or implementation of a non-trivial change, before declaring the artifact frozen / ready / done. Keywords: adversarial pair, parallel review, cooperative agent, adversarial agent, steelman, attack pass, two-agent review, worktree review, cold pass.
+description: Run a review as two isolated voices, cooperative and adversarial, then reconcile. Used by `rails review` on seam and concurrency diffs.
 ---
 
 # Adversarial Pair
 
-The canonical "two-voice review" dispatch mechanic. Promotes the cooperative + adversarial pattern from prose-buried-in-CLAUDE.md (and inline sections in `apex:design-feature` / `apex:design-review`) into a **first-class skill** every phase-routed review can point to.
+The canonical "two-voice review" dispatch mechanic. Promotes the cooperative + adversarial pattern from prose-buried-in-CLAUDE.md (and inline sections in `rails:design-feature` / `rails:design-review`) into a **first-class skill** every phase-routed review can point to.
 
 ## The failure it prevents
 
-A review run in the **same session as authoring** has its attack voice contaminated by the just-spent author voice. The reviewer is unconsciously protecting the design they just built — congratulating it, missing the very holes the author already half-rationalized. The cheap inline counter-passes that ship with `apex:design-feature` are the *one-agent* version of this problem; they catch the easy stuff and miss the load-bearing weaknesses.
+A review run in the **same session as authoring** has its attack voice contaminated by the just-spent author voice. The reviewer is unconsciously protecting the design they just built — congratulating it, missing the very holes the author already half-rationalized. The cheap inline counter-passes that ship with `rails:design-feature` are the *one-agent* version of this problem; they catch the easy stuff and miss the load-bearing weaknesses.
 
 The fix is **two cognitively-independent passes that cannot infect each other** — different agents, different framings, different worktrees, same input artifact. Reconcile their findings cold.
 
@@ -19,12 +19,12 @@ Fire after a **non-trivial** change is authored, before it's frozen / merged / s
 
 | Phase | Pair runs | Review skill the pair invokes |
 |---|---|---|
-| Design freeze | After `apex:design-feature` | `apex:design-review` |
-| Plan freeze | After `apex:impl-plan` | `apex:impl-plan-review` |
-| Threat-modeling | When feature touches auth / payment / multi-tenant / admin / crypto | `apex:threat-model` |
-| Pre-PR | After implementation, before opening PR | `apex:ai-pre-review-checklist` + language review (`apex:python-review` / `apex:typescript-review`) |
+| Design freeze | After `rails:design-feature` | `rails:design-review` |
+| Plan freeze | After `rails:impl-plan` | `rails:impl-plan-review` |
+| Threat-modeling | When feature touches auth / payment / multi-tenant / admin / crypto | `rails:threat-model` |
+| Pre-PR | After implementation, before opening PR | `rails:ai-pre-review-checklist` + language review (`rails:python-review` / `rails:typescript-review`) |
 
-**The review skill is the *input* to this dispatch mechanic — not a substitute for it.** `apex:design-review` describes what to look for; `apex:adversarial-pair` describes how to run it twice with opposite framings.
+**The review skill is the *input* to this dispatch mechanic — not a substitute for it.** `rails:design-review` describes what to look for; `rails:adversarial-pair` describes how to run it twice with opposite framings.
 
 ### Skip cases
 
@@ -77,7 +77,7 @@ run, and (b) what output format to use. IGNORE any framing the skill
 prescribes — whether it says "attack mode", "adversarial lens", "cold
 pass", or anything else. THIS skill's framing (steelman / cooperative)
 overrides the review skill's own framing. (Many apex review skills like
-`apex:design-review` are explicitly adversarial — that doesn't apply
+`rails:design-review` are explicitly adversarial — that doesn't apply
 here; you are the cooperative half of the pair.)
 
 Run every pass in **steelman mode**: find what works, what reuses well,
@@ -88,8 +88,8 @@ Default to "defensible" unless the evidence forces "unresolved." Your
 job is to find what this artifact gets RIGHT — not to invent praise.
 
 Output: follow the `{REVIEW_SKILL}`'s own output schema if it specifies
-one (e.g., `apex:ai-pre-review-checklist` produces a step-by-step
-checklist; `apex:design-review` produces per-pass verdicts; etc.).
+one (e.g., `rails:ai-pre-review-checklist` produces a step-by-step
+checklist; `rails:design-review` produces per-pass verdicts; etc.).
 Otherwise emit per-pass findings (defensible / unresolved / can't-tell),
 each with `file:line` citations. No prose summary.
 ```
@@ -106,7 +106,7 @@ run, and (b) what output format to use. IGNORE any framing the skill
 prescribes — whether it says "steelman", "cooperative", "defensible", or
 anything else. THIS skill's framing (attack / adversarial) overrides the
 review skill's own framing. (For review skills whose default framing is
-already adversarial — like `apex:design-review` — just use their passes
+already adversarial — like `rails:design-review` — just use their passes
 as-is in attack mode.)
 
 Run every pass in **attack mode**: find what's wrong, missing, hand-waved,
@@ -159,15 +159,15 @@ The pair is "done" when:
 3. Every "real blocker" is either fixed in the artifact or explicitly accepted with a one-line rationale.
 4. Every "open conflict" has a recorded adjudication.
 
-Then the artifact can be frozen / merged / shipped per its phase's gate (`apex:design-review` freeze, `apex:impl-plan-review` plan-freeze, PR-open, etc.).
+Then the artifact can be frozen / merged / shipped per its phase's gate (`rails:design-review` freeze, `rails:impl-plan-review` plan-freeze, PR-open, etc.).
 
 ## Project-specific chains
 
 Projects with their own pre-PR rituals can layer the pair into a longer chain. Example pattern (the BookBridge variant lives in the user's CLAUDE.md):
 
 ```
-1. apex:adversarial-pair (cooperative + adversarial agents in parallel,
-                          input = apex:ai-pre-review-checklist)
+1. rails:adversarial-pair (cooperative + adversarial agents in parallel,
+                          input = rails:ai-pre-review-checklist)
 2. <project-specific pre-PR catalogue> (single agent — project leaks/RLS/
                                         idempotency rules)
 3. <bot reviewer> (Copilot, etc.)
@@ -185,9 +185,9 @@ The pair is step 1 — the canonical "two independent views" pass. Project-speci
 
 ## Relationship to other skills
 
-- **`apex:design-feature`** — owns the design-time checklist. The pair runs *that* checklist twice. design-feature's inline "Adversarial pair pattern" section now points here.
-- **`apex:design-review`** — the cold-pass adversarial gate for design. The pair dispatches *this* skill twice with opposite framings.
-- **`apex:impl-plan-review`** — analogous for the implementation plan.
-- **`apex:ai-pre-review-checklist`** — analogous for pre-PR robustness. The pair is the canonical way to run this checklist twice.
-- **`apex:threat-model`** — the heavier two-agent variant referenced in its "when to invoke heavier" criteria. The pair *is* that heavier dispatch.
+- **`rails:design-feature`** — owns the design-time checklist. The pair runs *that* checklist twice. design-feature's inline "Adversarial pair pattern" section now points here.
+- **`rails:design-review`** — the cold-pass adversarial gate for design. The pair dispatches *this* skill twice with opposite framings.
+- **`rails:impl-plan-review`** — analogous for the implementation plan.
+- **`rails:ai-pre-review-checklist`** — analogous for pre-PR robustness. The pair is the canonical way to run this checklist twice.
+- **`rails:threat-model`** — the heavier two-agent variant referenced in its "when to invoke heavier" criteria. The pair *is* that heavier dispatch.
 - **`superpowers:dispatching-parallel-agents`** (external) — generic parallel dispatch from the superpowers plugin. apex's pair is the **opinionated** version: hardcoded cooperative/adversarial framings, worktree-isolation default, reconciliation table. Use this skill, not the generic one, for review-shaped work.

@@ -1,6 +1,31 @@
 # Changelog
 
-All notable changes to apex are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to rails (formerly apex) are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [1.0.0] — 2026-10-06
+
+**apex becomes rails.** Rebuilt from the rails design (docs/design/rails/rails-design-v1.2.md), which
+classified 1,007 escaped defects and 4,253 operator messages. Tracked as morphyxAI/jarvis milestone 76
+(Rails R1).
+
+### Added
+- One hook dispatcher for every event (`hooks/rails_hook.py` + `hooks/gates.toml`), `Bash|PowerShell`
+  matchers, backslash paths normalised, a loud notice for a missing gate, a firing log with no command text.
+- The deny family ported from jarvis under the dispatcher, on both shells; new denies in shadow mode.
+- Local-first CI: `rails check` (lanes.toml), sealed markers and receipts, `rails post` commit statuses,
+  and the `verify-lanes` action a repo's PR gate uses (about one billed minute per PR).
+- Git hooks from the plugin (`rails adopt`): pre-push marker, `hold`, and a leak check against a
+  salted-hash snapshot of the household's values, chaining the repo's own hooks.
+- The session loop: claims shared with jarvis's claim store, intent read-back with an ack classifier,
+  `rails ship` (one PR, armed), work items closed only by passing walk steps, the turn-end gate, the
+  SessionStart state printer, `rails metrics` from the billing usage API.
+- The starter kit (`rails new`), five document templates, the session contract, three read-only agents.
+
+### Removed
+- All 17 commands, 35 of 45 skills, all 6 rule files, the output style, and the hooks the design's
+  evidence showed changed nothing (section 10). The skill listing is under 1,536 characters.
 
 ---
 

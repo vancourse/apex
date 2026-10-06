@@ -1,0 +1,18 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-second-pr",
+    "cwd": "C:\\Users\\dev\\repos\\app\\.claude\\worktrees\\feature",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr create --title 'slice 2: the read half' --body-file body.md",
+      "description": "Open a PR for the next slice"
+    }
+  },
+  "fixture": {
+    "git_repo": true,
+    "store": {"pr.json": {"number": 41, "state": "OPEN", "armed": true}}
+  },
+  "expect": "deny"
+}

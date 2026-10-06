@@ -1,0 +1,14 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-stash",
+    "cwd": "C:\\Users\\dev\\repos\\app",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "git -C C:\\Users\\dev\\repos\\app stash; git pull --ff-only; git stash pop",
+      "description": "Fast-forward past the dirty file"
+    }
+  },
+  "expect": "deny"
+}

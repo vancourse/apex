@@ -1,0 +1,21 @@
+name: rails verify-lanes
+description: >-
+  The PR gate for a local-first repo: passes only when the head commit carries a
+  green `rails/<lane>` status (posted by `rails check --post` on the laptop) for
+  every lane its diff selects in lanes.toml. No checkout, no toolchain: seconds.
+inputs:
+  token:
+    description: token with statuses:read, pull-requests:read, contents:read
+    default: ${{ github.token }}
+  wait-seconds:
+    description: how long to wait for statuses still in flight
+    default: "90"
+runs:
+  using: composite
+  steps:
+    - name: verify lane statuses
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        RAILS_WAIT_SECONDS: ${{ inputs.wait-seconds }}
+      run: python3 "${{ github.action_path }}/../../rails/verify.py"

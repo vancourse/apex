@@ -1,0 +1,20 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-merged-pr-push",
+    "cwd": "C:\\Users\\dev\\repos\\app",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git push origin HEAD:merged-line",
+      "description": "Push the follow-up commit onto the PR"
+    }
+  },
+  "fixture": {
+    "files": {
+      "lookup.json": {"merged-line": [{"number": 2185, "state": "MERGED"}]}
+    },
+    "env": {"RAILS_PR_LOOKUP_FIXTURE": "{tmp}/lookup.json"}
+  },
+  "expect": "deny"
+}

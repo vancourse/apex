@@ -1,0 +1,9 @@
+#!/bin/sh
+# rails git hook: rails logic (pre-push only), then the repo's own post-commit hook.
+# See rails/githooks.py. Installed by `rails adopt` via core.hooksPath.
+d=$(dirname "$0")
+for py in python3 python py; do
+    if command -v "$py" >/dev/null 2>&1; then exec "$py" "$d/../bin/rails-githook" post-commit "$@"; fi
+done
+echo "RAILS: no python on PATH; the post-commit hook did not run" >&2
+exit 0

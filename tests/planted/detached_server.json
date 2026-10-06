@@ -1,0 +1,14 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-detached-server",
+    "cwd": "C:\\Users\\dev\\repos\\app",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Start-Process python -ArgumentList '-m','http.server','8791','--bind','127.0.0.1' -WindowStyle Hidden; Start-Sleep 2; Invoke-WebRequest http://127.0.0.1:8791/board.html",
+      "description": "Serve the board and fetch it"
+    }
+  },
+  "expect": "deny"
+}

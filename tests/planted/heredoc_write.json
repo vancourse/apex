@@ -1,0 +1,14 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-heredoc-write",
+    "cwd": "C:\\Users\\dev\\repos\\app",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat > parser.py <<EOF\nPATTERN = re.compile(r\"\\\\d+\\\\s*USD\")\nEOF",
+      "description": "Write the parser module"
+    }
+  },
+  "expect": "deny"
+}
