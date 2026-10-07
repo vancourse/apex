@@ -409,66 +409,128 @@ def _fetcher(spec: str):
     return fetch_dsn
 
 
-def snapshot_main(top: Path, repo: store.RepoId, out=sys.stdout) -> int:
+def store_label(spec: str) -> str:
+    """Where a store is, never its credentials: `container/db` or `host/db`."""
+    if spec.startswith("docker://"):
+        container, _, rest = spec.removeprefix("docker://").partition("/")
+        return f"{container}/{rest.partition('/')[2]}"
+    m = re.match(r"^[\w+.-]+://(?:[^@/]*@)?([^/?]+)/([^?]*)", spec)
+    return f"{m.group(1)}/{m.group(2)}" if m else "a DSN (unparsed)"
+
+
+def saved_stores_path(repo: store.RepoId) -> Path:
+    return repo.dir / "snapshot" / "stores.json"
+
+
+def read_store(
+    spec: str, cfg: dict, amounts: list[str], words: dict[str, str]
+) -> tuple[dict[str, int], str]:
+    """Add one store's values to `amounts` / `words`; return its own counts and identity.
+
+    The filters are Purser's (apps/purser/src/purser/leak_check.py), query by query: a
+    descriptor (no ``need_digit``) must not be all digits and must not be bank vocabulary
+    (``exclude_words``); a booking id (``need_digit``) must contain a digit and MAY be all
+    digits - most sellers' order numbers are. 1.0 dropped all-digit keys of every kind,
+    which kept 50 of 667 booking ids out of jarvis's snapshot (2026-10-07).
+    """
+    fetch = _fetcher(spec)
+    exclude = {squash(w) for w in cfg.get("exclude_words", [])}
+    counts: dict[str, int] = {}
+    for q in cfg.get("query", []):
+        rows = fetch(q["sql"])
+        kind = q["kind"]
+        if kind == "amount":
+            amounts.extend(rows)
+            counts["amount"] = counts.get("amount", 0) + len(rows)
+            continue
+        is_id = bool(q.get("need_digit"))
+        for raw in rows:
+            key = squash(raw)
+            if len(key) < int(q.get("min_len", MIN_WORD)):
+                continue
+            if is_id and not any(c.isdigit() for c in key):
+                continue
+            if not is_id and (key.isdigit() or key in exclude):
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+            if words.get(key) and q.get("rank", 0) <= 0:
+                continue  # a booking id outranks a descriptor it happens to equal
+            words[key] = kind
+    read_as = (fetch(cfg["identity_sql"]) or ["?"])[0] if cfg.get("identity_sql") else "?"
+    return counts, read_as
+
+
+def snapshot_main(
+    top: Path, repo: store.RepoId, out=sys.stdout, argv: list[str] | None = None
+) -> int:
+    """`rails snapshot [--store SPEC]... [--remember | --forget]`, from the operator's shell.
+
+    Household values can live in more than one database (jarvis on 2026-10-07: the fleet's
+    store plus local working copies and restore points). The snapshot is the union of the
+    store named by the repo's ``store_env`` variable, the stores saved with ``--remember``
+    (in this machine's rails store, never in git), and any ``--store`` given now. Every
+    store must answer with rows, or nothing is written.
+    """
+    import os
+
     from rails.gitutil import in_agent
 
+    ap = argparse.ArgumentParser(prog="rails snapshot")
+    ap.add_argument("--store", action="append", default=[], help="another store: DSN or docker://<container>/<user>/<db>")
+    ap.add_argument("--remember", action="store_true", help="keep the --store values for later refreshes")
+    ap.add_argument("--forget", action="store_true", help="drop the remembered stores")
+    args = ap.parse_args(argv or [])
     if in_agent():
         print(
             "rails snapshot reads the household store and runs only from YOUR shell, not an agent's.",
             file=out,
         )
         return EXIT_USAGE
+    saved_path = saved_stores_path(repo)
+    if args.forget:
+        saved_path.unlink(missing_ok=True)
+        print("rails snapshot: forgot the remembered stores", file=out)
+        if not args.store:
+            return EXIT_CLEAN
     cfg = config_for(top).get("snapshot", {})
     env_name = cfg.get("store_env", "RAILS_LEAK_STORE")
-    import os
-
-    spec = os.environ.get(env_name)
-    if not spec:
+    saved = store.read_json(saved_path, []) or []
+    stores: list[str] = []
+    for spec in [os.environ.get(env_name, ""), *saved, *args.store]:
+        if spec and spec not in stores:
+            stores.append(spec)
+    if not stores:
         print(
-            f"rails snapshot: set {env_name} to the store (DSN or docker://<container>/<user>/<db>)",
+            f"rails snapshot: set {env_name} to the store (DSN or docker://<container>/<user>/<db>), "
+            "or pass --store",
             file=out,
         )
         return EXIT_USAGE
-    fetch = _fetcher(spec)
-    exclude = {squash(w) for w in cfg.get("exclude_words", [])}
     amounts: list[str] = []
     words: dict[str, str] = {}
-    try:
-        for q in cfg.get("query", []):
-            rows = fetch(q["sql"])
-            kind = q["kind"]
-            if kind == "amount":
-                amounts.extend(rows)
-                continue
-            for raw in rows:
-                key = squash(raw)
-                if (
-                    len(key) < int(q.get("min_len", MIN_WORD))
-                    or key in exclude
-                    or key.isdigit()
-                ):
-                    continue
-                if q.get("need_digit") and not any(c.isdigit() for c in key):
-                    continue
-                if words.get(key) and q.get("rank", 0) <= 0:
-                    continue
-                words[key] = kind
-        read_as = (
-            (fetch(cfg["identity_sql"]) or ["?"])[0] if cfg.get("identity_sql") else "?"
-        )
-    except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
-        print(f"rails snapshot: could not read the store: {exc}", file=out)
-        return EXIT_COULD_NOT_LOOK
-    if not amounts and not words:
-        print(
-            "rails snapshot: the store returned no rows (RLS with no tenant bound?) - refusing to write an empty snapshot",
-            file=out,
-        )
-        return EXIT_COULD_NOT_LOOK
-    body = build_snapshot(amounts, words, read_as)
+    identities: list[str] = []
+    for spec in stores:
+        label = store_label(spec)
+        try:
+            counts, read_as = read_store(spec, cfg, amounts, words)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+            print(f"rails snapshot: could not read {label}: {exc} - nothing written", file=out)
+            return EXIT_COULD_NOT_LOOK
+        if not any(counts.values()):
+            print(
+                f"rails snapshot: {label} returned no rows (RLS with no tenant bound?) - nothing written",
+                file=out,
+            )
+            return EXIT_COULD_NOT_LOOK
+        identities.append(f"{label} as {read_as}")
+        print(f"  {label}: {counts} (read as {read_as})", file=out)
+    if args.remember:
+        keep = [s for s in [*saved, *args.store] if s]
+        store.write_json(saved_path, list(dict.fromkeys(keep)))
+    body = build_snapshot(amounts, words, "; ".join(identities))
     store.write_json(snapshot_path(repo), body)
     print(
-        f"rails snapshot: wrote {body['counts']} (hashed; read as {read_as})", file=out
+        f"rails snapshot: wrote {body['counts']} from {len(stores)} store(s) (hashed)", file=out
     )
     return EXIT_CLEAN
 

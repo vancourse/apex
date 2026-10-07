@@ -4,6 +4,24 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.2.0] — 2026-10-07
+
+### Fixed
+- **`rails snapshot` dropped every all-digit booking id.** The port of Purser's leak check applied
+  "not all digits" to every kind; Purser applies it to descriptors only, because most sellers' order
+  numbers ARE all digits. jarvis's first snapshot kept 50 booking ids where Purser's check reads 667
+  from the same store, so ~617 real ids were unprotected by the rails leak check. Filters now follow
+  Purser's query by query (an id needs a digit and may be all digits; a descriptor may not, and bank
+  vocabulary applies to descriptors only).
+
+### Added
+- **`rails snapshot --store <spec>` (repeatable), `--remember`, `--forget`.** Household values live in
+  more than one database (jarvis: the fleet's store plus ~40 local working copies and restore points).
+  The snapshot is the union of the `store_env` store, the remembered stores (kept in this machine's
+  rails store, never in git) and any `--store` given now. Every store must answer with rows or nothing
+  is written; a store is named by `container/db` or `host/db`, never by its credentials.
+- `tests/test_snapshot.py`: the first tests of `rails snapshot` itself (6), with the 1.0 defect planted.
+
 ## [1.1.1] — 2026-10-06
 
 ### Fixed
