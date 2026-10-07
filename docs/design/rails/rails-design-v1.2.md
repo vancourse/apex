@@ -39,6 +39,42 @@ The rails are a Claude Code plugin (`rails`, the reworked apex), a starter kit, 
 > tamper-proof: an agent with the operator's `gh` token could post one by hand, so the dispatcher
 > denies agent commands that post statuses (`status_forge`) and receipts record what ran.
 
+> **Amendment 2026-10-06, later that day: retired history, the main folder, and the instruments for
+> section 11.1 (rails 1.1.0).** Asked for by the operator ("should we have a mechanism…").
+>
+> - **Retired history.** Master was rewritten on 2026-09-26 to scrub household values. On 2026-10-06
+>   the main checkout and 23 of 60 worktrees were still on the old history, and
+>   `git push --dry-run origin <old tip>:refs/heads/x` exited 0: the leak check reads only added lines
+>   from the merge base, and an old worktree's tree predates rails.
+>   - `rails history retire <tip>` records the old tip in the repo's **shared** git config. pre-push
+>     then refuses any ref built on that history, in every worktree (`prepush_retired`).
+>   - It enforces from day one, the operator switch does not skip it, and it refuses the push if it
+>     cannot check. Measured: 0 false positives and 0 misses over 151 refs.
+>   - jarvis's retired tip is the local branch `old-master-before-rewrite`. Never push it and never
+>     delete it: if the tip disappears, the guard refuses every push.
+> - **pre-push judged only `refs/heads/*` sources.** `git push origin HEAD:x` and a raw-sha push
+>   skipped the marker and leak checks, and a tag push skipped the leak check. Fixed.
+> - **The main folder** is fast-forwarded at SessionStart when that is safe; otherwise one line says
+>   why, and `rails sync` does it by hand. It had sat 97 commits behind since 2026-09-25. Moving it by
+>   hand on 2026-10-06 deleted retired hook scripts that a running session still called, and Claude
+>   Code blocked that session's next prompt. So the update now waits while that could happen.
+> - **Section 11.1's instruments, as built.** The table's baselines came from a model classifying
+>   commits and logs, which no script reproduces. `rails metrics` measures each number by one
+>   rule-based method, for the 30 days before the cut (the commit that added `rails/lanes.toml`) and
+>   since. It prints the table's figures beside them as another instrument, never compared:
+>   - **Rework** is *code churn*: of lines landed on trunk, the share rewritten or deleted within
+>     14 days. Before the cut: 5.2% (6,958 of 133,013 lines, 178 commits). A first proxy ("commits that rewrite a line younger than
+>     14 days") read 87% and could not move, so it was dropped.
+>   - **Automation catch rate** reads `Detected-by:` from merged PR bodies, written by
+>     `rails ship --detected-by`, not a commit trailer. Nothing carried it before the cut.
+>   - **Harness share of red CI jobs:** a failed job counts as harness when it never got past runner
+>     setup, or the same workflow passed on the same commit. Before the cut: 28% (67 of 243), 8.1 red
+>     jobs a day. It is a floor: a gate wrong on every run counts as code.
+>   - **CI minutes per day** before the cut: 627.
+>   - The week-4 and week-12 targets were set against the model baselines. Restating them against
+>     these before-values is the operator's decision; proposed: a quarter lower by week 4, half by
+>     week 12.
+
 ## 2. Principles
 
 1. **Only four things can refuse.** PreToolUse deny, Stop block, required check, git hook. 22 of 32 CLAUDE.md rules were prose-only; 37% of corrections repeated a written rule.
@@ -271,6 +307,8 @@ One blocking mechanism per week, each landing with its planted defect and FP cou
 
 Secondary, weekly: context tokens before first action (21–24k → ≤6k), `--admin` merges (0), overrides per session, `forged` receipts (0), runner minutes vs `included_minutes`, correction share (14% → <8%).
 
+*As built (rails 1.1.0):* the "Read from" column is superseded by the second amendment at the top. Rework is code churn, the catch rate reads `Detected-by:` in PR bodies, and the harness share counts setup failures and same-commit passes. The Baseline column is another instrument's figure, kept for provenance; `rails metrics` prints the before-values to compare against.
+
 ## 12. Requirements coverage
 
 | Req | Status | How |
@@ -378,3 +416,6 @@ Keys: MF must_fix, SF should_fix, N note, BT backtest.
 4. Build order compressed from twelve weeks into one release (Rails R1, morphyxAI/jarvis milestone 76) at
    the operator's request, with every new refusal shipped in shadow mode for 7 days instead of one
    mechanism per week → operator, 2026-10-06. The walls into Purser (weeks 7-12) are R2.
+5. Retired history refused at pre-push, the main folder kept on trunk, and section 11.1 measured by
+   rule-based instruments before and since the cut (second amendment at the top, rails 1.1.0) →
+   operator, 2026-10-06; the measurements are the evidence.
