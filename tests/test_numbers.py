@@ -28,33 +28,37 @@ def _commit_at(top: Path, rel: str, text: str, when: int, message: str = "c") ->
 
 @pytest.fixture
 def dated(repo):
-    """c1 writes five lines; c2 (day 20) rewrites a 20-day-old line; c3 (day 25) rewrites
-    c2's 5-day-old line; c4 only adds a file; c5 only touches a lock file."""
+    """c1 lands five lines; c2 (day 3) rewrites two of them; c3 (day 20) rewrites a third,
+    outside c1's 14 days. A lock file and a 1,001-line generated file never count."""
     lines = [f"line {i}" for i in range(1, 6)]
-    shas = {"c1": _commit_at(repo, "a.txt", "\n".join(lines) + "\n", T0, "c1")}
-    _commit_at(repo, "uv.lock", "v1\n", T0, "lock v1")
-    lines[1] = "line 2 again"
-    shas["c2"] = _commit_at(repo, "a.txt", "\n".join(lines) + "\n", T0 + 20 * DAY, "c2")
-    lines[1] = "line 2 a third time"
-    shas["c3"] = _commit_at(repo, "a.txt", "\n".join(lines) + "\n", T0 + 25 * DAY, "c3")
-    shas["c4"] = _commit_at(repo, "b.txt", "new\n", T0 + 26 * DAY, "c4")
-    shas["c5"] = _commit_at(repo, "uv.lock", "v2\n", T0 + 26 * DAY + 60, "c5")
+    text = lambda: "".join(f"{line}\n" for line in lines)  # noqa: E731
+    shas = {"c1": _commit_at(repo, "a.txt", text(), T0, "c1")}
+    shas["lock"] = _commit_at(repo, "uv.lock", "v1\n", T0 + 1 * DAY, "lock")
+    shas["big"] = _commit_at(repo, "gen.txt", "".join(f"g{i}\n" for i in range(1001)), T0 + 2 * DAY, "gen")
+    lines[1], lines[2] = "line 2 again", "line 3 again"
+    shas["c2"] = _commit_at(repo, "a.txt", text(), T0 + 3 * DAY, "c2")
+    lines[4] = "line 5 again"
+    shas["c3"] = _commit_at(repo, "a.txt", text(), T0 + 20 * DAY, "c3")
     return repo, shas
 
 
-def test_rework_is_a_rewrite_of_a_line_younger_than_14_days(dated):
+def test_churn_counts_rewrites_inside_14_days_only(dated):
     top, shas = dated
-    assert numbers.is_rework(top, shas["c2"], T0 + 20 * DAY) is False
-    assert numbers.is_rework(top, shas["c3"], T0 + 25 * DAY) is True
-    assert numbers.is_rework(top, shas["c4"], T0 + 26 * DAY) is None  # adds only: not counted
-    assert numbers.is_rework(top, shas["c5"], T0 + 26 * DAY + 60) is None  # lock files skipped
+    assert numbers.churn_of(top, "HEAD", shas["c1"], T0) == [5, 2]  # c3's rewrite is day 20
+    assert numbers.churn_of(top, "HEAD", shas["c2"], T0 + 3 * DAY) == [2, 0]
+    assert numbers.churn_of(top, "HEAD", shas["lock"], T0 + 1 * DAY) is None
+    assert numbers.churn_of(top, "HEAD", shas["big"], T0 + 2 * DAY) is None
 
 
-def test_rework_share_counts_only_commits_that_rewrite_lines(dated):
+def test_churn_share_is_lines_and_waits_for_commits_to_mature(dated):
     top, _ = dated
-    w = numbers.Window("w", T0 + 10 * DAY, T0 + 30 * DAY)
-    result = numbers.rework_share(top, "HEAD", w, {})
-    assert result == {"share": 0.5, "rework": 1, "counted": 2, "commits": 4}
+    w = numbers.Window("w", T0 - 1, T0 + 10 * DAY)
+    result = numbers.churn_share(top, "HEAD", w, {}, now=T0 + 40 * DAY)
+    assert result["share"] == 0.286 and (result["churned"], result["added"], result["commits"]) == (2, 7, 2)
+    young = numbers.churn_share(
+        top, "HEAD", numbers.Window("w", T0 + 15 * DAY, T0 + 30 * DAY), {}, now=T0 + 25 * DAY
+    )
+    assert young["share"] is None and young["pending"] == 1 and young["first_reading"]
 
 
 def test_the_cut_is_the_commit_that_added_the_lanes_file(repo):
@@ -107,7 +111,7 @@ def test_harness_share_separates_the_code_from_everything_else(monkeypatch, tmp_
     )
     cache: dict = {}
     result = numbers.harness_share(tmp_path, "o/r", numbers.Window("w", 0, 1), cache)
-    assert result == {"share": 0.667, "harness": 2, "red_jobs": 3, "runs": 4}
+    assert result == {"share": 0.667, "harness": 2, "red_jobs": 3, "per_day": None, "runs": 4}
     assert set(cache["jobs"]) == {"1:1", "3:1", "4:1"}  # completed runs are cached
 
 
@@ -138,12 +142,14 @@ def test_minutes_per_day_splits_at_the_cut(monkeypatch, tmp_path):
 def test_render_says_n_and_never_compares_with_the_evidence_figures():
     n = {
         "cut": "2026-10-06",
-        "before": {"rework": {"share": 0.4, "rework": 4, "counted": 10}, "catch": None,
-                   "harness": {"share": 0.5, "harness": 1, "red_jobs": 2}},
-        "since": {"rework": {"share": None, "rework": 0, "counted": 0}, "catch": {"share": None, "tagged": 0},
+        "before": {"rework": {"share": 0.4, "churned": 40, "added": 100, "commits": 10}, "catch": None,
+                   "harness": {"share": 0.5, "harness": 1, "red_jobs": 2, "per_day": 0.1}},
+        "since": {"rework": {"share": None, "pending": 3, "first_reading": "2026-10-20"},
+                  "catch": {"share": None, "tagged": 0},
                   "harness": None, "ceremony": {"ceremony_share": 0.2, "messages": 5}},
         "minutes": {"before_per_day": 413.0, "since_per_day": None, "since_days": 0},
     }
     text = "\n".join(numbers.render(n))
-    assert "40% (4/10)" in text and "-- (n=0)" in text and "could not look" in text
+    assert "40% (40/100 lines, 10 commits)" in text and "first reading 2026-10-20" in text
+    assert "-- (n=0)" in text and "could not look" in text and "0.1 red jobs/day" in text
     assert "another instrument" in text and "413" in text

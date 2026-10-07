@@ -4,6 +4,32 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.1.0] — 2026-10-06
+
+### Added
+- **Retired history never goes back out.** `rails history retire <tip>` records, in the repo's shared
+  git config, the tip of history a rewrite removed; every worktree's pre-push then refuses a ref built on
+  it (`prepush_retired`, enforcing from day one, operator switch does not skip it, fails closed when it
+  cannot look). Measured on jarvis the day it shipped: 23 of 60 worktrees and 49 of 151 refs still on the
+  pre-scrub history, and nothing refused `git push --dry-run` of it; FP 0 / FN 0 against a rev-list oracle.
+- **The main checkout stays on trunk.** SessionStart fast-forwards it when that is safe (clean, behind
+  only, no `.claude/` file removed under a live session, no other session active there, not this
+  session's own folder) and otherwise says why in one line; `rails sync [--now]` does it by hand.
+- `rails doctor` lists worktrees on retired history and the main folder's distance from trunk;
+  SessionStart names it when THIS worktree is on retired history.
+- **The four numbers.** `rails metrics` prints rework (code churn: landed lines rewritten or deleted
+  within 14 days), automation catch rate, ceremony share and harness share of red CI jobs (with red jobs
+  per day), before the cut and since, by one rule-based method each, plus CI minutes per day before vs
+  since (rails/numbers.py). `rails ship --detected-by <what found it>` writes the `Detected-by:` line the
+  catch rate reads. The evidence report's baselines came from a model classifier and are printed beside
+  these as another instrument, never compared with them.
+
+### Fixed
+- pre-push judged only pushes whose SOURCE was spelled `refs/heads/*`: `git push origin HEAD:x` or a raw
+  sha skipped the marker and the leak check, and a tag push skipped the leak check. Every pushed ref is now
+  judged by its remote ref and sha.
+- The month projection in `rails metrics` extrapolated the days before the cut; it now uses the rate since.
+
 ## [1.0.0] — 2026-10-06
 
 **apex becomes rails.** Rebuilt from the rails design (docs/design/rails/rails-design-v1.2.md), which

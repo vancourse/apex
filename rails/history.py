@@ -136,12 +136,8 @@ def refusal(retired: Retired, ref_line: str) -> str | None:
     if len(parts) != 4 or parts[1] == "0" * 40:
         return None
     local_sha, remote_ref = parts[1], parts[2]
-    if retired.problems:
-        return (
-            f"rails: refused - could not check {remote_ref} for retired history: {retired.problems[0]}"
-        )
-    base = retired.carried_by(local_sha)
-    if retired.problems:
+    base = None if retired.problems else retired.carried_by(local_sha)
+    if retired.problems:  # a missing tip or trunk, or a git failure while looking
         return (
             f"rails: refused - could not check {remote_ref} for retired history: {retired.problems[0]}"
         )

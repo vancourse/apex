@@ -30,7 +30,9 @@ One line of work = one claim, one worktree, one branch, one PR, many commits.
    `rails work stop decision_needed "<problem; options with costs; recommended first>"` | `blocked` | `hold` | `wip`.
 
 Other commands: `rails whereis <term>` before saying anything does not exist; `rails receipt -- <cmd>`
-to make a claim checkable; `rails metrics` for CI spend and gate yield; `rails state`; `rails doctor`.
+to make a claim checkable; `rails metrics` for the four numbers before/since the cut, CI spend and gate
+yield; `rails state`; `rails doctor`; `rails sync` (main checkout to trunk, when safe); `rails history
+status` (worktrees on rewritten-away history: never push from one, cherry-pick onto a fresh worktree).
 The operator's own commands, never an agent's: `rails hold|release|used|approve`, `rails snapshot`, `rails enable`.
 
 New app: `rails new <app>` gives a walking skeleton with contracts, settings, roots, clock, limits,

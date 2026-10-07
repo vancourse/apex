@@ -9,7 +9,7 @@
     {
       "name": "rails",
       "description": "The rails: one hook dispatcher, local-first CI (lanes on the laptop, CI verifies statuses), push without ceremony, a leak check keyed on destination, the session loop, and a starter kit whose walls are tests.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "./",
       "author": {
         "name": "shadowhunter99",

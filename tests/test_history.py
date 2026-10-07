@@ -170,6 +170,19 @@ def test_a_head_source_push_now_needs_its_marker(repo, commit, monkeypatch):
     assert code == 1 and "FOUND" in msgs[0]
 
 
+def test_a_tag_push_is_leak_checked_without_a_marker(repo, commit, monkeypatch):
+    """A tag publishes its commits too: the leak check runs; the marker (a PR-branch rule) does not."""
+    _rows(monkeypatch)
+    rid = store.find_repo(repo)
+    body = leak.build_snapshot(["9999.99"], {}, "test_role")
+    store.write_json(leak.snapshot_path(rid), body)
+    clean = commit(repo, "a.txt", "plain\n")
+    assert githooks.pre_push([], [f"refs/tags/v1 {clean} refs/tags/v1 {ZERO}"], rid) == (0, [])
+    dirty = commit(repo, "b.txt", "spent 9,999.99 here\n")
+    code, msgs = githooks.pre_push([], [f"refs/tags/v2 {dirty} refs/tags/v2 {ZERO}"], rid)
+    assert code == 1 and "FOUND" in msgs[0]
+
+
 def test_carriers_lists_only_worktrees_on_retired_history(rewritten, git, commit, tmp_path):
     top = rewritten["top"]
     history.retire(top, "old-main", "origin/main")
