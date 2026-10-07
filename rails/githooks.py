@@ -8,14 +8,18 @@ repo's own hooks (the hazard of a single-directory hooks setting).
 
 pre-push refuses, in order:
   * ``hold`` (the operator's word, set from a prompt or ``rails hold``);
+  * a ref carrying history the repo rewrote away (``rails history retire``);
   * no check marker for the pushed commit: ``--quick`` while the branch has no
     open PR, the full marker once one exists;
   * the leak check: a value matched (3) or no fresh snapshot (4). Fails closed.
+Every pushed ref is judged by its remote ref and sha, whatever the source was
+spelled as (``HEAD:x`` and a raw sha used to skip the marker and leak checks).
 ``RAILS_OPERATOR=1`` from the operator's own shell skips the marker and hold,
-never the leak check, and is ignored inside an agent's tool call.
+never the retired-history or leak check, and is ignored inside an agent's tool call.
 
 Each refusal is a row in hooks/gates.toml (``prepush_marker``, ``prepush_hold``,
-``prepush_leak``); a row in shadow logs ``would-deny`` and lets the push through.
+``prepush_retired``, ``prepush_leak``); a row in shadow logs ``would-deny`` and
+lets the push through.
 Commits are never blocked by rails: a commit is the agent's save point.
 
 A crash in this module never blocks: it prints a loud notice and chains on.
@@ -141,11 +145,17 @@ def pre_push(
                 "prepush_hold",
                 f"rails: refused - the operator said `hold` ({since}). They lift it with `release`.",
             )
+    retired_refusals(repo, ref_lines, refusal)
+    # Judge by what lands on the remote: `git push origin HEAD:x` and a raw sha hand the
+    # hook "HEAD" / the sha as the local ref, and both used to skip every check below.
+    sending = [
+        line for line in ref_lines if len(line.split()) == 4 and line.split()[1] != _ZERO
+    ]
     pushes = []
-    for line in ref_lines:
+    for line in sending:
         parts = line.split()
-        if len(parts) == 4 and parts[1] != _ZERO and parts[0].startswith("refs/heads/"):
-            pushes.append((parts[0].removeprefix("refs/heads/"), parts[1]))
+        if parts[2].startswith("refs/heads/"):
+            pushes.append((parts[2].removeprefix("refs/heads/"), parts[1]))
     if not is_operator:
         for branch, sha in pushes:
             full = open_pr(repo, branch)
@@ -156,7 +166,7 @@ def pre_push(
                     f"rails: refused - no {'full' if full else 'quick'} check marker for {sha[:12]} ({branch}).\n"
                     f"  run `{need}` on this commit, then push again (it never blocks a commit).",
                 )
-    if pushes:
+    if sending:
         from rails.check import find_lanes_file
         from rails import lanes as lanes_mod
 
@@ -170,6 +180,31 @@ def pre_push(
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
     return (1 if refuse else 0), messages
+
+
+def retired_refusals(repo: store.RepoId, ref_lines: list[str], refusal) -> None:
+    """`prepush_retired`: no ref may carry history the repo rewrote away.
+
+    Runs for the operator too (it guards data, like the leak check), and fails closed
+    when the repo has retired a tip but the check cannot run: a crash here must not
+    fall through to main()'s fail-open handler.
+    """
+    from rails import history
+
+    try:
+        retired = history.load(repo.top)
+        if retired is None:
+            return
+        for line in ref_lines:
+            why = history.refusal(retired, line)
+            if why:
+                refusal("prepush_retired", why)
+    except Exception as exc:  # noqa: BLE001
+        refusal(
+            "prepush_retired",
+            f"rails: refused - the retired-history check crashed ({type(exc).__name__}: {exc}); "
+            "it fails closed because this repo has retired history",
+        )
 
 
 # --- chaining -----------------------------------------------------------------

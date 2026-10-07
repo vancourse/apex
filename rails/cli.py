@@ -9,7 +9,9 @@ rails work add "<text>" [--step a1] | done <id> | list | stop <kind> "<text>" | 
 rails hold | release | used <#milestone> <task> | approve <rulebook> <hash>   (the operator's words)
 rails leak-check [--file F] [--stdin] [--pre-push]
 rails snapshot                              operator shell only: hash the household's values
-rails metrics                               CI minutes vs budget, firings, ceremony, forged
+rails metrics                               the four numbers before/since the cut, CI minutes, firings
+rails history retire <tip> | status         refuse pushes of history the repo rewrote away
+rails sync [--now]                          fast-forward the main checkout to trunk, when it is safe
 rails receipt -- <command...>               run a command, record a sealed receipt of what it printed
 rails whereis <term>                        search code, branches, PRs and issues before "we'd need to build X"
 rails state                                 what SessionStart prints
@@ -332,6 +334,34 @@ def cmd_whereis(argv: list[str]) -> int:
     return 0
 
 
+def _doctor_history(repo: store.RepoId) -> int:
+    """Retired history and the main folder; returns the number of problems found."""
+    from rails import history, mainsync
+
+    problems = 0
+    retired = history.load(repo.top)
+    if retired is None:
+        print("  retired history: none recorded")
+    elif retired.problems:
+        print(f"  retired history: CANNOT CHECK - {retired.problems[0]} (pushes refuse)")
+        problems += 1
+    else:
+        found = history.carriers(retired)
+        print(
+            f"  retired history: {len(retired.tips)} tip(s), {len(retired.commits)} commits not on {retired.trunk}; "
+            f"{len(found)} worktree(s) carry it (their pushes refuse)"
+        )
+        for path, branch, head in found:
+            print(f"    {path.name}  {branch}  {head[:12]}")
+    p = mainsync.plan(repo, "", manual=True)
+    if p.act:
+        print(f"  main folder: {p.behind} behind trunk - `rails sync` fast-forwards it")
+    else:
+        print(f"  main folder: {p.line or 'at trunk'}")
+        problems += 1 if p.line else 0
+    return problems
+
+
 def cmd_doctor(argv: list[str]) -> int:
     from rails.check import find_lanes_file
 
@@ -367,6 +397,7 @@ def cmd_doctor(argv: list[str]) -> int:
         lanes = find_lanes_file(repo.top)
         print(f"  lanes file: {lanes or 'MISSING'}")
         problems += 0 if lanes else 1
+        problems += _doctor_history(repo)
     for tool in ("git", "gh", "uv", "node", "pnpm", "docker"):
         print(f"  {tool}: {'ok' if shutil.which(tool) else 'not on PATH'}")
     return 1 if problems else 0
@@ -413,6 +444,14 @@ def main(argv: list[str]) -> int:
         from rails import metrics
 
         return metrics.main(rest)
+    if cmd == "history":
+        from rails import history
+
+        return history.main(rest)
+    if cmd == "sync":
+        from rails import mainsync
+
+        return mainsync.main(rest)
     if cmd == "receipt":
         return cmd_receipt(rest)
     if cmd == "whereis":

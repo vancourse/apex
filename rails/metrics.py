@@ -1,5 +1,7 @@
 """`rails metrics`: what the harness costs and what it catches (design R22).
 
+The design's four numbers, before the cut and since, are rails/numbers.py.
+
 CI spend comes from GitHub's billing usage API
 (``orgs/<org>/settings/billing/usage?year=&month=``, or the user endpoint for a
 personal repo), filtered to this repo's Actions minutes. Gate firings, the
@@ -125,15 +127,38 @@ def collect(
     return out
 
 
+def add_numbers(top: Path, repo: store.RepoId, out: dict[str, Any], today: _dt.date | None = None) -> None:
+    """The four numbers, and a month projection from the rate since the cut, not before it."""
+    from rails import numbers
+
+    out["numbers"] = numbers.collect(top, repo, out.get("repo", "/"), out.get("ceremony_30d"))
+    per_day = (out["numbers"].get("minutes") or {}).get("since_per_day")
+    if per_day is not None and out.get("minutes_month") is not None:
+        today = today or _dt.date.today()
+        days = (
+            _dt.date(today.year + (today.month == 12), today.month % 12 + 1, 1)
+            - _dt.timedelta(days=1)
+        ).day
+        out["projected_month"] = round(out["minutes_month"] + per_day * (days - today.day))
+        out["projected_basis"] = "since the cut"
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="rails metrics")
-    ap.parse_args(argv)
+    ap.add_argument(
+        "--no-numbers",
+        action="store_true",
+        help="skip the four numbers (git blame + the Actions API; the first run takes minutes, later runs are cached)",
+    )
+    args = ap.parse_args(argv)
     top = Path.cwd()
     repo = store.find_repo(top)
     if repo is None:
         print("rails metrics: not inside a git checkout")
         return 2
     metrics = collect(repo.top, repo)
+    if not args.no_numbers:
+        add_numbers(repo.top, repo, metrics)
     store.write_json(repo.dir / "metrics.json", metrics)
     print(
         f"rails metrics for {metrics['repo']} ({metrics['month']}), source: {metrics['source']}"
@@ -143,7 +168,8 @@ def main(argv: list[str]) -> int:
             f"  Actions minutes this month: {metrics['minutes_month']:.0f} (net ${metrics.get('net_month', 0):.2f})"
         )
         if metrics.get("projected_month"):
-            print(f"  projected for the month: {metrics['projected_month']} min")
+            basis = metrics.get("projected_basis", "this month's rate, including days before the cut")
+            print(f"  projected for the month: {metrics['projected_month']} min (at {basis})")
         if metrics.get("included_minutes"):
             print(f"  included: {metrics['included_minutes']} min")
     for key, value in metrics.get("firings_30d", {}).items():
@@ -153,6 +179,11 @@ def main(argv: list[str]) -> int:
             f"  ceremony share (30d): {metrics['ceremony_30d']['ceremony_share']:.0%} of {metrics['ceremony_30d']['messages']} messages"
         )
     print(f"  forged receipts (30d): {metrics['forged_30d']}")
+    if metrics.get("numbers"):
+        from rails import numbers
+
+        for row in numbers.render(metrics["numbers"]):
+            print(row)
     line = line_for(metrics)
     if line:
         print("  " + line)
