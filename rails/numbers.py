@@ -14,9 +14,10 @@ to now, capped at the last 30 days.
   days later (``git blame --since`` the commit, so older history is never walked). Did
   the work land right the first time. Squash merges make one PR one commit, so iteration
   inside a PR is not churn; a later PR redoing it is. Lock files and any file with more
-  than 1,000 lines added in one commit (generated or vendored) are skipped, and so is a
-  file gone by then (renamed or deleted: no line-level answer). A commit counts once it
-  is 14 days old, so "since" first reads 14 days after the cut. git only.
+  than 1,000 lines added in one commit (generated or vendored) are skipped. A file deleted
+  within the 14 days counts every line as churned; a renamed one is skipped (moved, not
+  redone). A commit counts once it is 14 days old, so "since" first reads 14 days after
+  the cut. git only.
   (Measured 2026-10-06 and dropped: "commits that rewrite a line younger than 14 days"
   read 87% before the cut on jarvis - nearly every commit touches recent code, so it
   could not move.)
@@ -150,21 +151,38 @@ def churn_of(top: Path, trunk: str, sha: str, ct: int) -> list[int] | None:
         return None
     at = revision_at(top, trunk, ct + CHURN_DAYS * 86400) or sha
     total = churned = 0
+    gone: dict[str, str] | None = None
     for path, count in list(added.items())[:MAX_FILES]:
         code, out = _git(top, "blame", "--porcelain", f"--since={_iso(ct - 1)}", at, "--", path)
         if code != 0:
-            continue  # renamed or deleted by then: no line-level answer either way
+            if gone is None:
+                gone = vanished(top, sha, at)
+            if gone.get(path) == "D":  # deleted within 14 days: every line churned
+                total += count
+                churned += count
+            continue  # renamed (moved, not redone): no line-level answer, not counted
         survived = sum(1 for line in out.splitlines() if line.startswith(sha + " "))
         total += count
         churned += max(count - survived, 0)
     return [total, churned] if total else None
 
 
+def vanished(top: Path, old: str, new: str) -> dict[str, str]:
+    """Paths of `old` missing at `new`: "D" deleted, "R" renamed (similarity >= 50%)."""
+    code, out = _git(top, "diff", "-M50%", "--name-status", "--no-color", old, new)
+    result: dict[str, str] = {}
+    for line in out.splitlines() if code == 0 else []:
+        parts = line.split("\t")
+        if parts and parts[0][:1] in ("D", "R") and len(parts) >= 2:
+            result[parts[1]] = parts[0][:1]
+    return result
+
+
 def churn_share(
     top: Path, trunk: str, w: Window, cache: dict[str, Any], now: float | None = None
 ) -> dict[str, Any]:
     now = time.time() if now is None else now
-    memo: dict[str, Any] = cache.setdefault("churn", {})
+    memo: dict[str, Any] = cache.setdefault("churn.v2", {})  # v2: deleted files count as churned
     commits = trunk_commits(top, trunk, w)
     matured = [(sha, ct) for sha, ct in commits if ct + CHURN_DAYS * 86400 <= now]
     todo = [(sha, ct) for sha, ct in matured if sha not in memo]

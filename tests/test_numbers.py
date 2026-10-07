@@ -50,6 +50,17 @@ def test_churn_counts_rewrites_inside_14_days_only(dated):
     assert numbers.churn_of(top, "HEAD", shas["big"], T0 + 2 * DAY) is None
 
 
+def test_a_file_deleted_inside_14_days_is_churn_and_a_renamed_one_is_not(repo, git):
+    body = "".join(f"row {i}\n" for i in range(8))
+    gone = _commit_at(repo, "gone.txt", "a\nb\nc\n", T0, "adds gone")
+    moved = _commit_at(repo, "moved.txt", body, T0 + 1 * DAY, "adds moved")
+    git(repo, "rm", "-q", "gone.txt")
+    git(repo, "mv", "moved.txt", "renamed.txt")
+    _commit_at(repo, "other.txt", "x\n", T0 + 2 * DAY, "deletes one, renames the other")
+    assert numbers.churn_of(repo, "HEAD", gone, T0) == [3, 3]
+    assert numbers.churn_of(repo, "HEAD", moved, T0 + 1 * DAY) is None
+
+
 def test_churn_share_is_lines_and_waits_for_commits_to_mature(dated):
     top, _ = dated
     w = numbers.Window("w", T0 - 1, T0 + 10 * DAY)
