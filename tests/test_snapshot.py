@@ -128,6 +128,63 @@ def test_a_store_that_fails_or_answers_empty_writes_nothing_and_names_no_secret(
     assert "hunter2secret" not in out and leak.load_snapshot(rid) is None
 
 
+def test_an_older_copy_without_a_newer_table_still_counts(setup, monkeypatch):
+    """jarvis's local copies predate purser.booking_journeys: the other UNION part still reads."""
+    top, rid = setup
+    ids_sql = (
+        "SELECT external_id FROM purser.purchase_documents WHERE external_id IS NOT NULL "
+        "UNION SELECT external_id FROM purser.booking_journeys WHERE external_id IS NOT NULL"
+    )
+    toml = LEAK_TOML.replace('sql = "IDS"', f'sql = "{ids_sql}"')
+    (top / "rails" / "leak.toml").write_text(toml, encoding="utf-8")
+    fleet = dict(STORES["docker://fleet-db/reader/fleet"])
+
+    def fake_fetcher(spec):
+        def fetch(sql):
+            if spec.endswith("old_copy") and "booking_journeys" in sql:
+                raise leak.MissingRelation("purser.booking_journeys")
+            if "purchase_documents" in sql:
+                return ["77665544"] if spec.endswith("old_copy") else ["90817263"]
+            if "booking_journeys" in sql:
+                return ["AB12CD34"]
+            return list(fleet[sql])
+        return fetch
+
+    monkeypatch.setattr(leak, "_fetcher", fake_fetcher)
+    code, out = _run(top, rid, "--store", "docker://local-db/postgres/old_copy")
+    assert code == 0, out
+    assert "no purser.booking_journeys here" in out
+    assert _found(rid, "order 77665544") == {"booking id"}  # the older copy's own id
+    assert _found(rid, "ref AB12CD34") == {"booking id"}  # the fleet's newer table still read
+
+
+def test_union_parts_splits_only_a_flat_union():
+    assert leak.union_parts("SELECT a FROM t UNION SELECT b FROM u union all SELECT c FROM v") == [
+        "SELECT a FROM t", "SELECT b FROM u", "SELECT c FROM v",
+    ]
+    nested = "SELECT a FROM (SELECT a FROM t UNION SELECT a FROM u) x"
+    assert leak.union_parts(nested) == [nested]
+
+
+def test_a_store_error_never_echoes_its_stderr(monkeypatch):
+    """psql quotes the offending value in some errors; only a missing table is ever named."""
+    import subprocess
+
+    def fake_run(args, **kw):
+        return subprocess.CompletedProcess(args, 1, "", fake_run.stderr)
+
+    monkeypatch.setattr(leak.subprocess, "run", fake_run)
+    fetch = leak._fetcher("docker://fleet-db/reader/fleet")
+    fake_run.stderr = 'ERROR:  invalid input syntax for type numeric: "4321.09"'
+    with pytest.raises(RuntimeError) as err:
+        fetch("SELECT 1")
+    assert not isinstance(err.value, leak.MissingRelation) and "4321.09" not in str(err.value)
+    fake_run.stderr = 'ERROR:  relation "purser.booking_journeys" does not exist\nLINE 1: SELECT'
+    with pytest.raises(leak.MissingRelation) as err:
+        fetch("SELECT 1")
+    assert err.value.name == "purser.booking_journeys"
+
+
 def test_it_refuses_inside_an_agent(setup, monkeypatch):
     top, rid = setup
     monkeypatch.setenv("CLAUDECODE", "1")
