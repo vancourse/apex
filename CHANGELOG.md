@@ -4,6 +4,17 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.1.1] — 2026-10-06
+
+### Fixed
+- **The main-folder sync never fired in practice.** 1.1.0 waited while any other session started in
+  the main folder had been active in the last 2 h, and never moved the folder a session ran in. The
+  desktop app starts every session in the main folder before it moves to a worktree, so on jarvis the
+  same day 5 such sessions were active and `rails sync` refused. Neither condition guarded the actual
+  hazard (deleting a hook script a running session still calls), so both are dropped. The deletion
+  check now covers every file a `.claude/settings.json` hook command names through
+  `$CLAUDE_PROJECT_DIR`, not only `.claude/`. Verified on jarvis: the main folder fast-forwarded.
+
 ## [1.1.0] — 2026-10-06
 
 ### Added
