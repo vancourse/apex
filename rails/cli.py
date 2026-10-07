@@ -8,7 +8,7 @@ rails claim "#12,#34" | --milestone T [--kind release|harness|prep] | --adhoc "l
 rails work add "<text>" [--step a1] | done <id> | list | stop <kind> "<text>" | monitor-bound
 rails hold | release | used <#milestone> <task> | approve <rulebook> <hash>   (the operator's words)
 rails leak-check [--file F] [--stdin] [--pre-push]
-rails snapshot                              operator shell only: hash the household's values
+rails snapshot [--store S]... [--remember]  operator shell only: hash the household's values
 rails metrics                               the four numbers before/since the cut, CI minutes, firings
 rails history retire <tip> | status         refuse pushes of history the repo rewrote away
 rails sync [--now]                          fast-forward the main checkout to trunk, when it is safe
@@ -439,7 +439,7 @@ def main(argv: list[str]) -> int:
         from rails import leak
 
         repo = _repo_or_die()
-        return leak.snapshot_main(repo.top, repo)
+        return leak.snapshot_main(repo.top, repo, argv=rest)
     if cmd == "metrics":
         from rails import metrics
 
