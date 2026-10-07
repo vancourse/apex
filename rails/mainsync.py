@@ -1,4 +1,4 @@
-"""Keep the main checkout on trunk without pulling files from under a live session.
+"""Keep the main checkout on trunk without pulling a hook out from under a live session.
 
 Nothing moves a main checkout's branch by itself: PRs merge on GitHub, worktrees are cut
 from ``origin/<trunk>``, and the main folder moved only when a session pulled it by hand.
@@ -9,36 +9,41 @@ sessions started there read that stale CLAUDE.md and ran its hooks.
 Moving it is not free either. A session started in the main folder keeps the hook list it
 loaded, and ``$CLAUDE_PROJECT_DIR`` points at the main folder: when the 2026-10-06 update
 deleted seven retired hook scripts, ``python3 <missing file>`` exited 2 and Claude Code
-blocked that session's next prompt.
+blocked that session's next prompt. That deletion is the hazard, so it is what this checks.
 
-So SessionStart fast-forwards the main checkout only when every one of these holds, and
-otherwise prints one line saying which did not:
+SessionStart fast-forwards the main checkout when all of these hold, and otherwise prints
+one line saying which did not:
 
-* this session is not running in the main checkout itself;
 * the main checkout is on trunk's branch, with no tracked changes, and trunk is strictly
   ahead of it (a diverged branch is never moved: it may hold work, or retired history);
-* the update deletes or renames nothing under ``.claude/`` (a live session may call it);
-* no other session started in the main folder wrote its transcript in the last
-  ``ACTIVE_HOURS`` (file mtimes only; the transcript format is never read);
+* the update deletes or renames nothing a running session may call: nothing under
+  ``.claude/``, and no file a hook command in ``.claude/settings.json`` names through
+  ``$CLAUDE_PROJECT_DIR``;
 * it is at most ``MAX_AUTO`` commits (a SessionStart hook has 30 seconds).
 
-``rails sync`` fetches first and does the same by hand; ``--now`` drops the last three
-conditions and names the hook files the update removes, so the operator can restart.
+rails 1.1.0 also waited while any other session started in the main folder had been active
+in the last 2 h, and never moved the folder a session was running in. Measured the same
+day, the first wait never cleared: the desktop app starts every session in the main folder
+before it moves to a worktree, and 5 such sessions were active at once. Neither condition
+guarded the hazard above, so 1.1.1 dropped both.
+
+``rails sync`` fetches first and does the same by hand; ``--now`` also moves past a hook
+removal and names the files, so the operator can restart the sessions started there.
 """
 
 from __future__ import annotations
 
-import os
+import json
+import re
 import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from rails import history, store
 
-ACTIVE_HOURS = 2
 MAX_AUTO = 300
 MERGE_TIMEOUT = 20
+_PROJECT_PATH = re.compile(r"\$\{?CLAUDE_PROJECT_DIR\}?[/\\]([^\"'\s]+)")
 
 
 @dataclass
@@ -52,38 +57,34 @@ def _git(top: Path, *args: str, timeout: float = 60) -> tuple[int, str]:
     return history._git(top, *args, timeout=timeout)
 
 
-def _transcripts(main: Path) -> Path:
-    root = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
-    return Path(root) / "projects" / store._key_for(main)
-
-
-def other_sessions(main: Path, session_id: str, hours: float = ACTIVE_HOURS) -> int:
-    """Sessions rooted in the main folder that wrote their transcript recently (not this one)."""
-    folder = _transcripts(main)
-    since = time.time() - hours * 3600
-    count = 0
+def hook_paths(main: Path, rev: str) -> set[str]:
+    """Repo paths the hook commands in `rev`'s .claude/settings.json run."""
+    code, out = _git(main, "show", f"{rev}:.claude/settings.json")
+    if code != 0:
+        return set()
     try:
-        for path in folder.glob("*.jsonl"):
-            if session_id and path.stem.startswith(session_id):
-                continue
-            try:
-                if path.stat().st_mtime >= since:
-                    count += 1
-            except OSError:
-                continue
-    except OSError:
-        return 0
-    return count
+        hooks = json.loads(out).get("hooks", {})
+    except (ValueError, AttributeError):
+        return set()
+    paths: set[str] = set()
+    for groups in hooks.values() if isinstance(hooks, dict) else []:
+        for group in groups if isinstance(groups, list) else []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                for m in _PROJECT_PATH.finditer(str(hook.get("command", ""))):
+                    paths.add(m.group(1).replace("\\", "/"))
+    return paths
 
 
-def removed_under_claude(main: Path, old: str, new: str) -> list[str]:
-    code, out = _git(main, "diff", "--name-only", "--diff-filter=DR", old, new, "--", ".claude")
-    return out.splitlines() if code == 0 else []
+def removed_hooks(main: Path, old: str, new: str) -> list[str]:
+    """Files a running session may call that the update deletes or renames away."""
+    code, out = _git(main, "diff", "--name-only", "--diff-filter=DR", "--no-renames", old, new)
+    if code != 0:
+        return []
+    named = hook_paths(main, old)
+    return [p for p in out.splitlines() if p.startswith(".claude/") or p in named]
 
 
-def plan(
-    repo: store.RepoId, session_id: str = "", *, manual: bool = False, now: bool = False
-) -> Plan:
+def plan(repo: store.RepoId, *, manual: bool = False, now: bool = False) -> Plan:
     main = repo.main
     base = history.trunk(main)
     if base is None:
@@ -114,31 +115,16 @@ def plan(
         return Plan(
             False, f"{where} is {behind} behind {base} and has uncommitted changes - not touched", behind
         )
-    if not manual and repo.top.resolve() == main.resolve():
-        return Plan(
-            False,
-            f"{where} is {behind} behind {base}; this session runs in it, so it is not moved under you "
-            "(`rails sync` from a worktree, or from your shell)",
-            behind,
-        )
-    if now:
-        return Plan(True, None, behind)
-    removed = removed_under_claude(main, head, trunk_sha)
-    if removed:
-        return Plan(
-            False,
-            f"{where} is {behind} behind {base}; the update removes {len(removed)} file(s) under .claude/ "
-            "that open sessions may still call - close sessions started there, then `rails sync --now`",
-            behind,
-        )
-    others = other_sessions(main, session_id)
-    if others:
-        return Plan(
-            False,
-            f"{where} is {behind} behind {base}; {others} other session(s) started there were active in "
-            f"the last {ACTIVE_HOURS} h - `rails sync` once they are idle",
-            behind,
-        )
+    if not now:
+        removed = removed_hooks(main, head, trunk_sha)
+        if removed:
+            return Plan(
+                False,
+                f"{where} is {behind} behind {base}; the update removes {len(removed)} hook file(s) "
+                f"({', '.join(removed[:3])}) that sessions started there may still call - close them, "
+                "then `rails sync --now`",
+                behind,
+            )
     if not manual and behind > MAX_AUTO:
         return Plan(False, f"{where} is {behind} behind {base}: too large for SessionStart - `rails sync`", behind)
     return Plan(True, None, behind)
@@ -154,10 +140,10 @@ def apply(repo: store.RepoId, p: Plan) -> str:
     return f"main folder fast-forwarded {p.behind} commit(s) to {base}"
 
 
-def at_session_start(repo: store.RepoId, session_id: str) -> str | None:
+def at_session_start(repo: store.RepoId) -> str | None:
     """The one line SessionStart prints about the main folder, after acting if it is safe."""
     try:
-        p = plan(repo, session_id)
+        p = plan(repo)
         return apply(repo, p) if p.act else p.line
     except (OSError, subprocess.SubprocessError) as exc:
         return f"main folder: not checked ({type(exc).__name__})"
@@ -170,7 +156,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--now",
         action="store_true",
-        help="also when other sessions are active there or hook files go away (restart them after)",
+        help="also when the update removes hook files (restart the sessions started there after)",
     )
     args = ap.parse_args(argv)
     repo = store.find_repo(Path.cwd())
@@ -186,16 +172,16 @@ def main(argv: list[str]) -> int:
     if code != 0:
         print(f"rails sync: fetch failed ({out[:200]}); local push state unknown, not moving anything")
         return 1
-    p = plan(repo, "", manual=True, now=args.now)
+    p = plan(repo, manual=True, now=args.now)
     if not p.act:
         print(p.line or f"rails sync: main folder already at {base}")
         return 0 if p.line is None else 1
-    removed = removed_under_claude(
+    removed = removed_hooks(
         repo.main, history.resolve(repo.main, "HEAD") or "HEAD", history.resolve(repo.main, base) or base
     )
     print(apply(repo, p))
     if removed:
         print(
-            f"  removed under .claude/: {', '.join(removed[:8])} - restart sessions started in {repo.main.name}"
+            f"  removed hook files: {', '.join(removed[:8])} - restart sessions started in {repo.main.name}"
         )
     return 0

@@ -8,7 +8,6 @@ old tip alive, and worktrees sit on either side.
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -230,55 +229,76 @@ def behind(tmp_path, git, commit):
 
 def test_session_start_fast_forwards_a_clean_main_folder(behind, git):
     rid = store.find_repo(behind["wt"])
-    line = mainsync.at_session_start(rid, "me")
+    line = mainsync.at_session_start(rid)
     assert line == "main folder fast-forwarded 1 commit(s) to origin/main"
     assert git(behind["main"], "rev-parse", "HEAD") == behind["trunk"]
 
 
 def test_a_dirty_main_folder_is_not_touched(behind, git):
     (behind["main"] / "README.md").write_text("edited\n", encoding="utf-8")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
+    p = mainsync.plan(store.find_repo(behind["wt"]))
     assert not p.act and "uncommitted" in p.line
 
 
 def test_a_diverged_main_folder_is_not_touched(behind, git, commit):
     commit(behind["main"], "local.txt", "local\n", "local only")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
+    p = mainsync.plan(store.find_repo(behind["wt"]))
     assert not p.act and "diverged" in p.line
 
 
-def test_a_session_in_the_main_folder_does_not_move_it_under_itself(behind):
-    p = mainsync.plan(store.find_repo(behind["main"]), "me")
-    assert not p.act and "this session runs in it" in p.line
+def test_sessions_started_in_the_main_folder_do_not_hold_it_back(behind, isolated_store):
+    """1.1.0 waited on them; the desktop app starts every session there, so it never moved."""
+    folder = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / store._key_for(behind["main"].resolve())
+    folder.mkdir(parents=True)
+    for name in ("a", "b", "c", "d", "e"):
+        (folder / f"{name}.jsonl").write_text("{}\n", encoding="utf-8")
+    assert mainsync.plan(store.find_repo(behind["wt"])).act
+    assert mainsync.plan(store.find_repo(behind["main"])).act  # a session running in it, too
+
+
+def _trunk_commit(git, main, action):
+    git(main, "checkout", "-q", "--detach", "origin/main")
+    action()
+    git(main, "commit", "-q", "-m", "trunk moves")
+    git(main, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(main, "checkout", "-q", "main")
 
 
 def test_an_update_that_deletes_a_hook_file_waits(behind, git, commit):
     main = behind["main"]
-    git(main, "checkout", "-q", "--detach", "origin/main")
-    git(main, "rm", "-q", ".claude/hooks/old_gate.py")
-    git(main, "commit", "-q", "-m", "retire a hook")
+    _trunk_commit(git, main, lambda: git(main, "rm", "-q", ".claude/hooks/old_gate.py"))
+    p = mainsync.plan(store.find_repo(behind["wt"]))
+    assert not p.act and ".claude/hooks/old_gate.py" in p.line
+    assert mainsync.plan(store.find_repo(behind["wt"]), manual=True, now=True).act
+
+
+def test_a_hook_script_outside_claude_named_by_settings_also_waits(tmp_path, git, commit):
+    main = tmp_path / "app"
+    main.mkdir()
+    git(main, "init", "-q", "-b", "main")
+    git(main, "config", "user.email", "t@example.invalid")
+    git(main, "config", "user.name", "t")
+    git(main, "config", "core.hooksPath", str(tmp_path / "no-hooks"))
+    settings = (
+        '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
+        '"command": "python3 \\"$CLAUDE_PROJECT_DIR/ci/hooks/gate.py\\""}]}]}}'
+    )
+    commit(main, ".claude/settings.json", settings, "settings")
+    commit(main, "ci/hooks/gate.py", "print(1)\n", "gate")
+    commit(main, "ci/other.py", "print(2)\n", "other")
     git(main, "update-ref", "refs/remotes/origin/main", "HEAD")
-    git(main, "checkout", "-q", "main")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
-    assert not p.act and "under .claude/" in p.line
-    assert mainsync.plan(store.find_repo(behind["wt"]), "me", manual=True, now=True).act
-
-
-def test_another_active_session_in_the_main_folder_waits(behind, isolated_store):
-    folder = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / store._key_for(behind["main"].resolve())
-    folder.mkdir(parents=True)
-    (folder / "me.jsonl").write_text("{}\n", encoding="utf-8")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
-    assert p.act  # only this session's own transcript
-    (folder / "other.jsonl").write_text("{}\n", encoding="utf-8")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
-    assert not p.act and "1 other session(s)" in p.line
-    old = time.time() - 3 * 3600
-    os.utime(folder / "other.jsonl", (old, old))
-    assert mainsync.plan(store.find_repo(behind["wt"]), "me").act
+    git(main, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    _trunk_commit(git, main, lambda: git(main, "rm", "-q", "ci/other.py"))
+    git(main, "reset", "-q", "--hard", "HEAD")
+    assert mainsync.hook_paths(main, "HEAD") == {"ci/hooks/gate.py"}
+    assert mainsync.plan(store.find_repo(main)).act  # an unrelated deletion is fine
+    git(main, "merge", "-q", "--ff-only", "origin/main")
+    _trunk_commit(git, main, lambda: git(main, "rm", "-q", "ci/hooks/gate.py"))
+    p = mainsync.plan(store.find_repo(main))
+    assert not p.act and "ci/hooks/gate.py" in p.line
 
 
 def test_a_main_folder_parked_on_another_branch_says_nothing(behind, git):
     git(behind["main"], "checkout", "-q", "-b", "parked")
-    p = mainsync.plan(store.find_repo(behind["wt"]), "me")
+    p = mainsync.plan(store.find_repo(behind["wt"]))
     assert not p.act and p.line is None

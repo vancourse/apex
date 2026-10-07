@@ -353,7 +353,7 @@ def _doctor_history(repo: store.RepoId) -> int:
         )
         for path, branch, head in found:
             print(f"    {path.name}  {branch}  {head[:12]}")
-    p = mainsync.plan(repo, "", manual=True)
+    p = mainsync.plan(repo, manual=True)
     if p.act:
         print(f"  main folder: {p.behind} behind trunk - `rails sync` fast-forwards it")
     else:

@@ -35,7 +35,7 @@ def _shadow_rows() -> list[str]:
         return []
 
 
-def _history_lines(repo: store.RepoId, session_id: str, act: bool) -> list[str]:
+def _history_lines(repo: store.RepoId, act: bool) -> list[str]:
     """Retired history under this worktree, and the main folder's distance from trunk."""
     from rails import history, mainsync
 
@@ -53,11 +53,7 @@ def _history_lines(repo: store.RepoId, session_id: str, act: bool) -> list[str]:
     except Exception:  # noqa: BLE001 - a notice must never break SessionStart
         pass
     try:
-        line = (
-            mainsync.at_session_start(repo, session_id)
-            if act
-            else mainsync.plan(repo, session_id).line
-        )
+        line = mainsync.at_session_start(repo) if act else mainsync.plan(repo).line
     except Exception:  # noqa: BLE001
         line = None
     if line:
@@ -65,11 +61,11 @@ def _history_lines(repo: store.RepoId, session_id: str, act: bool) -> list[str]:
     return lines
 
 
-def render(repo: store.RepoId, session_id: str = "", act: bool = False) -> str:
+def render(repo: store.RepoId, act: bool = False) -> str:
     from rails import claims, leak, receipts, work
 
     lines = [f"RAILS {VERSION} | {repo.main.name} | worktree {repo.leaf}"]
-    lines.extend(_history_lines(repo, session_id, act))
+    lines.extend(_history_lines(repo, act))
     mine = claims.mine(repo)
     if mine and mine.items:
         kind = f" [{mine.kind}]" if mine.kind else ""
@@ -142,4 +138,4 @@ def check(evt: Event):
     repo = store.find_repo(evt.cwd)
     if repo is None:
         return None
-    return Notice(render(repo, evt.session_id, act=True))
+    return Notice(render(repo, act=True))
