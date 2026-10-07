@@ -339,6 +339,31 @@ def allowlist_for(top: Path) -> Path | None:
 
 # --- rails snapshot (operator shell only) -----------------------------------
 
+_MISSING = re.compile(r'relation "([\w.]+)" does not exist')
+_UNION = re.compile(r"\s+UNION(?:\s+ALL)?\s+", re.IGNORECASE)
+
+
+class MissingRelation(RuntimeError):
+    """The store has no such table: an older copy, made before the table existed."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"no {name}")
+
+
+def _failure(stderr: str, what: str) -> RuntimeError:
+    """A missing table by name, else a generic failure. Never echoes stderr: an error can quote a value."""
+    m = _MISSING.search(stderr or "")
+    return MissingRelation(m.group(1)) if m else RuntimeError(what)
+
+
+def union_parts(sql: str) -> list[str]:
+    """A flat `SELECT .. UNION SELECT ..` as its parts, so one missing table costs only its part.
+
+    SQL with parentheses (a subquery could hold a UNION) is never split.
+    """
+    return [sql] if "(" in sql else [p for p in _UNION.split(sql) if p.strip()]
+
 
 def _fetcher(spec: str):
     if spec.startswith("docker://"):
@@ -369,7 +394,7 @@ def _fetcher(spec: str):
                 timeout=120,
             )
             if done.returncode != 0:
-                raise RuntimeError(f"psql in {container} exited {done.returncode}")
+                raise _failure(done.stderr, f"psql in {container} exited {done.returncode}")
             return [line for line in done.stdout.splitlines() if line.strip()]
 
         return fetch
@@ -401,8 +426,8 @@ def _fetcher(spec: str):
             timeout=300,
         )
         if done.returncode != 0:
-            raise RuntimeError(
-                "could not read the store through psycopg (DSN unreachable?)"
+            raise _failure(
+                done.stderr, "could not read the store through psycopg (DSN unreachable?)"
             )
         return [line for line in done.stdout.splitlines() if line.strip()]
 
@@ -424,8 +449,12 @@ def saved_stores_path(repo: store.RepoId) -> Path:
 
 def read_store(
     spec: str, cfg: dict, amounts: list[str], words: dict[str, str]
-) -> tuple[dict[str, int], str]:
-    """Add one store's values to `amounts` / `words`; return its own counts and identity.
+) -> tuple[dict[str, int], str, list[str]]:
+    """Add one store's values to `amounts` / `words`; return its counts, identity, missing tables.
+
+    Each query runs one UNION part at a time: an older copy (jarvis's local working copies
+    predate ``purser.booking_journeys``) loses only the part naming the table it lacks, and
+    says so. Any other failure still fails the whole snapshot.
 
     The filters are Purser's (apps/purser/src/purser/leak_check.py), query by query: a
     descriptor (no ``need_digit``) must not be all digits and must not be bank vocabulary
@@ -436,8 +465,16 @@ def read_store(
     fetch = _fetcher(spec)
     exclude = {squash(w) for w in cfg.get("exclude_words", [])}
     counts: dict[str, int] = {}
+    missing: list[str] = []
     for q in cfg.get("query", []):
-        rows = fetch(q["sql"])
+        rows: list[str] = []
+        for part in union_parts(q["sql"]):
+            try:
+                rows.extend(fetch(part))
+            except MissingRelation as exc:
+                if exc.name not in missing:
+                    missing.append(exc.name)
+        rows = list(dict.fromkeys(rows))  # UNION's own dedup, now that the parts run apart
         kind = q["kind"]
         if kind == "amount":
             amounts.extend(rows)
@@ -457,7 +494,7 @@ def read_store(
                 continue  # a booking id outranks a descriptor it happens to equal
             words[key] = kind
     read_as = (fetch(cfg["identity_sql"]) or ["?"])[0] if cfg.get("identity_sql") else "?"
-    return counts, read_as
+    return counts, read_as, missing
 
 
 def snapshot_main(
@@ -512,7 +549,7 @@ def snapshot_main(
     for spec in stores:
         label = store_label(spec)
         try:
-            counts, read_as = read_store(spec, cfg, amounts, words)
+            counts, read_as, missing = read_store(spec, cfg, amounts, words)
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
             print(f"rails snapshot: could not read {label}: {exc} - nothing written", file=out)
             return EXIT_COULD_NOT_LOOK
@@ -523,7 +560,8 @@ def snapshot_main(
             )
             return EXIT_COULD_NOT_LOOK
         identities.append(f"{label} as {read_as}")
-        print(f"  {label}: {counts} (read as {read_as})", file=out)
+        older = f"; no {', '.join(missing)} here (an older copy)" if missing else ""
+        print(f"  {label}: {counts} (read as {read_as}{older})", file=out)
     if args.remember:
         keep = [s for s in [*saved, *args.store] if s]
         store.write_json(saved_path, list(dict.fromkeys(keep)))

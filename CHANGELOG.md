@@ -4,6 +4,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.2.1] — 2026-10-07
+
+### Fixed
+- **`rails snapshot --store` refused every older copy.** jarvis's local working copies predate
+  `purser.booking_journeys`, and the booking-id query is a UNION that names it, so the whole query - and
+  the whole snapshot - failed. A flat UNION now runs one part at a time; a part naming a table the
+  store lacks is skipped and printed (`no purser.booking_journeys here (an older copy)`). Any other
+  error still writes nothing, and a store error never echoes psql's stderr (it can quote a value).
+
 ## [1.2.0] — 2026-10-07
 
 ### Fixed
