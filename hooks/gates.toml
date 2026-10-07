@@ -152,6 +152,20 @@ fp_count = 0
 fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
 
 [[gate]]
+name = "prepush_retired"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "lockout"
+mode = "enforce"
+# No shadow week: it guards data, it fires only in a repo that ran `rails history retire`,
+# and its false-positive count was measured on every worktree of the repo that needed it.
+cites = ["jarvis master rewritten 2026-09-26 to scrub household values", "2026-10-06: 24 of 60 jarvis worktrees still on the old history; `git push --dry-run origin <old tip>:refs/heads/x` exited 0"]
+planted = "tests/test_history.py::test_a_branch_built_on_retired_history_is_refused"
+fp_count = 0
+fp_measured_on = "jarvis 2026-10-06, windows-x64: 151 refs (60 worktrees, 91 local branches) + 136 remote-tracking refs; FP 0, FN 0 against a rev-list oracle"
+
+[[gate]]
 name = "prepush_leak"
 module = "prepush"
 events = ["git:pre-push"]

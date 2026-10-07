@@ -1,6 +1,7 @@
 """`rails ship`: one PR per worktree, Ready, auto-squash armed, statuses posted (design R27).
 
     rails ship [--title T] [--body-file F] [--base B] [--closes 123 --closes 456]
+               [--detected-by ci|lane|hook|walk|boot|review|audit|operator|agent]
 
 1. HEAD must carry the FULL check marker (`rails check`) and the tree must be clean.
 2. Refuses while work.json has `unverified` items and the PR would close issues.
@@ -26,6 +27,7 @@ import time
 from pathlib import Path
 
 from rails import leak, receipts, store, work
+from rails.numbers import DETECTED_BY
 from rails.gitutil import GitError, branch, dirty_tracked, gh, gh_api, head, origin_slug, toplevel
 
 
@@ -61,7 +63,13 @@ def unreceipted_absences(body: str) -> list[str]:
     ]
 
 
-def compose_body(body: str, closes: list[str], repo: store.RepoId, sha: str) -> str:
+def compose_body(
+    body: str,
+    closes: list[str],
+    repo: store.RepoId,
+    sha: str,
+    detected_by: str | None = None,
+) -> str:
     rows = [r for r in receipts.read(repo, "lane", sha=sha) if receipts.valid(r)]
     latest = receipts.latest_by(rows, "lane")
     lanes = ", ".join(
@@ -73,6 +81,9 @@ def compose_body(body: str, closes: list[str], repo: store.RepoId, sha: str) -> 
         parts.append(
             f"**Local lanes at {sha[:12]}** (posted as `rails/<lane>` statuses): {lanes}"
         )
+    if detected_by:
+        # read back by `rails metrics` (the automation catch rate); one line, its own paragraph
+        parts.append(f"Detected-by: {detected_by}")
     for number in closes:
         parts.append(f"Closes #{number.lstrip('#')}")
     return "\n\n".join(parts) + "\n"
@@ -86,6 +97,7 @@ def ship(
     base: str | None,
     closes: list[str],
     arm: bool = True,
+    detected_by: str | None = None,
     out=sys.stdout,
 ) -> int:
     repo = store.find_repo(cwd)
@@ -120,7 +132,13 @@ def ship(
             file=out,
         )
         return 2
-    full_body = compose_body(body, closes, repo, sha)
+    full_body = compose_body(body, closes, repo, sha, detected_by)
+    if not detected_by and re.search(r"(?i)\b(fix|hotfix|bugfix)", title):
+        print(
+            "  advisory: this reads as a fix but has no --detected-by "
+            f"({'|'.join(DETECTED_BY)}); `rails metrics` cannot count who caught it",
+            file=out,
+        )
     for line in unreceipted_absences(full_body):
         print(
             f"  advisory: an absence claim with no `receipt:` id: {line[:120]}",
@@ -241,11 +259,23 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--base", default=None)
     ap.add_argument("--closes", action="append", default=[])
     ap.add_argument("--no-arm", action="store_true", help="open it Ready but do not arm: it waits on an outside step")
+    ap.add_argument(
+        "--detected-by",
+        choices=DETECTED_BY,
+        default=None,
+        help="for a fix: what found the defect first (written as `Detected-by:`; read by rails metrics)",
+    )
     args = ap.parse_args(argv)
     body = Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
     try:
         return ship(
-            Path.cwd(), title=args.title, body=body, base=args.base, closes=args.closes, arm=not args.no_arm
+            Path.cwd(),
+            title=args.title,
+            body=body,
+            base=args.base,
+            closes=args.closes,
+            arm=not args.no_arm,
+            detected_by=args.detected_by,
         )
     except GitError as exc:
         print(f"rails ship: {exc}")
