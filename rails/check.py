@@ -18,6 +18,7 @@ written only when every selected lane passed at this exact commit.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
 import signal
@@ -216,6 +217,38 @@ def _kill_tree(proc: subprocess.Popen) -> str:
     return note
 
 
+def _lane_lock(
+    lane: lanes_mod.Lane, repo: store.RepoId, sha: str, out
+) -> contextlib.AbstractContextManager[float]:
+    """The lane's machine-wide lock, or nothing when it names none.
+
+    Every `rails check` on the box whose lane names the same lock runs that lane one at
+    a time: concurrent full suites against one database slowed each other past their
+    timeouts and ran the box out of ports. The wait is taken here, before `run_lane`
+    starts its clock, so it counts against neither the timeout nor the lane's seconds.
+    """
+    if not lane.lock:
+        return contextlib.nullcontext(0.0)
+
+    def note(holder: dict | None, waited: float) -> None:
+        who = "another check"
+        if holder:
+            since = time.strftime("%H:%M", time.localtime(holder.get("since", 0)))
+            who = (
+                f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
+                f"{str(holder.get('sha', ''))[:12]}) since {since}"
+            )
+        print(
+            f"  wait  {lane.name:<14} lock {lane.lock!r} held by {who}; "
+            f"waited {waited / 60:.0f} min",
+            file=out,
+            flush=True,
+        )
+
+    holder = {"repo": str(repo.main), "leaf": repo.leaf, "lane": lane.name, "sha": sha}
+    return store.machine_lock(lane.lock, holder, on_wait=note)
+
+
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -352,9 +385,10 @@ def check(
             )
             (advisory_failed if lane.advisory() else failed).append(lane.name)
             continue
-        print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
         log_path = log_dir / f"{lane.name}.log"
-        code, secs = run_lane(lane, top, log_path)
+        with _lane_lock(lane, repo, sha, out) as waited:
+            print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
+            code, secs = run_lane(lane, top, log_path)
         receipts.write(
             repo,
             "lane",
@@ -365,6 +399,7 @@ def check(
             secs=round(secs, 1),
             cmd=" ".join(lane.command),
             dirty=bool(dirty),
+            **({"lock": lane.lock, "waited": round(waited, 1)} if lane.lock else {}),
         )
         if code == 0:
             print(f"  PASS  {lane.name:<14} {secs:6.0f}s", file=out, flush=True)

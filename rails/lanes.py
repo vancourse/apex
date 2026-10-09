@@ -29,6 +29,7 @@ Schema::
     quick = false                     # included in `rails check --quick`
     needs = ["postgres"]              # prerequisites: docker | postgres | node | pnpm | uv
     advisory_until = "2026-10-20"     # optional: runs and reports, gates nothing, until this date
+    lock = "suite"                    # optional: wait for this machine-wide lock first; the wait is outside timeout_min
 
 Globs: ``**`` spans any number of path segments (including none), ``*`` and
 ``?`` stay inside one segment, a trailing ``/`` matches everything under that
@@ -44,6 +45,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+#: A lane lock's name: it becomes a file name in the rails store, so a plain word only.
+LOCK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+
 
 @dataclass
 class Lane:
@@ -57,6 +61,9 @@ class Lane:
     quick: bool = False
     needs: list[str] = field(default_factory=list)
     advisory_until: str = ""  # ISO date: runs and reports, but gates nothing, until then
+    # A machine-wide lock taken before the lane runs: every worktree and repo on the box
+    # whose lane names the same lock runs it one at a time. Empty: no lock.
+    lock: str = ""
 
     def advisory(self, today: "_dt.date | None" = None) -> bool:
         """True while this lane is advisory. A lane that has never been green on the
@@ -133,6 +140,12 @@ def parse(data: dict[str, Any]) -> LaneConfig:
             raise ValueError(
                 f"lane {name!r}: command must be an argv list, not a shell string"
             )
+        lock = str(raw.get("lock", ""))
+        if lock and not LOCK_NAME.fullmatch(lock):
+            raise ValueError(
+                f"lane {name!r}: lock {lock!r} must be a plain word "
+                "(letters, digits, '.', '_' or '-', at most 64)"
+            )
         lanes.append(
             Lane(
                 name=name,
@@ -145,6 +158,7 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 quick=bool(raw.get("quick", False)),
                 needs=list(raw.get("needs", [])),
                 advisory_until=str(raw.get("advisory_until", "")),
+                lock=lock,
             )
         )
     return LaneConfig(

@@ -5,4 +5,4 @@ every tool call, so an import that pulls a third-party package would cost every
 call and break on any machine without it.
 """
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"

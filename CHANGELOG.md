@@ -4,6 +4,25 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.4.0] — 2026-10-09
+
+### Added
+- **A lane can wait its turn on the machine.** `lock = "<name>"` on a `[[lane]]` makes
+  `rails check` take a machine-wide lock of that name before it runs the lane. Every worktree and
+  repo on the box whose lane names the same lock then runs that lane one at a time. In jarvis, four
+  or five sessions ran their own full suite at once against one Postgres. A suite that takes about
+  23 minutes alone took 63 to 76, timed out at its 60-minute limit, and ran Windows out of local
+  ports. Across the receipts, 22 of 38 `suite` runs failed.
+  - While it waits, `rails check` prints `wait <lane> lock '<name>' held by <worktree> (<lane> at
+    <sha>) since HH:MM` on the first try and every minute after.
+  - The wait is taken before the lane's clock starts, so it counts against neither `timeout_min`
+    nor the lane's recorded seconds. The lane receipt carries `lock` and `waited`.
+  - The OS holds the lock (`msvcrt.locking` on Windows, `flock` elsewhere), so a holder that crashes
+    or is killed frees it with nothing stale left behind. A rails version without this ignores the
+    key and runs the lane unlocked, as it did before.
+  - Known limit: the lock covers the lane's run. A lane's processes that outlive it (what 1.3.1's
+    timeout kill cannot find) still load the box after the lock is released.
+
 ## [1.3.1] — 2026-10-09
 
 ### Fixed

@@ -30,7 +30,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 def data_root() -> Path:
@@ -108,6 +108,38 @@ def find_repo(start: Path) -> RepoId | None:
 # --- locking and atomic files ---------------------------------------------------
 
 
+def _try_lock(handle: Any) -> bool:
+    """One non-blocking try at an exclusive lock on byte 0 of an open file."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(handle: Any) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
 @contextlib.contextmanager
 def locked(path: Path, timeout: float = 5.0) -> Iterator[None]:
     """An exclusive lock on ``<path>.lock`` shared by every process on the box.
@@ -123,37 +155,65 @@ def locked(path: Path, timeout: float = 5.0) -> Iterator[None]:
     deadline = time.monotonic() + timeout
     try:
         while True:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _try_lock(handle):
                 acquired = True
                 break
-            except OSError:
-                if time.monotonic() > deadline:
-                    break
-                time.sleep(0.02)
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
         yield
     finally:
         if acquired:
-            try:
-                if os.name == "nt":
-                    import msvcrt
+            _unlock(handle)
+        handle.close()
 
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
 
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
+@contextlib.contextmanager
+def machine_lock(
+    name: str,
+    holder: dict[str, Any],
+    *,
+    poll: float = 1.0,
+    notify_every: float = 60.0,
+    on_wait: Callable[[dict[str, Any] | None, float], None] | None = None,
+) -> Iterator[float]:
+    """Hold the machine-wide lock ``name`` for the block; yields the seconds spent waiting.
+
+    Unlike ``locked`` it never goes ahead without the lock: it waits as long as the
+    holder holds. The OS drops the lock when the holding process exits, however it
+    exits, so a crashed or killed holder leaves nothing stale. ``holder`` (what holds
+    it, from where) is written beside the lock so a waiter can say who it waits for;
+    ``on_wait`` gets that record and the seconds waited on the first failed try and
+    every ``notify_every`` seconds after.
+    """
+    from rails.lanes import LOCK_NAME
+
+    if not LOCK_NAME.fullmatch(name):
+        raise ValueError(f"lock name {name!r} must be a plain word")
+    directory = data_root() / "locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    holder_path = directory / f"{name}.holder.json"
+    handle = open(directory / f"{name}.lock", "a+b")
+    started = time.monotonic()
+    next_note = started
+    try:
+        while not _try_lock(handle):
+            now = time.monotonic()
+            if on_wait is not None and now >= next_note:
+                on_wait(read_json(holder_path, None), now - started)
+                next_note = now + notify_every
+            time.sleep(poll)
+        waited = time.monotonic() - started
+        write_json(holder_path, {**holder, "pid": os.getpid(), "since": int(time.time())})
+        try:
+            yield waited
+        finally:
+            # The record goes before the lock: the next holder writes its own after
+            # acquiring, and must not have it removed by the one that just left.
+            with contextlib.suppress(OSError):
+                holder_path.unlink()
+            _unlock(handle)
+    finally:
         handle.close()
 
 
