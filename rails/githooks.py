@@ -196,14 +196,19 @@ def intent_refusal(repo: store.RepoId, refusal) -> None:
 
     if not in_agent():
         return
-    h = intent.current_hash(repo.top)
+    try:
+        h = intent.current_hash(repo.top)
+        acked = intent.acked(repo, repo.top) if h else False
+    except Exception as exc:  # noqa: BLE001 - fail closed here, not open in main()
+        refusal("prepush_intent", f"rails: refused - the intent could not be read ({type(exc).__name__})")
+        return
     if h is None:
         refusal(
             "prepush_intent",
             "rails: refused - no intent for this work. Write .rails/intent.md (`rails template intent`), "
             "end the turn SHOWING it with its intent:<hash> line, and push after the operator's next message.",
         )
-    elif not intent.acked(repo, repo.top):
+    elif not acked:
         refusal(
             "prepush_intent",
             f"rails: refused - intent {h} has not been acked. End the turn showing it (its line "

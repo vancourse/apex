@@ -41,10 +41,20 @@ def intent_file(top: Path) -> Path:
 
 
 def current_hash(top: Path) -> str | None:
+    """The intent's marker hash, from its text in whatever encoding a shell wrote it.
+
+    PowerShell 5.1's `>` writes UTF-16 and `Set-Content` cp1252; reading those as UTF-8
+    raised, the pre-push hook's crash handler turned that into "NOT CHECKED, chaining on",
+    and the push went through with no marker or leak check (review of 1.3.0). Never raise.
+    """
     try:
-        text = intent_file(top).read_text(encoding="utf-8")
+        data = intent_file(top).read_bytes()
     except OSError:
         return None
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = data.decode("utf-16", errors="replace")
+    else:
+        text = data.decode("utf-8-sig", errors="replace")
     if not text.strip():
         return None
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:8]

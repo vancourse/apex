@@ -22,9 +22,12 @@ and verification goes through.
   tree; `rails ship` does not arm a non-prose diff without one (`ship_review`, R26).
 - **`rails close <milestone>`** closes only after the operator's `used #<n>` and with no open issue;
   the raw API close is refused (`milestone_close`, R18).
-- **Denies:** `test_filter` (`pytest --deselect` / `-k not`), `allow_edit` (a subagent editing an
-  allowlist), and `store_guard` now refuses a command naming the household store's container or
-  database (`[guard] names` in leak.toml) (R2).
+- **Denies:** `test_filter` (`pytest --deselect` / `-k ... not ...`, read from the pytest
+  statement, not from a commit message that mentions it), `allow_edit` (a subagent editing an
+  allowlist or leak.toml, by tool or by shell write), `operator_bounds` (a command that touches
+  `CLAUDECODE`, or a command or written file naming the household store's container or database
+  from leak.toml `[guard] names`), and `arm_review` (`gh pr merge --auto` by hand, which skipped
+  the review `rails ship` requires) (R2, R26).
 - **`rails check` hook-removal check:** deleting a hook script the base branch's settings still run
   fails the check (it blocks every prompt in older worktrees, 2026-10-07); `rails retire-hook <path>`
   writes the dated do-nothing placeholder instead.
@@ -36,6 +39,19 @@ and verification goes through.
 - The `rails ship` absence advisory flags claims of absence (`no callers`, `does not exist`,
   `nothing calls`), not every sentence with "no" or "only".
 - Every new refusal is in shadow until 2026-10-15 (logs `would-deny`, refuses nothing).
+
+### Fixed (two-voice review of this release, before it shipped)
+- An open must-fix now blocks arming: the reviewers' JSON `must_fix` list is counted, and a tree
+  with open items arms only with `rails review record ... --accept "<reason>"`, shown in the PR body.
+- `used` needs `#<number>`: "Used 3 hours on this" no longer recorded use of milestone 3.
+- Work-item ids are `<issue>-<step>`, so two issues with `step: a1` keep both; an edited issue adds
+  its new line instead of dropping it; "Steps to reproduce" is not read as acceptance.
+- The hook-removal check counts scripts only and lets an expired placeholder go.
+- `milestone_close` sees a variable milestone number, `PATCH` inside a script one-liner, and a
+  closed state in an `--input` file.
+- The pre-push intent check fails closed, and reads a UTF-16 or BOM-prefixed intent file.
+- Markdown that runs (agents/, skills/, templates/) needs review; only docs/ and top-level
+  Markdown are prose.
 
 ## [1.2.1] — 2026-10-07
 

@@ -69,43 +69,60 @@ def _import_acceptance(repo: store.RepoId, top: Path, number: str, out) -> None:
     step has no passing walk receipt. Best effort - an unreadable issue is said, not fatal.
     """
     ref = f"#{number.lstrip('#')}"
-    if any(i.get("closes") == ref for i in work.load(repo)["items"]):
+    if any(i.get("closes") == ref and i.get("from_issue") for i in work.load(repo)["items"]):
         return
-    raw = gh(top, "issue", "view", ref.lstrip("#"), "--json", "body", check=False).strip()
     try:
+        raw = gh(top, "issue", "view", ref.lstrip("#"), "--json", "body").strip()
         body = json.loads(raw).get("body", "") if raw else ""
-    except ValueError:
-        body = ""
+    except (GitError, ValueError) as exc:
+        print(f"  work: could not read {ref} ({str(exc)[:80]}); its Done-when lines are NOT items", file=out)
+        return
     added = work.add_from_issue(repo, ref, body) if body else []
     print(
         f"  work: {len(added)} acceptance line(s) from {ref} are now items"
-        + ("" if added else " (none found - the issue's Done-when is not machine-readable)"),
+        + ("" if added else " (the issue has no Done-when section or `step:` lines)"),
         file=out,
     )
 
 
+def is_prose(path: str) -> bool:
+    """Prose a reviewer need not read: docs/** and top-level Markdown (README, CHANGELOG).
+
+    Markdown anywhere else is behaviour here - agents/*.md and skills/*/SKILL.md are prompts
+    that run, templates/*.md are the shapes every artifact takes (review of 1.3.0).
+    """
+    return path.startswith("docs/") or (path.endswith(".md") and "/" not in path)
+
+
 def needs_review(top: Path, base_ref: str | None) -> bool:
-    """A diff that changes anything but prose (docs/**, *.md) gets the two-voice review."""
+    """A diff that changes anything but prose gets the two-voice review."""
+    from rails.check import find_lanes_file
+    from rails import lanes as lanes_mod
     from rails.gitutil import changed_files, merge_base
 
-    base_sha = merge_base(top, base_ref or "origin/HEAD") or merge_base(top, "origin/main") or merge_base(top, "origin/master")
+    if not base_ref:
+        lanes_file = find_lanes_file(top)
+        base_ref = lanes_mod.load(lanes_file).base if lanes_file else None
+    base_sha = None
+    for ref in (base_ref, "origin/HEAD", "origin/main", "origin/master"):
+        if ref and (base_sha := merge_base(top, ref)):
+            break
     if not base_sha:
         return True
-    return any(not (p.startswith("docs/") or p.endswith(".md")) for p in changed_files(top, base_sha))
+    return any(not is_prose(p) for p in changed_files(top, base_sha))
 
 
-def _review_allows_arming(repo: store.RepoId, top: Path, out) -> bool:
-    """`ship_review`: a code diff arms only with a review receipt for HEAD's tree (design R26)."""
+def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | None = None) -> bool:
+    """`ship_review`: a code diff arms only with a review of HEAD's tree and no open must-fix (R26)."""
     from rails import review
     from rails.githooks import _log, _shadowed
     from rails.gitutil import tree
 
-    if not needs_review(top, None) or review.latest_for_tree(repo, tree(top)):
+    if not needs_review(top, base_ref):
         return True
-    text = (
-        "no review receipt for HEAD's tree. Run the rails:reviewer-coop and rails:reviewer-adversary "
-        "agents on the diff, save each report, then `rails review record --coop F --adversary F`."
-    )
+    text = review.arming_problem(review.latest_for_tree(repo, tree(top)))
+    if text is None:
+        return True
     if _shadowed("ship_review"):
         _log(repo, "ship_review", "would-deny")
         print(f"  [rails shadow: ship_review would refuse to arm] {text}", file=out)
@@ -143,6 +160,15 @@ def compose_body(
         parts.append(
             f"**Local lanes at {sha[:12]}** (posted as `rails/<lane>` statuses): {lanes}"
         )
+    try:
+        from rails import review
+        from rails.gitutil import tree, toplevel
+
+        line = review.summary_line(review.latest_for_tree(repo, tree(toplevel(repo.top))))
+    except Exception:  # noqa: BLE001 - the body must not fail to compose over a summary line
+        line = ""
+    if line:
+        parts.append(line)
     if detected_by:
         # read back by `rails metrics` (the automation catch rate); one line, its own paragraph
         parts.append(f"Detected-by: {detected_by}")
@@ -270,7 +296,7 @@ def ship(
         print("rails ship: could not determine the PR number", file=out)
         return 1
     armed = False
-    if arm and not _review_allows_arming(repo, top, out):
+    if arm and not _review_allows_arming(repo, top, out, base):
         arm = False
         print("  not arming: no review receipt for this tree (see above); arm after `rails review record`", file=out)
     if arm:
@@ -298,11 +324,13 @@ def ship(
             "at": int(time.time()),
         },
     )
-    for c in closes:
+    if len(closes) == 1:
+        # Hand-added items (`rails work add`) belong to the one issue this PR closes; with
+        # several, which item closes which is unknowable, so none is guessed (review of 1.3.0).
         with store.updating(work.path(repo), {}) as wdata:
             for item in wdata.get("items", []):
                 if item.get("status") == "open" and not item.get("closes"):
-                    item["closes"] = f"#{c.lstrip('#')}"
+                    item["closes"] = f"#{closes[0].lstrip('#')}"
     from rails.check import post
 
     post(top, out=out)

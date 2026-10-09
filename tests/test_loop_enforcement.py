@@ -17,7 +17,7 @@ import pytest
 from rails import check as check_mod
 from rails import cli, close, githooks, intent, receipts, review, ship, store, structural, work
 from rails.dispatch import GateRow
-from rails.gates import allow_edit, milestone_close, store_guard, test_filter
+from rails.gates import allow_edit, arm_review, milestone_close, operator_bounds, store_guard, test_filter
 from rails.hookio import Event
 
 ZERO = "0" * 40
@@ -115,8 +115,18 @@ def test_an_issue_form_done_when_box_is_read_line_by_line():
 def test_add_from_issue_is_idempotent_and_closes_the_issue(repo):
     rid = store.find_repo(repo)
     added = work.add_from_issue(rid, "42", ISSUE)
-    assert [(i["id"], i["closes"]) for i in added] == [("a1", "#42"), ("42-2", "#42")]
+    assert [(i["id"], i["closes"]) for i in added] == [("42-a1", "#42"), ("42-2", "#42")]
     assert work.add_from_issue(rid, "#42", ISSUE) == []
+    # a second issue from the same template keeps its own `step: a1`
+    assert [i["id"] for i in work.add_from_issue(rid, "43", ISSUE)] == ["43-a1", "43-2"]
+    # an edited issue adds the new line instead of dropping it on an id collision
+    edited = ISSUE.replace("a row with no date", "a row with a blank date")
+    assert [i["id"] for i in work.add_from_issue(rid, "42", edited)] == ["42-2.2"]
+
+
+def test_a_steps_to_reproduce_section_is_not_acceptance():
+    body = "## Steps to reproduce\n- open the export\n- click save\n\n**Done when** the save keeps closed accounts\n"
+    assert work.acceptance_lines(body) == [("the save keeps closed accounts", "")]
 
 
 # --- intent at push -----------------------------------------------------------------
@@ -189,6 +199,12 @@ def test_ship_does_not_arm_a_code_diff_without_a_review(repo, commit, monkeypatc
     monkeypatch.chdir(repo)
     (tmp_path / "c.md").write_text("Steelman. " + REPORT, encoding="utf-8")
     (tmp_path / "a.md").write_text(REPORT, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    out = io.StringIO()
+    assert ship._review_allows_arming(rid, repo, out) is False and "must-fix" in out.getvalue()  # open items
+    clean = '{"reviewed_sha": "abc", "must_fix": [], "consider": []}\n' + "y" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean, encoding="utf-8")
     review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
     assert ship._review_allows_arming(rid, repo, io.StringIO()) is True
 
@@ -276,10 +292,104 @@ def test_milestone_close_refuses_the_raw_patch_but_not_a_read():
     assert milestone_close.check(_evt("Bash", {"command": "gh api repos/a/b/milestones/76"})) is None
 
 
-def test_store_guard_refuses_a_command_naming_the_store(repo):
+def test_test_filter_reads_the_command_word_not_the_text():
+    # pytest named in a commit message, or a `-k` with "not" in a non-pytest command
+    assert test_filter.check(_evt("Bash", {"command": "git commit -m 'pytest -k not slow is refused now'"})) is None
+    assert test_filter.check(_evt("Bash", {"command": "grep -k 'not' pytest.ini"})) is None
+    assert test_filter.check(_evt("Bash", {"command": "uv run pytest -m 'not db' tests"})) is None  # a marker lane
+    assert test_filter.check(_evt("PowerShell", {"command": "python -m pytest '-knot slow' tests"}))
+    assert test_filter.check(_evt("Bash", {"command": "PYTEST_ADDOPTS='-k \"not slow\"' uv run pytest tests"}))
+    assert test_filter.check(_evt("Bash", {"command": "cd x && pytest --deselect=tests/a.py::t"}))
+
+
+def test_allow_edit_sees_a_shell_write_and_the_leak_config():
+    assert allow_edit.check(_evt("Bash", {"command": "echo '[[allow]]' >> rails/leak_allow.toml"}, agent_id="s"))
+    assert allow_edit.check(_evt("PowerShell", {"command": "Set-Content rails/leak.toml ''"}, agent_id="s"))
+    assert allow_edit.check(_evt("Edit", {"file_path": "C:/r/rails/leak.toml", "old_string": "a", "new_string": "b"}, agent_id="s"))
+    assert allow_edit.check(_evt("Bash", {"command": "cat rails/leak_allow.toml"}, agent_id="s")) is None
+    assert allow_edit.check(_evt("Bash", {"command": "echo x >> rails/leak_allow.toml"})) is None  # the session itself
+
+
+def test_milestone_close_sees_a_variable_number_and_an_input_file(tmp_path):
+    cwd = str(tmp_path)
+    assert milestone_close.check(_evt("Bash", {"command": 'gh api "repos/a/b/milestones/$N" -X PATCH -f state=closed'}, cwd=cwd))
+    assert milestone_close.check(
+        _evt("Bash", {"command": "python -c \"subprocess.run(['gh','api','repos/a/b/milestones/7','-X','PATCH','-f','state=closed'])\""}, cwd=cwd)
+    )
+    (tmp_path / "body.json").write_text('{"state": "closed"}', encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": "gh api repos/a/b/milestones/7 -X PATCH --input body.json"}, cwd=cwd))
+    (tmp_path / "desc.json").write_text('{"description": "operator correction"}', encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": "gh api repos/a/b/milestones/7 -X PATCH --input desc.json"}, cwd=cwd)) is None
+
+
+def test_operator_bounds_refuses_naming_the_store(repo):
+    """The household store by name: in a command, and in a file an agent would then run."""
     (repo / "rails").mkdir()
     (repo / "rails" / "leak.toml").write_text('[guard]\nnames = ["house-db-1", "house_db"]\n', encoding="utf-8")
     cwd = str(repo)
-    assert store_guard.check(_evt("Bash", {"command": "docker exec house-db-1 psql -d house_db -c 'select 1'"}, cwd=cwd))
-    assert store_guard.check(_evt("Bash", {"command": "docker exec other-db-1 psql -c 'select 1'"}, cwd=cwd)) is None
-    assert store_guard.check(_evt("Bash", {"command": "rails snapshot --store docker://house-db-1/u/house_db"}, cwd=cwd)) is None
+    assert operator_bounds.check(_evt("Bash", {"command": "docker exec house-db-1 psql -d house_db -c 'select 1'"}, cwd=cwd))
+    assert operator_bounds.check(_evt("Bash", {"command": "docker exec other-db-1 psql -c 'select 1'"}, cwd=cwd)) is None
+    assert operator_bounds.check(_evt("Bash", {"command": "rails snapshot --store docker://house-db-1/u/house_db"}, cwd=cwd)) is None
+    # `rails` exempts only its own statement, not a chained one
+    assert operator_bounds.check(_evt("Bash", {"command": "rails check; docker exec house-db-1 psql"}, cwd=cwd))
+    assert operator_bounds.check(_evt("Write", {"file_path": f"{cwd}/q.sh", "content": "psql -d house_db"}, cwd=cwd))
+    assert operator_bounds.check(_evt("Write", {"file_path": f"{cwd}/q.sh", "content": "psql -d planted"}, cwd=cwd)) is None
+    assert store_guard.check(_evt("Bash", {"command": "docker exec house-db-1 psql"}, cwd=cwd)) is None  # one owner
+
+
+def test_operator_bounds_refuses_touching_the_agent_marker():
+    for command in ("CLAUDECODE=0 rails used #75 x", "env -u CLAUDECODE git push", "$env:CLAUDECODE=''; rails release"):
+        assert operator_bounds.check(_evt("Bash", {"command": command})), command
+    assert operator_bounds.check(_evt("Bash", {"command": "rails check"})) is None
+
+
+def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, tmp_path, monkeypatch):
+    """The planted defect for `arm_review`: `gh pr merge --auto` skips what `rails ship` checks."""
+    commit(repo, "src/a.py", "x = 1\n")
+    cwd = str(repo)
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=cwd)
+    assert arm_review.check(arm)
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --squash"}, cwd=cwd)) is None  # not an arm
+    monkeypatch.chdir(repo)
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "drops a blank date", "reproducer": "feed one"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    assert "must-fix" in arm_review.check(arm).reason
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="the blank date is refused upstream, see #9")
+    assert arm_review.check(arm) is None
+
+
+def test_must_fix_counts_the_reviewers_json_list():
+    assert review.must_fix_count('{"must_fix": [{"a": 1}, {"b": 2}], "consider": [{"c": 3}]}') == 2
+    assert review.must_fix_count('{"must_fix": []}') == 0
+    assert review.must_fix_count("Must-fix: one\n- must fix: two\nwe must fix nothing else in prose") == 2
+
+
+def test_an_expired_placeholder_may_be_deleted(hooked, git, monkeypatch):
+    import datetime as dt
+
+    structural.retire_hook(hooked, ".claude/hooks/old_gate.py", today=dt.date(2026, 10, 8))
+    git(hooked, "add", "-A")
+    git(hooked, "commit", "-q", "-m", "placeholder")
+    git(hooked, "update-ref", "refs/remotes/origin/main", "HEAD")
+    base = git(hooked, "rev-parse", "origin/main")
+    git(hooked, "rm", "-q", ".claude/hooks/old_gate.py")
+    git(hooked, "commit", "-q", "-m", "delete the placeholder")
+    assert structural.hook_removals(hooked, base, today=dt.date(2026, 10, 9)) != []  # before its date
+    assert structural.hook_removals(hooked, base, today=dt.date(2027, 1, 1)) == []  # after it
+
+
+def test_used_needs_a_milestone_number():
+    from rails.gates import prompt_words
+
+    assert prompt_words._USED.match("used #75 invited my spouse")
+    assert prompt_words._USED.match("Used 3 hours on this, still broken") is None
+    assert prompt_words._USED.match("used it twice") is None
+
+
+def test_markdown_that_runs_is_not_prose():
+    assert ship.is_prose("docs/design/x.md") and ship.is_prose("CHANGELOG.md")
+    assert not ship.is_prose("agents/reviewer-coop.md")
+    assert not ship.is_prose("skills/rails/SKILL.md")
+    assert not ship.is_prose("templates/spec.md")

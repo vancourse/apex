@@ -25,7 +25,9 @@ from rails.hookio import Event, Notice
 
 NAME = "prompt_words"
 
-_USED = re.compile(r"^\s*used\s+(#?\S+)\s*(.*)$", re.IGNORECASE)
+#: `used #<number> <task>` - the `#` and the digits are required: "Used 3 hours on this, still
+#: broken" recorded `used` for milestone 3, which `rails close 3` then honoured (review of 1.3.0).
+_USED = re.compile(r"^\s*used\s+(#\d+)\b\s*(.*)$", re.IGNORECASE)
 _APPROVE = re.compile(r"^\s*approve\s+(\S+)\s+([0-9a-f]{6,64})\s*$", re.IGNORECASE)
 _CEREMONY = {
     "push": re.compile(r"\b(push|pushed|pushing)\b", re.I),

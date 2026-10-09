@@ -14,6 +14,7 @@ that the only way to retire a hook: delete it and the check fails, naming
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,17 +29,41 @@ class Finding:
     message: str
 
 
-def hook_removals(top: Path, base_sha: str) -> list[str]:
-    """Files the change deletes that a hook command on the base branch still runs.
+_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".cmd", ".bat")
+_UNTIL = re.compile(r"placeholder until (\d{4}-\d{2}-\d{2})")
 
-    Narrower than the main-folder sync's guard (which waits on any .claude/ deletion):
-    a retired rule or skill file does not block a prompt, only a missing hook script does.
+
+def _expired_placeholder(top: Path, base_sha: str, rel: str, today: _dt.date) -> bool:
+    """A placeholder whose own date has passed may go: that is what the date is for."""
+    code, text = mainsync._git(top, "show", f"{base_sha}:{rel}")
+    m = _UNTIL.search(text) if code == 0 else None
+    if not m:
+        return False
+    try:
+        return today > _dt.date.fromisoformat(m.group(1))
+    except ValueError:
+        return False
+
+
+def hook_removals(top: Path, base_sha: str, today: _dt.date | None = None) -> list[str]:
+    """Hook scripts the change deletes that worktrees cut before it may still run.
+
+    A script the base settings name, or any script under ``.claude/hooks/`` (an older
+    branch's settings may name it even when the base's no longer do) - except a placeholder
+    past its own delete-by date. A README or JSON file there is not a script and not counted.
+    Narrower than the main-folder sync's guard, which waits on any .claude/ deletion.
     """
+    today = today or _dt.date.today()
     code, out = mainsync._git(top, "diff", "--name-only", "--diff-filter=D", "--no-renames", base_sha, "HEAD")
     if code != 0:
         return []
     named = mainsync.hook_paths(top, base_sha)
-    return [p for p in out.splitlines() if p in named or p.startswith(".claude/hooks/")]
+    found = []
+    for p in out.splitlines():
+        is_hook = p in named or (p.startswith(".claude/hooks/") and p.endswith(_SCRIPT_SUFFIXES))
+        if is_hook and not _expired_placeholder(top, base_sha, p, today):
+            found.append(p)
+    return found
 
 
 def run(top: Path, base_sha: str | None) -> list[Finding]:
@@ -78,7 +103,18 @@ def retire_hook(top: Path, rel: str, today: _dt.date | None = None) -> tuple[int
     """Replace a hook script with a placeholder that exits 0; refuse a type it cannot write."""
     today = today or _dt.date.today()
     until = today + _dt.timedelta(days=PLACEHOLDER_DAYS)
-    path = top / rel
+    rel = rel.replace("\\", "/")
+    path = (top / rel).resolve()
+    try:
+        inside = path.relative_to(top.resolve()).as_posix()
+    except ValueError:
+        return 2, f"rails retire-hook: {rel} is outside this repository"
+    named = mainsync.hook_paths(top, "HEAD")
+    if not (inside.startswith(".claude/hooks/") or inside in named):
+        return 2, (
+            f"rails retire-hook: {inside} is not a hook script (not under .claude/hooks/, not named by "
+            ".claude/settings.json); refusing to overwrite it with a placeholder"
+        )
     template = _PLACEHOLDERS.get(path.suffix)
     if template is None:
         return 2, f"rails retire-hook: no placeholder for {path.suffix or 'an extensionless'} script; write one that exits 0"
