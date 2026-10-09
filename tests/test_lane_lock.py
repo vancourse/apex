@@ -43,7 +43,8 @@ def hold(tmp_path):
     started: list[tuple[subprocess.Popen, Path]] = []
 
     def start(mode: str = "hold") -> tuple[subprocess.Popen, Path]:
-        held, release = tmp_path / "held", tmp_path / "release"
+        n = len(started)
+        held, release = tmp_path / f"held{n}", tmp_path / f"release{n}"
         proc = subprocess.Popen(
             [sys.executable, "-c", _HOLDER, str(held), str(release), mode, ROOT]
         )
@@ -69,9 +70,11 @@ def _when_waiting(out: io.StringIO, lane: str, then) -> threading.Thread:
 
     def watch() -> None:
         deadline = time.monotonic() + 60
-        while f"wait  {lane}" not in out.getvalue() and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            if f"wait  {lane}" in out.getvalue():
+                then()  # only on the line itself: never into a later test's run
+                return
             time.sleep(0.02)
-        then()
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
@@ -241,6 +244,27 @@ def test_a_moved_worktree_fails_even_an_advisory_lane_and_runs_nothing_after(
     rid = store.find_repo(repo)
     assert not receipts.has_marker(rid, sha, full=True)
     assert {r["lane"] for r in receipts.read(rid, "lane", sha=sha)} == {"slow"}
+
+
+def test_allow_dirty_on_a_clean_start_still_refuses_an_edit_made_while_waiting(
+    repo, commit, py, hold
+):
+    """A clean start writes a marker even with --allow-dirty, so it must stay clean."""
+    _write_lanes(repo, _lane("backend", py, lock="t", code=_GATE))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    proc, release = hold()
+    out = io.StringIO()
+
+    def edit_then_let_go() -> None:
+        (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+        release.write_text("go")
+
+    watcher = _when_waiting(out, "backend", edit_then_let_go)
+    assert check.check(repo, allow_dirty=True, out=out) == 1, out.getvalue()
+    watcher.join(timeout=20)
+    proc.wait(timeout=20)
+    assert "tracked files changed since the check started" in out.getvalue()
+    assert not receipts.has_marker(store.find_repo(repo), sha, full=True)
 
 
 def test_a_commit_made_while_waiting_fails_the_check(repo, commit, py, hold):

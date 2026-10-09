@@ -22,8 +22,11 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     stay behind; the next holder overwrites it. A rails version without this ignores the key and
     runs the lane unlocked, as it did before.
   - **A worktree that moves while waiting is not certified.** After the wait, `rails check`
-    re-checks the lane's prerequisites. It then re-reads HEAD, the tree and the tracked-file state;
-    with `--allow-dirty`, which certifies nothing, only HEAD and the tree.
+    re-checks the lane's prerequisites. It then re-reads HEAD and the tracked-file state. A run
+    that started dirty with `--allow-dirty` certifies nothing, so it is held to HEAD alone. A clean
+    start writes a marker even with that flag, so it is held to staying clean.
+    - Because the comparison is against the start of the check, a lane run before a locked lane
+      that rewrites a tracked file also fails the check. The failure names the files.
     - If the worktree moved, the whole check fails, even when the lane is advisory. The lane gets
       exit 125 with the reason, later lanes print `skip` and do not run, and no marker is written.
       Before this, the old commit could be certified for content it never ran.

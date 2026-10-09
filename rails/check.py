@@ -259,13 +259,18 @@ def _moved_since_start(
     """Why the worktree no longer is the snapshot this check certifies, if it is not.
 
     A marker certifies the commit read at the start, and a lock wait can last an hour,
-    long enough for its author to commit or edit. A run that dirties nothing it may
-    (``--allow-dirty`` certifies nothing anyway) is held to HEAD and the tree only.
+    long enough for its author to commit or edit. Only a run that was already dirty
+    with ``--allow-dirty`` certifies nothing (no marker, `post` skips it), so only that
+    one is held to HEAD and the tree alone; a clean start is held to staying clean.
     """
     if head(top) != sha or tree(top) != tree_sha:
         return "HEAD moved since the check started"
-    if not allow_dirty and sorted(dirty_tracked(top)) != sorted(dirty):
-        return "tracked files changed since the check started"
+    if not (allow_dirty and dirty):
+        now = dirty_tracked(top)
+        if sorted(now) != sorted(dirty):
+            changed = sorted(set(now) ^ set(dirty))
+            shown = ", ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
+            return f"tracked files changed since the check started ({shown})"
     return None
 
 
@@ -402,6 +407,7 @@ def check(
                 exit=125,
                 secs=0,
                 why=why,
+                dirty=bool(dirty),
             )
             (advisory_failed if lane.advisory() else failed).append(lane.name)
             continue
@@ -421,7 +427,7 @@ def check(
         if moved is not None:
             # The whole check stops describing `sha`, so it fails whatever the lane's
             # advisory date, and no later lane runs on the moved tree under `sha`.
-            why = f"{moved} (waited {waited:.0f}s for lock {lane.lock!r}); check the commit you mean"
+            why = f"{moved}, checked after lock {lane.lock!r} (waited {waited:.0f}s)"
             print(f"  FAIL  {lane.name:<14} {why}", file=out)
             receipts.write(
                 repo,
@@ -450,6 +456,7 @@ def check(
                 exit=125,
                 secs=0,
                 why=prerequisite,
+                dirty=bool(dirty),
                 **lock_fields,
             )
             (advisory_failed if lane.advisory() else failed).append(lane.name)
