@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -97,6 +98,124 @@ def _resolve(argv: list[str]) -> list[str]:
     return [found, *argv[1:]] if found else argv
 
 
+def _descendants(pid: int) -> list[int] | None:
+    """POSIX: every process below `pid` by parent pid, parents before children.
+
+    None when the process table could not be read."""
+    try:
+        listed = subprocess.run(
+            ["ps", "-A", "-o", "pid=", "-o", "ppid="],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listed.returncode != 0:
+        return None
+    children: dict[int, list[int]] = {}
+    for line in listed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found: list[int] = []
+    seen = {pid}
+    queue = [pid]
+    while queue:
+        for child in children.get(queue.pop(0), []):
+            if child not in seen:
+                seen.add(child)
+                found.append(child)
+                queue.append(child)
+    return found
+
+
+def _freeze_tree(pid: int, frozen: list[int]) -> bool:
+    """POSIX: SIGSTOP `pid` and every process under it into `frozen`, parents first,
+    walking again until a walk finds nothing new: a stopped process cannot start
+    another, so nothing is born between the listing and the kill. `frozen` stays empty
+    when the process table could not be read. The caller owns the list, so what was
+    stopped is killed even when the walk is cut short. False when the walk did not
+    finish (a later `ps` failed, or 20 walks kept finding more)."""
+    seen: set[int] = set()
+    for _ in range(20):
+        below = _descendants(pid)
+        if below is None:
+            return False
+        new = [p for p in [pid, *below] if p not in seen]
+        if not new:
+            return True
+        for p in new:
+            seen.add(p)
+            frozen.append(p)
+            try:
+                os.kill(p, signal.SIGSTOP)
+            except OSError:
+                pass
+    return False
+
+
+def _kill_tree(proc: subprocess.Popen) -> str:
+    """Kill a timed-out lane and every process under it, reap it, and say what happened.
+
+    `subprocess.run(timeout=...)` killed only the direct child, a launcher (`uv run`,
+    `pnpm`); pytest and its xdist workers ran ~9 minutes past a 60-minute timeout,
+    beside another session's suite (2026-10-09). The tree is found by parent pid, as
+    `taskkill /T` does on Windows; the lane stays in rails's process group, so Ctrl+C,
+    a hangup or a kill aimed at the group still reach it as before. A process whose
+    parent had already exited is not found, nor, on Windows, one started while
+    taskkill works (POSIX freezes the tree first)."""
+    if os.name == "nt":
+        # By full path: a bare name is looked up in the current directory first.
+        root = os.environ.get("SystemRoot", r"C:\Windows")
+        taskkill = os.path.join(root, "System32", "taskkill.exe")
+        try:
+            done = subprocess.run(
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=60,
+            )
+            said = " ".join((done.stdout + done.stderr).split())
+            note = f"taskkill /T /F exit {done.returncode}" + (
+                "" if done.returncode == 0 else f": {said[-300:]}"
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            note = f"taskkill could not run ({exc}); stopped only the lane's own process"
+    else:
+        frozen: list[int] = []
+        complete = False
+        killed, missed = 0, []
+        try:
+            complete = _freeze_tree(proc.pid, frozen)
+        finally:
+            # Whatever was stopped dies, even if Ctrl+C cut the walk short. Leaves
+            # first: a frozen parent's death would SIGCONT an orphaned stopped group.
+            for pid in reversed(frozen):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    killed += 1
+                except ProcessLookupError:
+                    pass  # it exited between the listing and the kill
+                except OSError as exc:
+                    missed.append(f"{pid} ({exc.strerror})")
+        if not frozen:
+            note = "could not read the process table (`ps`); stopped only the lane's own process"
+        else:
+            note = f"killed {killed} of the lane's {len(frozen)} process(es)"
+            if missed:
+                note += f"; could not kill {', '.join(missed)}"
+            if not complete:
+                note += "; the walk of the process table did not finish, so the list may be short"
+    try:
+        proc.kill()  # a no-op once it is gone
+    except OSError:
+        pass
+    proc.wait()
+    return note
+
+
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -107,21 +226,30 @@ def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, floa
         log.write(f"$ {' '.join(lane.command)}\n")
         log.flush()
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 _resolve(lane.command),
                 cwd=str(top),
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                timeout=lane.timeout_min * 60,
             )
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
-            log.write(f"\nRAILS: lane timed out after {lane.timeout_min} min\n")
-            code = 124
         except OSError as exc:
             log.write(f"\nRAILS: could not start: {exc}\n")
-            code = 127
+            return 127, time.monotonic() - started
+        try:
+            code = proc.wait(timeout=lane.timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            stopped = _kill_tree(proc)
+            log.write(f"\nRAILS: lane timed out after {lane.timeout_min} min\n")
+            log.write(f"RAILS: {stopped}\n")
+            code = 124
+        except BaseException:
+            # Ctrl+C reached the lane's own processes too (same process group, same
+            # console), so they run their own teardown; as subprocess.run did, stop
+            # the direct child and go.
+            proc.kill()
+            proc.wait()
+            raise
     return code, time.monotonic() - started
 
 
