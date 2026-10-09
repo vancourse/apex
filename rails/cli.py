@@ -5,8 +5,12 @@ rails post                                  post rails/<lane> statuses for HEAD
 rails ship [--title T] [--closes N]         one PR, Ready, auto-squash armed, statuses posted
 rails walk [--name planted]                 run a walk; record step ids pass/fail
 rails claim "#12,#34" | --milestone T [--kind release|harness|prep] | --adhoc "line" | --list | --release
-rails work add "<text>" [--step a1] | done <id> | list | stop <kind> "<text>" | monitor-bound
+rails work add "<text>" [--step a1] | from-issue <N> | done <id> | list | stop <kind> "<text>" | monitor-bound
 rails hold | release | used <#milestone> <task> | approve <rulebook> <hash>   (the operator's words)
+rails review record --coop F --adversary F | status   seal the two reviewers' reports for HEAD's tree
+rails close <milestone number>              close a milestone the operator used (no open issues)
+rails template [name] [--path]              the one template set: intent, spec, adr, milestone, rulebook, PR
+rails retire-hook <path>                    replace a hook script with a dated do-nothing placeholder
 rails leak-check [--file F] [--stdin] [--pre-push]
 rails snapshot [--store S]... [--remember]  operator shell only: hash the household's values
 rails metrics                               the four numbers before/since the cut, CI minutes, firings
@@ -128,11 +132,72 @@ def cmd_work(argv: list[str]) -> int:
             pr["monitor"] = "bound"
         print("monitor recorded as bound")
         return 0
+    if verb == "from-issue" and rest:
+        from rails.gitutil import GitError, gh
+
+        number = rest[0].lstrip("#")
+        try:
+            body = json.loads(gh(repo.top, "issue", "view", number, "--json", "body")).get("body", "")
+        except (GitError, ValueError) as exc:
+            print(f"rails work from-issue: cannot read #{number}: {exc}")
+            return 2
+        added = work.add_from_issue(repo, number, body)
+        for item in added:
+            print(f"added {item['id']:<10} step {item.get('step') or '-':<6} {item['text'][:90]}")
+        if not added:
+            print(f"#{number}: no new acceptance lines (none under a Done-when/Acceptance/Steps heading, no `step:` ids)")
+        return 0
     print(__doc__)
     return 2
 
 
+def cmd_template(argv: list[str]) -> int:
+    """The plugin's templates are the one set: print one, or list them."""
+    folder = Path(__file__).resolve().parent.parent / "templates"
+    names = sorted(p.stem for p in folder.glob("*.md"))
+    if not argv:
+        print(f"rails templates ({folder}):")
+        for name in names:
+            first = next(
+                (l.strip() for l in (folder / f"{name}.md").read_text(encoding="utf-8").splitlines() if l.strip()),
+                "",
+            )
+            print(f"  {name:<24} {first[:80]}")
+        print("print one: rails template <name>   (its path: rails template <name> --path)")
+        return 0
+    name = argv[0].removesuffix(".md")
+    path = folder / f"{name}.md"
+    if not path.is_file():
+        print(f"rails template: no {name!r}; have: {', '.join(names)}")
+        return 2
+    print(path if "--path" in argv[1:] else path.read_text(encoding="utf-8"), end="" if "--path" not in argv[1:] else "\n")
+    return 0
+
+
+def cmd_retire_hook(argv: list[str]) -> int:
+    from rails import structural
+
+    if not argv:
+        print("rails retire-hook <path of the hook script, relative to the repo root>")
+        return 2
+    repo = _repo_or_die()
+    code, text = structural.retire_hook(repo.top, argv[0])
+    print(text)
+    return code
+
+
+_OPERATOR_WORDS = ("used", "approve", "release")
+
+
 def cmd_words(word: str, argv: list[str]) -> int:
+    from rails.gitutil import in_agent
+
+    if word in _OPERATOR_WORDS and in_agent():
+        print(
+            f"rails {word} is the operator's word: they type `{word} ...` in a prompt or run it in their own "
+            "shell. An agent recording it would forge the receipt it exists to be."
+        )
+        return 2
     repo = _repo_or_die()
     now = int(time.time())
     with store.updating(repo.dir / "state.json", {}) as state:
@@ -444,6 +509,23 @@ def main(argv: list[str]) -> int:
         from rails import metrics
 
         return metrics.main(rest)
+    if cmd == "template":
+        return cmd_template(rest)
+    if cmd == "retire-hook":
+        return cmd_retire_hook(rest)
+    if cmd == "review":
+        from rails import review
+
+        return review.main(rest)
+    if cmd == "close":
+        from rails import close
+
+        if not rest:
+            print("rails close <milestone number>")
+            return 2
+        code, text = close.close(Path.cwd(), rest[0])
+        print(text)
+        return code
     if cmd == "history":
         from rails import history
 

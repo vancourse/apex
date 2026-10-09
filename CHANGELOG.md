@@ -4,6 +4,39 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.3.0] — 2026-10-08
+
+The loop enforces itself, and there is one template set. From the 2026-10-08 audit of the design
+against the code (20 of 31 mechanisms partial): the parts every future PR, requirement, design, test
+and verification goes through.
+
+### Added
+- **`rails template [name]`** - the plugin's templates are the one set (intent, spec, adr, milestone,
+  rulebook, PR); repos read them from here instead of keeping copies that drift.
+- **Intent at push (`prepush_intent`):** an agent's push refuses without an intent the operator saw
+  and acked (R24). The operator's own shell is not asked.
+- **`rails work from-issue <n>`** and `rails ship --closes <n>` turn an issue's Done-when lines (a
+  heading's bullets or plain lines, and any `step: <id>`) into work items, so the turn-end gate holds
+  the PR to them (R28).
+- **`rails review record --coop F --adversary F`** seals the two reviewer agents' reports for HEAD's
+  tree; `rails ship` does not arm a non-prose diff without one (`ship_review`, R26).
+- **`rails close <milestone>`** closes only after the operator's `used #<n>` and with no open issue;
+  the raw API close is refused (`milestone_close`, R18).
+- **Denies:** `test_filter` (`pytest --deselect` / `-k not`), `allow_edit` (a subagent editing an
+  allowlist), and `store_guard` now refuses a command naming the household store's container or
+  database (`[guard] names` in leak.toml) (R2).
+- **`rails check` hook-removal check:** deleting a hook script the base branch's settings still run
+  fails the check (it blocks every prompt in older worktrees, 2026-10-07); `rails retire-hook <path>`
+  writes the dated do-nothing placeholder instead.
+- apex follows its own loop: `lanes.toml` (suite, kit) and rails-shaped issue forms (work-item,
+  defect with "what found it first").
+
+### Changed
+- `rails used|approve|release` refuse inside an agent: they record the operator's words.
+- The `rails ship` absence advisory flags claims of absence (`no callers`, `does not exist`,
+  `nothing calls`), not every sentence with "no" or "only".
+- Every new refusal is in shadow until 2026-10-15 (logs `would-deny`, refuses nothing).
+
 ## [1.2.1] — 2026-10-07
 
 ### Fixed

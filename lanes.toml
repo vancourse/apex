@@ -1,0 +1,16 @@
+# rails' own lanes: the plugin follows the loop it ships (`rails check`, `rails ship`).
+# GitHub's hook-tests workflow runs the same suite on Linux and Windows (public repo: free);
+# these lanes are the laptop half, so a change is proven before it is pushed.
+
+[settings]
+base = "origin/main"
+
+[[lane]]
+name = "suite"
+always = true
+command = ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--ignore=tests/kit"]
+
+[[lane]]
+name = "kit"
+paths = ["kit/**", "rails/new.py", "tests/kit/**"]
+command = ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/kit"]

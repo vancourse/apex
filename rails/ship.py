@@ -47,9 +47,71 @@ def _intent_title_body(top: Path) -> tuple[str, str]:
     return title, "\n".join(lines).strip()
 
 
+#: A claim that something is ABSENT from the code - the kind a grep can get wrong (design
+#: R29) - not every sentence with "no" or "only" in it. 1.0's word list flagged ordinary
+#: prose ("no code", "the only lane") on every PR it shipped, which trains the reader to
+#: skip the advisory.
 _ABSENCE = re.compile(
-    r"\b(no|never|missing|does not exist|nothing|only)\b", re.IGNORECASE
+    r"\b(?:does not exist|doesn'?t exist|is not (?:implemented|wired|called|used)|"
+    r"(?:no|zero) (?:\w+ ){0,2}(?:callers?|consumers?|importers?|references?|readers?|writers?|"
+    r"tests? (?:for|of|cover)|usages?|uses)\b|"
+    r"never (?:called|used|read|written|imported|reached|wired)|"
+    r"nothing (?:calls|reads|uses|writes|imports|references)|"
+    r"(?:is|are) (?:missing|absent) from)",
+    re.IGNORECASE,
 )
+
+
+def _import_acceptance(repo: store.RepoId, top: Path, number: str, out) -> None:
+    """`--closes N` turns N's acceptance lines into work items (design R28), once.
+
+    The turn-end gate then holds the PR to them: an armed PR may not close an item whose
+    step has no passing walk receipt. Best effort - an unreadable issue is said, not fatal.
+    """
+    ref = f"#{number.lstrip('#')}"
+    if any(i.get("closes") == ref for i in work.load(repo)["items"]):
+        return
+    raw = gh(top, "issue", "view", ref.lstrip("#"), "--json", "body", check=False).strip()
+    try:
+        body = json.loads(raw).get("body", "") if raw else ""
+    except ValueError:
+        body = ""
+    added = work.add_from_issue(repo, ref, body) if body else []
+    print(
+        f"  work: {len(added)} acceptance line(s) from {ref} are now items"
+        + ("" if added else " (none found - the issue's Done-when is not machine-readable)"),
+        file=out,
+    )
+
+
+def needs_review(top: Path, base_ref: str | None) -> bool:
+    """A diff that changes anything but prose (docs/**, *.md) gets the two-voice review."""
+    from rails.gitutil import changed_files, merge_base
+
+    base_sha = merge_base(top, base_ref or "origin/HEAD") or merge_base(top, "origin/main") or merge_base(top, "origin/master")
+    if not base_sha:
+        return True
+    return any(not (p.startswith("docs/") or p.endswith(".md")) for p in changed_files(top, base_sha))
+
+
+def _review_allows_arming(repo: store.RepoId, top: Path, out) -> bool:
+    """`ship_review`: a code diff arms only with a review receipt for HEAD's tree (design R26)."""
+    from rails import review
+    from rails.githooks import _log, _shadowed
+    from rails.gitutil import tree
+
+    if not needs_review(top, None) or review.latest_for_tree(repo, tree(top)):
+        return True
+    text = (
+        "no review receipt for HEAD's tree. Run the rails:reviewer-coop and rails:reviewer-adversary "
+        "agents on the diff, save each report, then `rails review record --coop F --adversary F`."
+    )
+    if _shadowed("ship_review"):
+        _log(repo, "ship_review", "would-deny")
+        print(f"  [rails shadow: ship_review would refuse to arm] {text}", file=out)
+        return True
+    print(f"rails ship: {text}", file=out)
+    return False
 
 
 def unreceipted_absences(body: str) -> list[str]:
@@ -132,6 +194,8 @@ def ship(
             file=out,
         )
         return 2
+    for c in closes:
+        _import_acceptance(repo, top, c, out)
     full_body = compose_body(body, closes, repo, sha, detected_by)
     if not detected_by and re.search(r"(?i)\b(fix|hotfix|bugfix)", title):
         print(
@@ -206,6 +270,9 @@ def ship(
         print("rails ship: could not determine the PR number", file=out)
         return 1
     armed = False
+    if arm and not _review_allows_arming(repo, top, out):
+        arm = False
+        print("  not arming: no review receipt for this tree (see above); arm after `rails review record`", file=out)
     if arm:
         done = subprocess.run(
             ["gh", "pr", "merge", str(number), "--auto", "--squash"],

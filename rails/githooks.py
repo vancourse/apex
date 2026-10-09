@@ -156,6 +156,8 @@ def pre_push(
         parts = line.split()
         if parts[2].startswith("refs/heads/"):
             pushes.append((parts[2].removeprefix("refs/heads/"), parts[1]))
+    if pushes and not is_operator:
+        intent_refusal(repo, refusal)
     if not is_operator:
         for branch, sha in pushes:
             full = open_pr(repo, branch)
@@ -180,6 +182,33 @@ def pre_push(
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
     return (1 if refuse else 0), messages
+
+
+def intent_refusal(repo: store.RepoId, refusal) -> None:
+    """`prepush_intent`: an agent pushes only work whose intent the operator saw and acked (R24).
+
+    The intent is ``.rails/intent.md``; it is acked when the operator's next message after a
+    turn that SHOWED it (its ``intent:<hash>`` marker in the final message) did not change
+    what is built. A push from the operator's own shell is not an agent's and is not asked.
+    """
+    from rails import intent
+    from rails.gitutil import in_agent
+
+    if not in_agent():
+        return
+    h = intent.current_hash(repo.top)
+    if h is None:
+        refusal(
+            "prepush_intent",
+            "rails: refused - no intent for this work. Write .rails/intent.md (`rails template intent`), "
+            "end the turn SHOWING it with its intent:<hash> line, and push after the operator's next message.",
+        )
+    elif not intent.acked(repo, repo.top):
+        refusal(
+            "prepush_intent",
+            f"rails: refused - intent {h} has not been acked. End the turn showing it (its line "
+            f"`{intent.marker(h)}` in your final message); the operator's next message acks it.",
+        )
 
 
 def retired_refusals(repo: store.RepoId, ref_lines: list[str], refusal) -> None:

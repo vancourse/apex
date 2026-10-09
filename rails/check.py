@@ -197,12 +197,17 @@ def check(
     for lane, reason in selection.skipped:
         if not only or lane.name in only:
             print(f"  skip  {lane.name:<14} {reason}", file=out)
-    if not selected:
-        print("  nothing selected", file=out)
-    log_dir = repo.leaf_dir / "logs" / sha[:12]
     failed: list[str] = []
     advisory_failed: list[str] = []
     passed: list[str] = []
+    from rails import structural
+
+    for finding in structural.run(top, base_sha):
+        print(f"  FAIL  {finding.check:<14} {finding.message}", file=out)
+        failed.append(finding.check)
+    if not selected:
+        print("  nothing selected", file=out)
+    log_dir = repo.leaf_dir / "logs" / sha[:12]
     for lane in selected:
         why = missing_prerequisite(lane)
         if why:
