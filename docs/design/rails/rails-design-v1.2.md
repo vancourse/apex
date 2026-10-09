@@ -91,11 +91,16 @@ The rails are a Claude Code plugin (`rails`, the reworked apex), a starter kit, 
 > - **1.3.0, the loop:** an agent's push needs an acked intent (`prepush_intent`); `rails work
 >   from-issue` turns Done-when lines into the work a PR owes; `rails review record` seals the two
 >   reviewer reports for HEAD's tree, and neither `rails ship` nor a hand `gh pr merge --auto` arms a
->   code diff without it or with an open must-fix (`ship_review`, `arm_review`); `rails close` closes
->   a milestone only after the operator's `used #<n>` and with no open issue (`milestone_close`
->   refuses the raw API close). New denies: `test_filter`, `allow_edit`, `operator_bounds` (the agent
->   marker and the store's names). `rails check` refuses deleting a hook script older worktrees run;
->   `rails retire-hook` writes the dated placeholder. All new refusals shadow until 2026-10-15.
+>   code diff without it or with an open must-fix (`ship_review`, `arm_review`). Because auto-merge
+>   merges whatever is pushed later, a push to a branch with an open PR also needs its tree reviewed.
+>   `rails close` closes a milestone only after the operator's `used #<n>` and with no open issue
+>   (`milestone_close` refuses the raw API close); the operator's words need their terminal, not only
+>   the absence of the agent marker, which an agent's own command could clear. New denies:
+>   `test_filter`, `allow_edit`, `operator_bounds` (the agent marker and the store's names).
+>   `rails check` refuses deleting a hook script older worktrees run; `rails retire-hook` writes the
+>   dated placeholder. All new refusals shadow until 2026-10-15. Both voices reviewed it before it
+>   shipped, round after round; each must-fix has a test and a killed mutant (the rounds and counts
+>   are in the plugin's PR body).
 > - **1.3.0, one template set:** `rails template` (intent, spec, adr, milestone, rulebook, PR). This
 >   removes jarvis's `docs/templates/` phase skeletons (prd, design, impl-plan, recon, adr,
 >   milestone) and the hook rules that routed to them; `component.md` and `app.md` stay as the
