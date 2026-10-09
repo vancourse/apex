@@ -630,7 +630,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--allow-dirty",
         action="store_true",
-        help="run lanes over uncommitted edits (no marker)",
+        help="run lanes over uncommitted edits (no marker when the tree is dirty)",
     )
     args = ap.parse_args(argv)
     try:

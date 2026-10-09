@@ -63,7 +63,9 @@ def branch(cwd: Path) -> str:
 
 
 def dirty_tracked(cwd: Path) -> list[str]:
-    out = git(cwd, "status", "--porcelain", "--untracked-files=no", check=False)
+    # Not `git()`: its strip() takes the leading space of the first line's status
+    # (" M path"), and the column slice then cut the path's first character.
+    out = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd, check=False)
     return [line[3:] for line in out.splitlines() if line.strip()]
 
 

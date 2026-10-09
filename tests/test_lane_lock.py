@@ -210,7 +210,7 @@ def test_an_edit_made_while_waiting_fails_the_check_and_leaves_no_marker(repo, c
     assert check.check(repo, out=out) == 1, out.getvalue()
     watcher.join(timeout=20)
     proc.wait(timeout=20)
-    assert "tracked files changed since the check started" in out.getvalue()
+    assert "tracked files changed since the check started (src/a.py)" in out.getvalue()
     assert "run   backend" not in out.getvalue()
     rid = store.find_repo(repo)
     assert not receipts.has_marker(rid, sha, full=True)
@@ -263,7 +263,28 @@ def test_allow_dirty_on_a_clean_start_still_refuses_an_edit_made_while_waiting(
     assert check.check(repo, allow_dirty=True, out=out) == 1, out.getvalue()
     watcher.join(timeout=20)
     proc.wait(timeout=20)
-    assert "tracked files changed since the check started" in out.getvalue()
+    assert "tracked files changed since the check started (src/a.py)" in out.getvalue()
+    assert not receipts.has_marker(store.find_repo(repo), sha, full=True)
+
+
+def test_a_dirty_start_under_allow_dirty_is_held_to_head_alone(repo, commit, py, hold):
+    """It certifies nothing, so more edits during the wait do not stop the lane."""
+    _write_lanes(repo, _lane("backend", py, lock="t", code=_GATE))
+    commit(repo, "src/a.py", "x = 1\n")
+    sha = commit(repo, "src/b.py", "y = 1\n", "second file")
+    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")  # dirty start
+    proc, release = hold()
+    out = io.StringIO()
+
+    def edit_then_let_go() -> None:
+        (repo / "src" / "b.py").write_text("y = 2\n", encoding="utf-8")
+        release.write_text("go")
+
+    watcher = _when_waiting(out, "backend", edit_then_let_go)
+    assert check.check(repo, allow_dirty=True, out=out) == 0, out.getvalue()
+    watcher.join(timeout=20)
+    proc.wait(timeout=20)
+    assert "run   backend" in out.getvalue()
     assert not receipts.has_marker(store.find_repo(repo), sha, full=True)
 
 
