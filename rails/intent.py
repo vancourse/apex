@@ -144,6 +144,54 @@ def last_assistant_text(transcript_path: str, max_bytes: int = 400_000) -> str:
     return ""
 
 
+def worktree_tops(top: Path) -> list[Path]:
+    """Every checkout of this repository (``git worktree list``), the main one included."""
+    from rails.gitutil import git
+
+    out = git(top, "worktree", "list", "--porcelain", check=False)
+    return [Path(line[len("worktree "):].strip()) for line in out.splitlines() if line.startswith("worktree ")]
+
+
+def shown_elsewhere(repo: store.RepoId, last_text: str) -> store.RepoId | None:
+    """Another worktree of this repo whose intent's marker is in ``last_text`` (p3i): a session
+    started in the main folder works in a worktree, and shows that worktree's intent."""
+    hashes = set(re.findall(r"intent:([0-9a-f]{8})\b", last_text))
+    if not hashes:
+        return None
+    here = repo.top.resolve()
+    for top in worktree_tops(repo.top):
+        if top.resolve() == here:
+            continue
+        h = current_hash(top)
+        if h and h in hashes:
+            return store.find_repo(top)
+    return None
+
+
+def bind_session(repo: store.RepoId, session_id: str, other: store.RepoId) -> None:
+    """This session's intent lives in ``other``'s worktree: the next human message acks it there."""
+    if not session_id:
+        return
+    with store.updating(repo.dir / "state.json", {}) as state:
+        state.setdefault("intent_sessions", {})[session_id] = {
+            "top": str(other.top),
+            "hash": current_hash(other.top) or "",
+        }
+
+
+def bound(repo: store.RepoId, session_id: str) -> store.RepoId | None:
+    """The worktree this session showed an intent for, while that intent is still the one
+    it showed: a later intent there, shown by another session, is not this session's to ack."""
+    state = store.read_json(repo.dir / "state.json", {}) or {}
+    entry = (state.get("intent_sessions") or {}).get(session_id) if session_id else None
+    if not isinstance(entry, dict):
+        return None
+    top = Path(str(entry.get("top", "")))
+    if not top.is_dir() or not entry.get("hash") or current_hash(top) != entry["hash"]:
+        return None
+    return store.find_repo(top)
+
+
 def stamp_if_shown(repo: store.RepoId, top: Path, last_text: str) -> bool:
     h = current_hash(top)
     if h is None or marker(h) not in last_text:

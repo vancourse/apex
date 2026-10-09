@@ -245,14 +245,20 @@ def cmd_words(word: str, argv: list[str]) -> int:
 def cmd_walk(argv: list[str]) -> int:
     import tomllib
 
-    from rails import receipts
+    from rails import receipts, work
     from rails.check import find_lanes_file
-    from rails.gitutil import head, tree
+    from rails.gitutil import head
 
     ap = argparse.ArgumentParser(prog="rails walk")
     ap.add_argument("--name", default="planted")
     args = ap.parse_args(argv)
     repo = _repo_or_die()
+    from rails.gitutil import dirty_tracked
+
+    if dirty_tracked(repo.top):
+        # The receipt names HEAD's tree; a walk over uncommitted edits walked another one.
+        print("rails walk: commit first - the receipt names HEAD's tree, and the working copy differs")
+        return 2
     lanes_file = find_lanes_file(repo.top)
     walks = (
         tomllib.loads(lanes_file.read_text(encoding="utf-8")).get("walk", [])
@@ -294,7 +300,7 @@ def cmd_walk(argv: list[str]) -> int:
         "walk",
         name=args.name,
         sha=head(repo.top),
-        tree=tree(repo.top),
+        **work.walk_scope(repo),
         instrument=spec.get("instrument", f"walk:{args.name}"),
         steps=[
             {"step": str(s.get("step")), "pass": bool(s.get("pass"))}
@@ -485,11 +491,63 @@ def cmd_doctor(argv: list[str]) -> int:
     return 1 if problems else 0
 
 
+#: How often a rails command re-reads an OPEN pr.json's state from GitHub.
+PR_STATE_TTL_SECS = 60
+
+
+def refresh_pr_state(cwd: Path, now: float | None = None) -> str | None:
+    """p3g: a worktree's ``pr.json`` that still reads OPEN after its PR merged or closed made
+    every gate that reads it (second_pr, turn_end, the push marker) act on a PR that is gone.
+    Any rails command re-reads the state from GitHub, at most once a minute, and records what
+    it found. Returns the new state when it changed; None otherwise, or when it cannot ask."""
+    from rails.gitutil import GitError, gh
+
+    repo = store.find_repo(cwd)
+    if repo is None:
+        return None
+    path = repo.leaf_dir / "pr.json"
+    pr = store.read_json(path, None)
+    if not isinstance(pr, dict) or not pr.get("number"):
+        return None
+    if str(pr.get("state", "OPEN")).upper() != "OPEN":
+        return None
+    now = time.time() if now is None else now
+    if now - float(pr.get("state_checked_at", 0) or 0) < PR_STATE_TTL_SECS:
+        return None
+    try:
+        view = gh(repo.top, "pr", "view", str(pr["number"]), "--json", "state", check=False, timeout=10)
+        state = str(json.loads(view).get("state", "")).upper() if view.strip() else ""
+    except (GitError, ValueError, OSError):
+        state = ""
+    if not state:
+        # Remembered, so a hung or offline gh costs one wait a minute, not one per command.
+        with store.updating(path, {}) as record:
+            record["state_checked_at"] = now
+        return None
+    with store.updating(path, {}) as record:
+        record["state_checked_at"] = now
+        if state != "OPEN":
+            record["state"] = state
+            record["armed"] = False
+            record.pop("disarmed_by", None)
+            from rails.githooks import release_pr_hold
+
+            release_pr_hold(repo, record.get("number"))
+    return state if state != "OPEN" else None
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
     cmd, rest = argv[0], argv[1:]
+    if cmd not in ("--version",):
+        try:
+            changed = refresh_pr_state(Path.cwd())
+        except Exception:  # noqa: BLE001 - a state refresh never blocks a command
+            changed = None
+        if changed:
+            print(f"rails: this worktree's PR is {changed} now; pr.json no longer reads OPEN")
     if cmd == "--version":
         print(VERSION)
         return 0
@@ -556,9 +614,14 @@ def main(argv: list[str]) -> int:
     if cmd == "whereis":
         return cmd_whereis(rest)
     if cmd == "state":
-        from rails.gates.state import render
+        from rails.gates.state import lines_of_work, render
 
-        print(render(_repo_or_die()))
+        repo = _repo_or_die()
+        print(render(repo))
+        print()
+        print("lines of work (every worktree):")
+        for line in lines_of_work(repo):
+            print(f"  {line}")
         return 0
     if cmd == "new":
         from rails import new

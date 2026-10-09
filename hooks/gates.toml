@@ -139,6 +139,18 @@ fp_count = 0
 fp_measured_on = "n/a: fires only on the operator's own word"
 
 [[gate]]
+name = "prepush_disarm"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "friction"
+mode = "enforce"
+cites = ["design section 5 row 7 and R3: a push the review does not cover takes an armed PR off auto-merge", "1.3.0 review: ship_review checks at arming; a push made while it only logs, or by the operator, merged unreviewed (morphyxAI/jarvis#2621)"]
+planted = "tests/test_loop_enforcement.py::test_p2a_an_unreviewed_push_to_an_armed_pr_disarms_it"
+fp_count = 0
+fp_measured_on = "2026-10-09: an action, not a refusal; disarms only an armed PR whose pushed tree no receipt covers (prose-only pushes stay armed); mutants killed: call removed, coverage ignored, refused pushes disarmed, unread body rewritten"
+
+[[gate]]
 name = "prepush_marker"
 module = "prepush"
 events = ["git:pre-push"]
@@ -432,3 +444,16 @@ cites = ["R26: the review receipt", "review of 1.3.0: `gh pr merge --auto` armed
 planted = "tests/test_loop_enforcement.py::test_arm_review_refuses_a_hand_armed_merge_without_a_review"
 fp_count = 0
 fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "rearm_disarmed"
+module = "rearm_disarmed"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+cites = ["R3: the disarm acts in the shadow week", "review of p2, round 2: a hand `gh pr merge N --auto` undid the disarm while arm_review only logged (morphyxAI/jarvis#2621)"]
+planted = "tests/test_loop_enforcement.py::test_p2_a_hand_rearm_of_a_disarmed_pr_is_refused"
+fp_count = 0
+fp_measured_on = "unmeasured: fires only on a PR the disarm marked"

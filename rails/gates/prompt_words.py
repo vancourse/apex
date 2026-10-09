@@ -5,6 +5,7 @@ Words, matched only on a HUMAN message whose whole first line is the word:
   release               lifts hold
   used #<milestone> <task>   records that the operator used it for a real task
   approve <rulebook> <hash>  pins a rule table's examples
+  accept #<pr> <tree>   lets an agent-recorded `review record --accept` of that tree arm that PR
 
 The intent ack: when this worktree has an intent that was SHOWN and not yet
 acked, the human message is classified. A correction clears the ack and asks
@@ -29,6 +30,8 @@ NAME = "prompt_words"
 #: broken" recorded `used` for milestone 3, which `rails close 3` then honoured (review of 1.3.0).
 _USED = re.compile(r"^\s*used\s+(#\d+)\b\s*(.*)$", re.IGNORECASE)
 _APPROVE = re.compile(r"^\s*approve\s+(\S+)\s+([0-9a-f]{6,64})\s*$", re.IGNORECASE)
+#: `accept #<pr>`: the operator waives the open must-fixes an agent recorded --accept for (p3b).
+_ACCEPT = re.compile(r"^\s*accept\s+#(\d+)\s+([0-9a-f]{7,40})\s*$", re.IGNORECASE)
 _CEREMONY = {
     "push": re.compile(r"\b(push|pushed|pushing)\b", re.I),
     "merge": re.compile(r"\b(merge|merged|squash)\b", re.I),
@@ -92,7 +95,24 @@ def check(evt: Event):
             }
         notices.append(f"rails: rule table {m.group(1)} approved at {m.group(2)}.")
         cls = "approve-rules"
+    elif m := _ACCEPT.match(first):
+        with store.updating(repo.dir / "state.json", {}) as state:
+            state.setdefault("accepted_prs", {})[m.group(1)] = {
+                "at": now,
+                "by": "prompt",
+                "tree": m.group(2).lower(),
+            }
+        notices.append(
+            f"rails: recorded `accept #{m.group(1)} {m.group(2)}` - the agent's --accept on that "
+            "tree's review may arm that PR."
+        )
+        cls = "accept"
     else:
+        # A session started in the main folder acks the worktree it showed (p3i), while
+        # that intent is unacked - whether or not the main folder has an intent of its own.
+        bound = intent.bound(repo, str(evt.payload.get("session_id", "")))
+        if bound is not None and intent.get(bound).get("acked_hash") != intent.current_hash(bound.top):
+            repo = bound
         h = intent.current_hash(repo.top)
         st = intent.get(repo)
         if (

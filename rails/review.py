@@ -174,8 +174,30 @@ def latest_for_tree(repo: store.RepoId, tree_sha: str) -> dict | None:
     return rows[-1] if rows else None
 
 
-def arming_problem(row: dict | None) -> str | None:
-    """Why a reviewed tree may not arm, or None. Open must-fixes block unless accepted with a reason."""
+def operator_accepted(
+    repo: store.RepoId, pr: int | str | None, since: int = 0, tree: str = ""
+) -> bool:
+    """True when the operator's own prompt said `accept #<pr> <tree>` at or after ``since``,
+    naming the reviewed tree (its first 7+ hex characters, as the PR body prints it)."""
+    import time as _time
+
+    if pr is None or repo is None:
+        return False
+    state = store.read_json(repo.dir / "state.json", {}) or {}
+    entry = (state.get("accepted_prs") or {}).get(str(pr).lstrip("#"))
+    if not isinstance(entry, dict):
+        return False
+    at = int(entry.get("at", 0))
+    named = str(entry.get("tree", ""))
+    return since <= at <= int(_time.time()) + 60 and bool(named) and tree.startswith(named)
+
+
+def arming_problem(
+    row: dict | None, repo: store.RepoId | None = None, pr: int | str | None = None
+) -> str | None:
+    """Why a reviewed tree may not arm, or None. Open must-fixes block unless accepted with a
+    reason; an `--accept` the agent recorded arms only once the operator's prompt names the
+    PR (`accept #<pr>`, after the receipt): the agent cannot waive its own reviewers (p3b)."""
     if row is None:
         return (
             "no review receipt for HEAD's tree. Run the rails:reviewer-coop and rails:reviewer-adversary agents "
@@ -186,6 +208,15 @@ def arming_problem(row: dict | None) -> str | None:
         return (
             f"the review of HEAD's tree has {open_count} open must-fix item(s). Fix them, commit, re-review; "
             "or, if a finding is wrong, record why: `rails review record ... --accept \"<reason>\"`."
+        )
+    tree_sha = str(row.get("tree", ""))
+    if open_count and row.get("via_agent") and not operator_accepted(
+        repo, pr, int(row.get("ts", 0)), tree_sha
+    ):
+        return (
+            f"an agent recorded --accept for {open_count} open must-fix item(s); it arms only after the "
+            f"operator's own prompt names the PR and the reviewed tree: "
+            f"`accept #{str(pr).lstrip('#') if pr else '<n>'} {tree_sha[:12]}`."
         )
     return None
 
