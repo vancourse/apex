@@ -32,10 +32,10 @@ from rails.gitutil import GitError, branch, dirty_tracked, gh, gh_api, head, ori
 
 
 def _intent_title_body(top: Path) -> tuple[str, str]:
-    path = top / ".rails" / "intent.md"
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    from rails.intent import read_any
+
+    text = (read_any(top / ".rails" / "intent.md") or "").strip()
+    if not text:
         return "", ""
     lines = text.splitlines()
     title = ""
@@ -85,13 +85,23 @@ def _import_acceptance(repo: store.RepoId, top: Path, number: str, out) -> None:
     )
 
 
-def is_prose(path: str) -> bool:
-    """Prose a reviewer need not read: docs/** and top-level Markdown (README, CHANGELOG).
+_CODE_SUFFIXES = (".py", ".ps1", ".sh", ".cmd", ".bat", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".toml", ".yml", ".yaml")
 
-    Markdown anywhere else is behaviour here - agents/*.md and skills/*/SKILL.md are prompts
-    that run, templates/*.md are the shapes every artifact takes (review of 1.3.0).
+
+def is_prose(path: str) -> bool:
+    """Prose a reviewer need not read: docs/ that is not code, and README / CHANGELOG / LICENSE.
+
+    Everything else is behaviour: agents/*.md and skills/*/SKILL.md are prompts that run,
+    CLAUDE.md / AGENTS.md (at any depth) are the instructions every session obeys,
+    templates/*.md are the shapes every artifact takes, and a script under docs/ is code
+    (review of 1.3.0).
     """
-    return path.startswith("docs/") or (path.endswith(".md") and "/" not in path)
+    name = path.rsplit("/", 1)[-1].upper()
+    if name in ("CLAUDE.MD", "AGENTS.MD"):
+        return False
+    if path.startswith("docs/"):
+        return not path.endswith(_CODE_SUFFIXES)
+    return "/" not in path and name.startswith(("README", "CHANGELOG", "LICENSE"))
 
 
 def needs_review(top: Path, base_ref: str | None) -> bool:
@@ -295,10 +305,19 @@ def ship(
     if number is None:
         print("rails ship: could not determine the PR number", file=out)
         return 1
+    elif existing:
+        # A re-ship (after `rails review record --accept`, or new commits) refreshes the body,
+        # so the review line the operator judges by is the current one (review of 1.3.0).
+        slug = origin_slug(top)
+        try:
+            if slug:
+                gh_api(top, f"repos/{slug}/pulls/{number}", method="PATCH", payload={"body": full_body})
+        except GitError as exc:
+            print(f"  could not refresh the PR body: {exc}", file=out)
     armed = False
     if arm and not _review_allows_arming(repo, top, out, base):
         arm = False
-        print("  not arming: no review receipt for this tree (see above); arm after `rails review record`", file=out)
+        print("  not arming (the reason is above); `rails ship` again arms it once the review allows", file=out)
     if arm:
         done = subprocess.run(
             ["gh", "pr", "merge", str(number), "--auto", "--squash"],

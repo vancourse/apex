@@ -40,24 +40,35 @@ def intent_file(top: Path) -> Path:
     return top / ".rails" / "intent.md"
 
 
+def read_any(path: Path) -> str | None:
+    """A text file in whatever encoding a shell wrote it; None when it cannot be read. Never raises.
+
+    PowerShell 5.1's `>` writes UTF-16 and `Set-Content -Encoding UTF8` a BOM; the intent and
+    the reviewers' reports are written by hand on this box. One decoder for every reader
+    (`current_hash`, `rails ship`'s title, `rails review record`) so they cannot disagree.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    return data.decode("utf-8-sig", errors="replace")
+
+
 def current_hash(top: Path) -> str | None:
     """The intent's marker hash, from its text in whatever encoding a shell wrote it.
 
     PowerShell 5.1's `>` writes UTF-16 and `Set-Content` cp1252; reading those as UTF-8
     raised, the pre-push hook's crash handler turned that into "NOT CHECKED, chaining on",
     and the push went through with no marker or leak check (review of 1.3.0). Never raise.
+    Line endings are normalised: the same intent saved by an editor (CRLF) and by a tool
+    (LF) is the same intent, with the same hash.
     """
-    try:
-        data = intent_file(top).read_bytes()
-    except OSError:
+    text = read_any(intent_file(top))
+    if text is None or not text.strip():
         return None
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        text = data.decode("utf-16", errors="replace")
-    else:
-        text = data.decode("utf-8-sig", errors="replace")
-    if not text.strip():
-        return None
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:8]
+    return hashlib.sha256(text.replace("\r\n", "\n").strip().encode("utf-8")).hexdigest()[:8]
 
 
 def marker(h: str) -> str:

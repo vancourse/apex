@@ -189,13 +189,26 @@ def cmd_retire_hook(argv: list[str]) -> int:
 _OPERATOR_WORDS = ("used", "approve", "release")
 
 
+def _interactive() -> bool:
+    """The operator's own terminal: stdin is a TTY. An agent's tool call has none.
+
+    `CLAUDECODE` alone is not enough - the agent's own command can clear it
+    (`Remove-Item Env:CLAUDE*`, `unset ${!CLAUDE@}`, a script) - so the operator's words
+    also need a terminal the agent does not have (review of 1.3.0).
+    """
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def cmd_words(word: str, argv: list[str]) -> int:
     from rails.gitutil import in_agent
 
-    if word in _OPERATOR_WORDS and in_agent():
+    if word in _OPERATOR_WORDS and (in_agent() or not _interactive()):
         print(
             f"rails {word} is the operator's word: they type `{word} ...` in a prompt or run it in their own "
-            "shell. An agent recording it would forge the receipt it exists to be."
+            "terminal. An agent recording it would forge the receipt it exists to be."
         )
         return 2
     repo = _repo_or_die()
@@ -210,11 +223,12 @@ def cmd_words(word: str, argv: list[str]) -> int:
         elif word == "release":
             state["hold"] = {"on": False, "since": "", "lifted": now}
         elif word == "used":
-            if not argv:
-                print("rails used <#milestone> <task>")
+            # `#75` is a comment in both shells, so the number is typed bare here.
+            if not argv or not argv[0].lstrip("#").isdigit():
+                print("rails used <milestone number> <task>   e.g. rails used 75 filed a real claim")
                 return 2
             state.setdefault("used", []).append(
-                {"milestone": argv[0], "task": " ".join(argv[1:])[:200], "at": now}
+                {"milestone": "#" + argv[0].lstrip("#"), "task": " ".join(argv[1:])[:200], "at": now, "by": "shell"}
             )
         elif word == "approve":
             if len(argv) != 2:

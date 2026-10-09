@@ -41,7 +41,7 @@ def close(cwd: Path, number: str) -> tuple[int, str]:
     if not used:
         return 1, (
             f"rails close: milestone {n} has no `used` record. Done is the operator using it for a real "
-            f"task: they say `used #{n} <task>` (or run `rails used #{n} <task>` in their shell)."
+            f"task: they say `used #{n} <task>` in a prompt (or run `rails used {n} <task>` in their own terminal)."
         )
     try:
         ms = gh_api(repo.top, f"repos/{slug}/milestones/{n}")

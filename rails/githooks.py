@@ -168,6 +168,8 @@ def pre_push(
                     f"rails: refused - no {'full' if full else 'quick'} check marker for {sha[:12]} ({branch}).\n"
                     f"  run `{need}` on this commit, then push again (it never blocks a commit).",
                 )
+            if full:
+                review_refusal(repo, sha, refusal)
     if sending:
         from rails.check import find_lanes_file
         from rails import lanes as lanes_mod
@@ -182,6 +184,32 @@ def pre_push(
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
     return (1 if refuse else 0), messages
+
+
+def review_refusal(repo: store.RepoId, sha: str, refusal) -> None:
+    """`ship_review` at push: a commit pushed to an open PR carries a review of its own tree.
+
+    `rails ship` checks the receipt once, when it arms; GitHub's auto-merge then merges
+    whatever the branch holds. A fix pushed after CI feedback to an armed PR merged a tree
+    nobody reviewed (review of 1.3.0). So a push to a branch with an open PR - which may be
+    armed - needs the pushed tree's review, the same check arming makes. Fails closed.
+    """
+    from rails import review, ship
+    from rails.gitutil import tree
+
+    try:
+        if not ship.needs_review(repo.top, None):
+            return
+        problem = review.arming_problem(review.latest_for_tree(repo, tree(repo.top, sha)))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        refusal("ship_review", f"rails: refused - the review receipt could not be checked ({type(exc).__name__})")
+        return
+    if problem:
+        refusal(
+            "ship_review",
+            f"rails: refused - {sha[:12]} goes to an open PR that may be armed, and {problem}\n"
+            "  run the two reviewers on this commit and `rails review record`, then push.",
+        )
 
 
 def intent_refusal(repo: store.RepoId, refusal) -> None:

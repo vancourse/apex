@@ -78,7 +78,7 @@ def check(evt: Event):
     elif m := _USED.match(first):
         with store.updating(repo.dir / "state.json", {}) as state:
             state.setdefault("used", []).append(
-                {"milestone": m.group(1), "task": m.group(2)[:200], "at": now}
+                {"milestone": m.group(1), "task": m.group(2)[:200], "at": now, "by": "prompt"}
             )
         notices.append(
             f"rails: recorded `used {m.group(1)}` - the operator used it for a real task."
@@ -104,7 +104,9 @@ def check(evt: Event):
             if now - int(st.get("shown_at", 0)) < 5:
                 pass  # <5 s after showing: a relay or an automation, not a read
             elif intent.classify(prompt) == "changes":
-                intent.update(repo, acked_hash="", acked_at=0, rewrite_requested=now)
+                # Void the shown state too: otherwise the operator's NEXT message ("how is it
+                # going?") acked the very intent they had just corrected (review of 1.3.0).
+                intent.update(repo, acked_hash="", acked_at=0, shown_at=0, rewrite_requested=now)
                 notices.append(
                     "rails: that message changes what is built. Rewrite .rails/intent.md before any edit, "
                     "and end the turn showing it with its new marker."

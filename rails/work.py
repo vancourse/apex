@@ -116,13 +116,14 @@ def open_items(data: dict[str, Any]) -> list[dict[str, Any]]:
 #: A Done-when / Acceptance / Demo / Steps heading - but not "Steps to reproduce", which is
 #: a defect's repro, not what the fix must show (review of 1.3.0).
 _ACCEPT_HEADING = re.compile(
-    r"^\s*(?:#+\s*|\*\*)\s*(?:done when|acceptance|demo|exit criteria|steps?(?!\s+to\s+reproduce))\b"
+    r"^\s*(?:#+\s*|\*\*)\s*(?:done when|acceptance(?:\s+criteria)?|demo|exit criteria|steps?(?!\s+to\s+reproduce))\b"
     r"(?:\*\*)?\s*:?\s*(?P<rest>.*)$",
     re.I,
 )
 _ANY_HEADING = re.compile(r"^\s*(?:#+\s+\S|\*\*[^*]+\*\*\s*:?\s*$)")
-_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[ \]\s+)?(.+)$")
-_TICKED = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]")
+#: A ticked box is still owed: the tick is the agent's own claim, and done is a receipt
+#: (review of 1.3.0 - ticking `- [x] step: a1` used to drop the item before the PR closed it).
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
 #: A step id is letters then a digit (a1, s2, b12): "next step: deploy" is prose, not an id.
 _STEP = re.compile(r"`?\bstep:\s*`?([A-Za-z]+\d[\w-]{0,13})`?")
 
@@ -132,18 +133,25 @@ def acceptance_lines(body: str) -> list[tuple[str, str]]:
 
     An acceptance line is a line under a Done-when / Acceptance / Demo / Steps heading (a
     bullet, or a plain line as an issue form renders its box), or any line anywhere that
-    names a `step: <id>`. Comments, code fences and already-ticked boxes are not owed.
+    names a `step: <id>`. Comments and code fences are not owed; a ticked box still is.
     """
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     in_section = False
     in_fence = False
+    in_comment = False
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("```"):
             in_fence = not in_fence
             continue
-        if in_fence or stripped.startswith("<!--") or _TICKED.match(line):
+        if in_comment:
+            in_comment = "-->" not in stripped
+            continue
+        if stripped.startswith("<!--"):
+            in_comment = "-->" not in stripped[4:]
+            continue
+        if in_fence:
             continue
         head = _ACCEPT_HEADING.match(line)
         if head:

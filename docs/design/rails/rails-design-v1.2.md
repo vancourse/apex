@@ -75,6 +75,46 @@ The rails are a Claude Code plugin (`rails`, the reworked apex), a starter kit, 
 >     these before-values is the operator's decision; proposed: a quarter lower by week 4, half by
 >     week 12.
 
+> **Amendment 2026-10-08: the loop enforces itself, and one pattern (rails 1.1.1 to 1.3.0).** Asked for
+> by the operator ("codify all the items we identified… isn't that what rails is supposed to have done
+> already"). An audit of this design against the code on 2026-10-08 read the 31 mechanisms of
+> section 5 as 6 built, 20 partial and 5 not built: the gates existed, but the loop's own steps
+> (intent, review, close on use) were advice, and jarvis still carried a second template set, its
+> own copies of seven plugin gates, and skills naming a plugin that no longer exists.
+>
+> - **1.1.1:** the main-folder sync stops checking sessions (with 5 active it never cleared) and
+>   instead waits while a hook script would be deleted, a gap exceeds 300 commits, or the folder is
+>   dirty or diverged.
+> - **1.2.0 / 1.2.1:** the snapshot keeps all-digit booking ids (it had kept 50 where Purser's check
+>   reads 667), reads several stores (`--store`, `--remember`), and reads an older copy that lacks a
+>   newer table.
+> - **1.3.0, the loop:** an agent's push needs an acked intent (`prepush_intent`); `rails work
+>   from-issue` turns Done-when lines into the work a PR owes; `rails review record` seals the two
+>   reviewer reports for HEAD's tree, and neither `rails ship` nor a hand `gh pr merge --auto` arms a
+>   code diff without it or with an open must-fix (`ship_review`, `arm_review`); `rails close` closes
+>   a milestone only after the operator's `used #<n>` and with no open issue (`milestone_close`
+>   refuses the raw API close). New denies: `test_filter`, `allow_edit`, `operator_bounds` (the agent
+>   marker and the store's names). `rails check` refuses deleting a hook script older worktrees run;
+>   `rails retire-hook` writes the dated placeholder. All new refusals shadow until 2026-10-15.
+> - **1.3.0, one template set:** `rails template` (intent, spec, adr, milestone, rulebook, PR). This
+>   removes jarvis's `docs/templates/` phase skeletons (prd, design, impl-plan, recon, adr,
+>   milestone) and the hook rules that routed to them; `component.md` and `app.md` stay as the
+>   dossier scaffolds. **Capability removed:** a per-phase skeleton for a PRD, an implementation plan
+>   and a recon note. The spec's five sections and the intent carry what those did; a recon is a
+>   `rails:recon` answer in the PR body.
+> - **jarvis, one pattern:** the `release` and `fix` skills are overlays on `rails:release` and
+>   `rails:fix` (routing table, walls, one PR per component, the Mechanisms table), not second loops;
+>   the jarvis registrations of seven hooks the plugin enforces (detached server, secret env, heredoc
+>   write, pipe mask, stash, secret file, merged-PR push) are removed, scripts kept for older
+>   worktrees. **Capability removed:** none; each refusal is the plugin's, enforcing, with no shadow.
+>   The jarvis PR template stays: `ci/pr_body_check.py` pins its Mechanisms rows and Risk note, and
+>   one PR template is R2.
+> - **Still R2, not built:** the oracle (R16), the mutation lane (R13), the model-in-the-loop check
+>   (R14), the concept catalogue (R17), the walls adoption into Purser (R5 to R12, R15), the
+>   disarm (R3), the coordinator (R30), the counters (R22), and one PR template. Known limits of
+>   what shipped: `milestone_close` cannot see a request built in a script file; `arm_review` judges
+>   the worktree it runs in, not the PR number it is given.
+
 ## 2. Principles
 
 1. **Only four things can refuse.** PreToolUse deny, Stop block, required check, git hook. 22 of 32 CLAUDE.md rules were prose-only; 37% of corrections repeated a written rule.
@@ -419,3 +459,6 @@ Keys: MF must_fix, SF should_fix, N note, BT backtest.
 5. Retired history refused at pre-push, the main folder kept on trunk, and section 11.1 measured by
    rule-based instruments before and since the cut (second amendment at the top, rails 1.1.0) →
    operator, 2026-10-06; the measurements are the evidence.
+6. The loop's own steps enforced (intent at push, review receipt at arming, close on `used`) and one
+   template set and one loop across the plugin and jarvis (third amendment at the top, rails 1.3.0) →
+   operator, 2026-10-08.

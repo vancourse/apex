@@ -29,7 +29,7 @@ class Finding:
     message: str
 
 
-_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".cmd", ".bat")
+_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".cmd", ".bat", ".js", ".mjs", ".cjs", ".ts")
 _UNTIL = re.compile(r"placeholder until (\d{4}-\d{2}-\d{2})")
 
 

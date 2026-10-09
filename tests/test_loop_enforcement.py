@@ -302,12 +302,30 @@ def test_test_filter_reads_the_command_word_not_the_text():
     assert test_filter.check(_evt("Bash", {"command": "cd x && pytest --deselect=tests/a.py::t"}))
 
 
+def test_test_filter_sees_addopts_set_earlier_and_pytest_after_runner_options():
+    ps = "$env:PYTEST_ADDOPTS='--deselect tests/test_x.py::test_y'; uv run pytest"
+    assert test_filter.check(_evt("PowerShell", {"command": ps}))
+    assert test_filter.check(_evt("Bash", {"command": "export PYTEST_ADDOPTS=\"-k 'not slow'\" && pytest"}))
+    assert test_filter.check(_evt("Bash", {"command": "uv run --directory apps/purser python -m pytest -k 'not flaky'"}))
+    assert test_filter.check(_evt("Bash", {"command": "docker compose exec -T api python -m pytest -k 'not slow'"}))
+    assert test_filter.check(_evt("Bash", {"command": "pytest -o addopts='--deselect tests/a.py::t'"}))
+    assert test_filter.check(_evt("Bash", {"command": "$env:PYTEST_ADDOPTS='-q'; uv run pytest"})) is None
+    # pytest as an argument of something that is not a runner is not a test run
+    assert test_filter.check(_evt("Bash", {"command": "echo pytest --deselect is refused now"})) is None
+
+
 def test_allow_edit_sees_a_shell_write_and_the_leak_config():
     assert allow_edit.check(_evt("Bash", {"command": "echo '[[allow]]' >> rails/leak_allow.toml"}, agent_id="s"))
     assert allow_edit.check(_evt("PowerShell", {"command": "Set-Content rails/leak.toml ''"}, agent_id="s"))
     assert allow_edit.check(_evt("Edit", {"file_path": "C:/r/rails/leak.toml", "old_string": "a", "new_string": "b"}, agent_id="s"))
     assert allow_edit.check(_evt("Bash", {"command": "cat rails/leak_allow.toml"}, agent_id="s")) is None
     assert allow_edit.check(_evt("Bash", {"command": "echo x >> rails/leak_allow.toml"})) is None  # the session itself
+    one_liner = "python -c \"open('rails/leak.toml','w').write('[guard]\\nnames = []\\n')\""
+    assert allow_edit.check(_evt("Bash", {"command": one_liner}, agent_id="s"))
+    assert allow_edit.check(_evt("Bash", {"command": "perl -pi -e 's/a/b/' rails/x_allow.toml"}, agent_id="s"))
+    assert allow_edit.check(_evt("Bash", {"command": "cat rails/leak.toml 2>/dev/null"}, agent_id="s")) is None
+    reads = "python -c \"print(open('rails/leak.toml').read())\""
+    assert allow_edit.check(_evt("Bash", {"command": reads}, agent_id="s")) is None
 
 
 def test_milestone_close_sees_a_variable_number_and_an_input_file(tmp_path):
@@ -322,6 +340,24 @@ def test_milestone_close_sees_a_variable_number_and_an_input_file(tmp_path):
     assert milestone_close.check(_evt("Bash", {"command": "gh api repos/a/b/milestones/7 -X PATCH --input desc.json"}, cwd=cwd)) is None
 
 
+def test_milestone_close_sees_quoted_variables_stdin_and_the_post_alias(tmp_path):
+    cwd = str(tmp_path)
+    for command in (
+        'gh api repos/a/b/milestones/"$N" -X PATCH -f state=closed',
+        'gh api "repos/a/b/milestones/$($m.number)" -X PATCH -f state=closed',
+        "gh api repos/a/b/milestones/75 -f state=closed",  # gh sends POST; GitHub takes it as PATCH
+        "gh api repos/a/b/milestones/75 -X PATCH --input -",  # a body from nowhere it can read
+    ):
+        assert milestone_close.check(_evt("Bash", {"command": command}, cwd=cwd)), command
+    (tmp_path / "body.json").write_text('{"state": "closed"}', encoding="utf-8")
+    piped = "Get-Content body.json | gh api repos/a/b/milestones/75 -X PATCH --input -"
+    assert milestone_close.check(_evt("PowerShell", {"command": piped}, cwd=cwd))
+    (tmp_path / "desc.json").write_text('{"description": "x"}', encoding="utf-8")
+    fine = "cat desc.json | gh api repos/a/b/milestones/75 -X PATCH --input -"
+    assert milestone_close.check(_evt("Bash", {"command": fine}, cwd=cwd)) is None
+    assert milestone_close.check(_evt("Bash", {"command": "gh api 'repos/a/b/milestones?state=closed'"}, cwd=cwd)) is None
+
+
 def test_operator_bounds_refuses_naming_the_store(repo):
     """The household store by name: in a command, and in a file an agent would then run."""
     (repo / "rails").mkdir()
@@ -329,26 +365,62 @@ def test_operator_bounds_refuses_naming_the_store(repo):
     cwd = str(repo)
     assert operator_bounds.check(_evt("Bash", {"command": "docker exec house-db-1 psql -d house_db -c 'select 1'"}, cwd=cwd))
     assert operator_bounds.check(_evt("Bash", {"command": "docker exec other-db-1 psql -c 'select 1'"}, cwd=cwd)) is None
-    assert operator_bounds.check(_evt("Bash", {"command": "rails snapshot --store docker://house-db-1/u/house_db"}, cwd=cwd)) is None
-    # `rails` exempts only its own statement, not a chained one
+    # no `rails` exemption: snapshot is the operator's (their shell is never seen here), and
+    # `rails receipt -- <cmd>` runs whatever follows it
+    assert operator_bounds.check(_evt("Bash", {"command": "rails snapshot --store docker://house-db-1/u/house_db"}, cwd=cwd))
+    assert operator_bounds.check(_evt("Bash", {"command": "rails receipt -- docker exec house-db-1 psql -c 'select 1'"}, cwd=cwd))
     assert operator_bounds.check(_evt("Bash", {"command": "rails check; docker exec house-db-1 psql"}, cwd=cwd))
     assert operator_bounds.check(_evt("Write", {"file_path": f"{cwd}/q.sh", "content": "psql -d house_db"}, cwd=cwd))
     assert operator_bounds.check(_evt("Write", {"file_path": f"{cwd}/q.sh", "content": "psql -d planted"}, cwd=cwd)) is None
     assert store_guard.check(_evt("Bash", {"command": "docker exec house-db-1 psql"}, cwd=cwd)) is None  # one owner
 
 
-def test_operator_bounds_refuses_touching_the_agent_marker():
-    for command in ("CLAUDECODE=0 rails used #75 x", "env -u CLAUDECODE git push", "$env:CLAUDECODE=''; rails release"):
+def test_operator_bounds_refuses_touching_the_agent_marker(tmp_path):
+    for command in (
+        "CLAUDECODE=0 rails used #75 x",
+        "env -u CLAUDECODE git push",
+        "$env:CLAUDECODE=''; rails release",
+        "Remove-Item Env:CLAUDE*; rails used 75 walked",
+        "unset ${!CLAUDE@}; git push",
+        "env -i PATH=/usr/bin rails release",
+        "for v in ${!CLAUDE@}; do export $v=; done; rails release",
+    ):
         assert operator_bounds.check(_evt("Bash", {"command": command})), command
+    # a script written to run next
+    script = {"file_path": f"{tmp_path}/u.sh", "content": "CLAUDECODE= rails used 75 'invited my spouse'\n"}
+    assert operator_bounds.check(_evt("Write", script))
+    # naming or reading it is not touching it; a test file's planted inputs are not a script
+    assert operator_bounds.check(_evt("Bash", {"command": "git grep -n CLAUDECODE rails/"})) is None
     assert operator_bounds.check(_evt("Bash", {"command": "rails check"})) is None
+    reads = {"file_path": f"{tmp_path}/g.py", "content": 'return os.environ.get("CLAUDECODE") == "1"\n'}
+    assert operator_bounds.check(_evt("Write", reads)) is None
+    planted = {"file_path": f"{tmp_path}/tests/test_x.py", "content": '"CLAUDECODE=0 rails used #75 x"\n'}
+    assert operator_bounds.check(_evt("Write", planted)) is None
 
 
-def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, tmp_path, monkeypatch):
+def test_the_operators_words_need_the_operators_terminal(repo, monkeypatch, capsys):
+    """Clearing CLAUDECODE is not enough: `rails used|approve|release` also need a TTY."""
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    assert cli.cmd_words("used", ["75", "x"]) == 2  # CLAUDECODE unset, still no terminal
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    assert cli.cmd_words("used", ["walked", "it"]) == 2  # not a milestone number
+    assert cli.cmd_words("used", ["76", "filed", "a", "claim"]) == 0
+    rows = store.read_json(store.find_repo(repo).dir / "state.json")["used"]
+    assert rows[-1]["milestone"] == "#76" and rows[-1]["by"] == "shell"
+
+
+def _pushed(git, repo):
+    git(repo, "update-ref", "refs/remotes/origin/work", "HEAD")
+
+
+def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, git, tmp_path, monkeypatch):
     """The planted defect for `arm_review`: `gh pr merge --auto` skips what `rails ship` checks."""
     commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
     cwd = str(repo)
     arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=cwd)
-    assert arm_review.check(arm)
+    assert "review" in arm_review.check(arm).reason
     assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --squash"}, cwd=cwd)) is None  # not an arm
     monkeypatch.chdir(repo)
     open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "drops a blank date", "reproducer": "feed one"}]}\n' + "x" * 220
@@ -357,13 +429,111 @@ def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, tm
     review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
     assert "must-fix" in arm_review.check(arm).reason
     review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="the blank date is refused upstream, see #9")
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
     assert arm_review.check(arm) is None
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is True  # turn_end now holds the turn
+
+
+def test_arm_review_reads_words_and_judges_the_pushed_head(repo, commit, git, tmp_path):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    cwd = str(repo)
+    for command in (
+        "gh.exe pr merge 12 --auto --squash",
+        "gh -R acme/app pr merge 12 --squash --auto",
+        "gh pr merge 12 \\\n  --auto --squash",
+        "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"x\"}) { clientMutationId } }'",
+    ):
+        assert arm_review.check(_evt("Bash", {"command": command}, cwd=cwd)), command
+    (repo / "arm.graphql").write_text("mutation { enablePullRequestAutoMerge(input: {}) { clientMutationId } }", encoding="utf-8")
+    assert arm_review.check(_evt("Bash", {"command": "gh api graphql -F query=@arm.graphql"}, cwd=cwd))
+    # mentioning the command is not arming
+    assert arm_review.check(_evt("Bash", {"command": "git commit -m 'refuse gh pr merge --auto by hand'"}, cwd=cwd)) is None
+    assert arm_review.check(_evt("Bash", {"command": "rg -n enablePullRequestAutoMerge rails/"}, cwd=cwd)) is None
+    # a local commit not yet pushed: auto-merge would merge the remote head, not this one
+    commit(repo, "src/a.py", "x = 2\n")
+    assert "push" in arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto"}, cwd=cwd)).reason
 
 
 def test_must_fix_counts_the_reviewers_json_list():
     assert review.must_fix_count('{"must_fix": [{"a": 1}, {"b": 2}], "consider": [{"c": 3}]}') == 2
     assert review.must_fix_count('{"must_fix": []}') == 0
     assert review.must_fix_count("Must-fix: one\n- must fix: two\nwe must fix nothing else in prose") == 2
+
+
+def test_must_fix_never_counts_zero_by_accident(repo, commit, tmp_path, monkeypatch):
+    # a brace in the prose before the JSON object (`${N}`), and a Markdown heading section
+    braced = 'Steelman: reads `milestones/${N}`.\n{"reviewed_sha": "c", "must_fix": [{"file": "a"}], "questions": []}'
+    assert review.must_fix_count(braced) == 1
+    assert review.must_fix_count("## Must-fix\n- one\n- two\n## Consider\n- three\n") == 2
+    assert review.must_fix_count('{"must_fix": [ {"file": "a"} ') is None  # uncountable, not 0
+    monkeypatch.chdir(repo)
+    commit(repo, "src/a.py", "x = 1\n")
+    (tmp_path / "c.md").write_text("Steelman.\n" + '{"must_fix": [ broken ' + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text('{"must_fix": []}' + "y" * 220, encoding="utf-8")
+    code, text = review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    assert code == 2 and "does not parse" in text
+
+
+def test_review_refuses_a_dirty_working_copy(repo, commit, tmp_path, monkeypatch):
+    """The voices read the disk; the receipt names HEAD's tree. They must be the same."""
+    monkeypatch.chdir(repo)
+    commit(repo, "src/a.py", "x = 1\n")
+    (repo / "src" / "a.py").write_text("x = 2  # the fix, uncommitted\n", encoding="utf-8")
+    (tmp_path / "c.md").write_text("Steelman.\n" + '{"must_fix": []}' + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text('{"must_fix": []}' + "y" * 220, encoding="utf-8")
+    code, text = review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    assert code == 2 and "uncommitted" in text
+
+
+def test_a_push_to_an_open_pr_needs_a_review_of_the_pushed_tree(repo, commit, monkeypatch, tmp_path):
+    """Arming is checked once; auto-merge merges whatever is pushed later (review of 1.3.0)."""
+    _rows(monkeypatch, names=("prepush_hold", "prepush_marker", "prepush_retired", "prepush_leak", "ship_review"))
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: True)
+    rid = store.find_repo(repo)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    line = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push([], line, rid)
+    assert code == 1 and any("open PR" in m for m in msgs)
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    assert githooks.pre_push([], line, rid) == (0, [])
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: False)
+    sha2 = commit(repo, "src/a.py", "x = 2\n")
+    receipts.write_marker(rid, sha2, "t", ["checks"], quick=True)
+    line2 = [f"refs/heads/work {sha2} refs/heads/work {ZERO}"]
+    assert githooks.pre_push([], line2, rid) == (0, [])  # before a PR exists, no review is asked
+
+
+def test_a_ticked_box_is_still_owed_and_comments_are_not():
+    body = (
+        "## Acceptance criteria\n- [x] `step: a1` the invite opens on her phone\n- [ ] she sees only her items\n"
+        "<!--\n- a template hint inside a comment\n-->\n"
+    )
+    assert work.acceptance_lines(body) == [
+        ("`step: a1` the invite opens on her phone", "a1"),
+        ("she sees only her items", ""),
+    ]
+
+
+def test_check_does_not_post_after_red(hooked, git, monkeypatch):
+    base = git(hooked, "rev-parse", "origin/main")
+    git(hooked, "rm", "-q", ".claude/hooks/old_gate.py")
+    git(hooked, "commit", "-q", "-m", "retire the hook")
+    assert structural.run(hooked, base)
+    posted = []
+    monkeypatch.setattr(check_mod, "post", lambda cwd, out=None: posted.append(cwd))
+    out = io.StringIO()
+    assert check_mod.check(hooked, out=out, post_after=True) == 1
+    assert posted == [] and "not posting" in out.getvalue()
 
 
 def test_an_expired_placeholder_may_be_deleted(hooked, git, monkeypatch):
@@ -393,3 +563,38 @@ def test_markdown_that_runs_is_not_prose():
     assert not ship.is_prose("agents/reviewer-coop.md")
     assert not ship.is_prose("skills/rails/SKILL.md")
     assert not ship.is_prose("templates/spec.md")
+    assert not ship.is_prose("CLAUDE.md") and not ship.is_prose("apps/x/AGENTS.md")  # instructions that run
+    assert not ship.is_prose("docs/CLAUDE.md")
+    assert not ship.is_prose("docs/tools/render.py")  # code under docs/
+    assert ship.is_prose("docs/process/the-loop.html")
+
+
+def test_every_intent_reader_takes_what_powershell_writes(repo):
+    """UTF-16 (`>` in PS 5.1) and a UTF-8 BOM (`Set-Content -Encoding UTF8`) read the same."""
+    path = repo / ".rails" / "intent.md"
+    path.parent.mkdir()
+    text = "# Build the export — closed accounts too\n\nBody.\n"
+    path.write_text(text, encoding="utf-8")
+    plain = intent.current_hash(repo)
+    for encoding in ("utf-16", "utf-8-sig"):
+        path.write_bytes(text.encode(encoding))
+        assert intent.current_hash(repo) == plain, encoding
+        assert ship._intent_title_body(repo)[0] == "Build the export — closed accounts too", encoding
+
+
+def test_the_push_intent_check_fails_closed(repo, commit, monkeypatch):
+    _rows(monkeypatch)
+    rid = store.find_repo(repo)
+    sha = commit(repo, "a.txt", "plain\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=True)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    monkeypatch.setenv("CLAUDECODE", "1")
+
+    def boom(top):
+        raise RuntimeError("unreadable")
+
+    monkeypatch.setattr(intent, "current_hash", boom)
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 1 and any("could not be read" in m for m in msgs)

@@ -50,8 +50,39 @@ and verification goes through.
 - `milestone_close` sees a variable milestone number, `PATCH` inside a script one-liner, and a
   closed state in an `--input` file.
 - The pre-push intent check fails closed, and reads a UTF-16 or BOM-prefixed intent file.
-- Markdown that runs (agents/, skills/, templates/) needs review; only docs/ and top-level
-  Markdown are prose.
+- Markdown that runs (agents/, skills/, templates/, CLAUDE.md and AGENTS.md at any depth) needs
+  review; prose is docs/ that is not code, and README / CHANGELOG / LICENSE.
+
+### Fixed (second two-voice review, 10 + 12 must-fixes, 7 shared)
+- **A push to an open PR needs a review of the pushed tree.** Arming was checked once; auto-merge
+  then merged a later, unreviewed push. pre-push now checks the pushed tree's receipt when the
+  branch has an open PR (`ship_review`), and `arm_review` refuses to arm a HEAD the remote does not
+  hold.
+- **The must-fix count no longer fails open.** The reviewers' JSON is found wherever it sits (a
+  brace in the prose made it unparsable and the count 0); a report naming `must_fix` that does not
+  parse is refused; `## Must-fix` sections count their items. `rails review record` refuses a dirty
+  working copy (the voices read the disk; the receipt names HEAD's tree).
+- **The operator's words need the operator's terminal.** `rails used|approve|release` refuse
+  without a TTY as well as inside an agent, since an agent's own command could clear
+  `CLAUDECODE`. `operator_bounds` refuses setting, clearing or unsetting it (`env -i`,
+  `Remove-Item Env:CLAUDE*`, `${!CLAUDE@}`, `os.environ.pop`) in a command or a written script, and
+  has no `rails` exemption: `rails receipt -- <cmd>` named the store and ran. It is a lockout row.
+  `rails used` takes the number bare and records it as `#<n>`.
+- `arm_review` reads command words (`gh.exe`, `gh -R o/r pr merge`, a continued line, GraphQL in
+  an `@file`), so a commit message that mentions the command is not an arm; an allowed arm stamps
+  `pr.json` armed so `turn_end` holds the turn to the PR's steps.
+- A re-ship refreshes the open PR's body (the review line and any `--accept` reason).
+- A correction voids the shown intent: the next message no longer acks the intent just corrected.
+  The intent hash ignores line endings, and every reader shares one decoder.
+- A ticked `- [x]` Done-when box is still owed; "Acceptance criteria" is a heading; a multi-line
+  comment is skipped.
+- `test_filter`: `PYTEST_ADDOPTS` set by `$env:`/`export` in an earlier statement, pytest after
+  runner options (`uv run --directory d python -m pytest`, `docker compose exec`), `-o addopts`.
+  `allow_edit`: interpreter one-liners and `perl -i` write; `2>` does not. `milestone_close`: any
+  milestone path, `--input -` from a pipe (fail closed when the source is unreadable), and the POST
+  GitHub accepts for PATCH.
+- `rails check --post` does not post lane statuses after a RED check; hook-removal counts JS/TS
+  scripts.
 
 ## [1.2.1] — 2026-10-07
 

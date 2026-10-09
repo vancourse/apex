@@ -176,6 +176,11 @@ def test_next_human_message_acks_or_corrects(repo, tmp_path):
     )
     assert "Rewrite .rails/intent.md" in out.notices[0]
     assert intent.get(rid).get("acked_hash") == ""
+    # The corrected intent is no longer "shown": the next message cannot ack it (review of 1.3.0).
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt="how is it going?"), rows)
+    assert not out.notices and not intent.acked(rid, repo)
+    # Shown again (rewritten, or confirmed as is), the next message acks it.
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
     out = dispatch(_evt("UserPromptSubmit", repo, prompt="looks right"), rows)
     assert f"intent {h} acked by message" in out.notices[0]
     assert intent.acked(rid, repo)
@@ -549,6 +554,21 @@ def test_ship_no_arm_leaves_the_pr_unarmed(repo, git, commit, monkeypatch):
     assert ship.ship(repo, title="t", body="b", base="main", closes=[], arm=False, out=io.StringIO()) == 0
     assert calls["merge"] == []
     assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False
+
+
+def test_a_reship_refreshes_the_open_prs_body(repo, git, commit, monkeypatch):
+    """The review line (and an --accept reason) must reach the PR the operator reads."""
+    import io
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    monkeypatch.setattr(
+        ship, "gh", lambda top, *a, check=True, timeout=60: '{"number": 7, "state": "OPEN", "url": "u"}'
+    )
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body="the new body", base="main", closes=[], arm=False, out=out) == 0
+    patched = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls/7" and c[1] == "PATCH"]
+    assert len(patched) == 1 and "the new body" in patched[0][2]["body"]
+    assert not [c for c in calls["api"] if c[0] == "repos/acme/app/pulls"]  # reused, not created
 
 
 def test_ship_refuses_without_the_full_marker(repo, commit):

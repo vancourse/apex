@@ -25,8 +25,11 @@ One line of work = one claim, one worktree, one branch, one PR, many commits.
    consent ceremony; the operator's word is `hold`.
 7. **Review** a change to anything but prose: run the `rails:reviewer-coop` and `rails:reviewer-adversary`
    agents on the diff (each given only the diff and the intent), save each report, then
-   `rails review record --coop <file> --adversary <file>`. Fix every must-fix first; a new commit needs
-   a new review, because the receipt is for HEAD's tree.
+   `rails review record --coop <file> --adversary <file>` (on a clean, committed tree: the voices read the
+   disk). Fix every must-fix first; a new commit needs a new review, because the receipt is for HEAD's
+   tree. Once the PR is open, review a commit BEFORE pushing it: auto-merge merges whatever is pushed,
+   so pre-push refuses an unreviewed code tree to an open PR (`ship_review`). A must-fix you judge wrong
+   is recorded with `--accept "<why>"`; `rails ship` puts the reason in the PR body.
 8. **`rails ship --closes <n>`** opens one Ready PR from the intent (and imports #n's Done-when lines), arms auto-squash, and posts the
    `rails/<lane>` statuses CI verifies. Then bind the monitor and run `rails work monitor-bound`.
    After a later push: `rails check --post`.
@@ -42,8 +45,10 @@ status` (worktrees on rewritten-away history: never push from one, cherry-pick o
 Templates (one set, no other): `rails template` lists intent, spec, adr, milestone, rulebook and the PR
 template. A milestone closes with `rails close <n>`, which needs the operator's `used #<n>` and no open
 issue. Retiring a hook script: `rails retire-hook <path>` (a deleted one blocks older worktrees).
-The operator's own commands, never an agent's (they refuse inside one): `rails release|used|approve`,
-`rails snapshot`, `rails enable`. `rails hold` anyone may ask for.
+The operator's own commands, never an agent's (they refuse inside one, and the words need the
+operator's terminal): `rails release|used|approve`, `rails snapshot`, `rails enable`. In a shell it is
+`rails used 75 <task>` (the number bare: `#` starts a comment); in a prompt, `used #75 <task>`.
+`rails hold` anyone may ask for. An agent never sets or clears `CLAUDECODE` (`operator_bounds`).
 
 New app: `rails new <app>` gives a walking skeleton with contracts, settings, roots, clock, limits,
 concepts and the auth matrix already enforced; its first milestone's step 0 is the operator using it.

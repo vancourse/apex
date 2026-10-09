@@ -271,8 +271,10 @@ def check(
             "rails check: lanes green; no marker (a --lane run or a dirty tree certifies nothing)",
             file=out,
         )
-    if post_after:
+    if post_after and not failed:
         post(cwd, out=out)
+    elif post_after:
+        print("rails check: not posting statuses - the check is RED", file=out)
     return 1 if failed else 0
 
 

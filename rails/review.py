@@ -24,28 +24,57 @@ import re
 from pathlib import Path
 
 from rails import receipts, store
-from rails.gitutil import head, toplevel, tree
+from rails.intent import read_any
+from rails.gitutil import dirty_tracked, head, toplevel, tree
 
-_MUST_FIX = re.compile(r"(?im)^\s*(?:[-*]\s*|\d+[.)]\s*)?(?:\*\*)?must[- _]fix\b")
+_MUST_FIX = re.compile(r"(?i)^\s*(?:[-*]\s*|\d+[.)]\s*)?(?:\*\*)?must[- _]fix\b")
+_MUST_FIX_HEADING = re.compile(r"(?i)^\s*#{1,6}\s*(?:\*\*)?must[- _]fix")
+_HEADING = re.compile(r"^\s*#{1,6}\s")
+_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+_JSON_KEY = re.compile(r"[\"']must_fix[\"']\s*:")
 
 
 def _json_report(text: str) -> dict | None:
-    """The reviewers' own format (agents/reviewer-*.md): a JSON object with ``must_fix``."""
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start : end + 1])
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
+    """The reviewers' own format (agents/reviewer-*.md): a JSON object with ``must_fix``.
+
+    Found wherever it sits: the object is decoded from each ``{`` in turn, so a brace in
+    the prose around it (``${N}``) no longer makes the whole report unparsable, which used
+    to fall through to a count of 0 (review of 1.3.0).
+    """
+    decoder = json.JSONDecoder()
+    first = None
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            if isinstance(obj.get("must_fix"), list):
+                return obj
+            first = first if first is not None else obj
+    return first
 
 
-def must_fix_count(text: str) -> int:
+def must_fix_count(text: str) -> int | None:
+    """Open must-fix items in a report; None when it cannot be counted (never a silent 0).
+
+    The JSON report's ``must_fix`` list when one parses. A report that names a
+    ``must_fix`` key but whose JSON does not parse is uncountable. Otherwise Markdown: items
+    under a ``## Must-fix`` heading, and lines that start with "must-fix" elsewhere.
+    """
     data = _json_report(text)
     if data is not None and isinstance(data.get("must_fix"), list):
         return len(data["must_fix"])
-    return len(_MUST_FIX.findall(text))
+    if _JSON_KEY.search(text):
+        return None
+    count, in_section = 0, False
+    for line in text.splitlines():
+        if _HEADING.match(line):
+            in_section = bool(_MUST_FIX_HEADING.match(line))
+            continue
+        if (in_section and _ITEM.match(line)) or (not in_section and _MUST_FIX.match(line)):
+            count += 1
+    return count
 
 
 def reviewed_sha(text: str) -> str:
@@ -60,20 +89,31 @@ def record(cwd: Path, coop: Path, adversary: Path, accept: str = "") -> tuple[in
     top = toplevel(cwd)
     texts = {}
     for voice, path in (("coop", coop), ("adversary", adversary)):
-        try:
-            texts[voice] = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            return 2, f"rails review: cannot read the {voice} report {path}: {exc}"
+        text = read_any(path)
+        if text is None:
+            return 2, f"rails review: cannot read the {voice} report {path}"
+        texts[voice] = text
         if len(texts[voice].strip()) < 200:
             return 2, f"rails review: the {voice} report is under 200 characters - that is not a review"
     if texts["coop"].strip() == texts["adversary"].strip():
         return 2, "rails review: the two reports are identical - two voices, two reports"
+    if dirty_tracked(top):
+        return 2, (
+            "rails review: the working copy has uncommitted changes - the reviewers read the disk, the receipt "
+            "names HEAD's tree. Commit, re-run them, then record."
+        )
     sha, tree_sha = head(top), tree(top)
     for voice, text in texts.items():
         named = reviewed_sha(text).lower()
         if re.fullmatch(r"[0-9a-f]{7,40}", named) and not sha.startswith(named):
             return 2, f"rails review: the {voice} report reviewed {named[:12]}, not HEAD {sha[:12]} - re-run it on HEAD"
     counts = {voice: must_fix_count(text) for voice, text in texts.items()}
+    for voice, count in counts.items():
+        if count is None:
+            return 2, (
+                f"rails review: the {voice} report names a must_fix list but its JSON does not parse - "
+                "save the reviewer's JSON object as it returned it"
+            )
     receipts.write(
         repo,
         "review",

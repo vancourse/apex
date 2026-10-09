@@ -3,15 +3,19 @@
 Two refusals, both on an agent's own tool calls:
 
 * **The agent marker.** ``CLAUDECODE=1`` is how the plugin tells an agent's shell from the
-  operator's: `rails used|approve|release` and `rails snapshot` refuse inside an agent, and
-  the pre-push intent check asks only agents. Every one of those reads an environment
-  variable the agent's own command can change - ``CLAUDECODE=0 rails used 75 x``,
-  ``env -u CLAUDECODE git push``, ``$env:CLAUDECODE=''`` - so a command that names it is
-  refused, as ``RAILS_OPERATOR`` already was.
+  operator's: the pre-push intent check asks only agents, and `rails used|approve|release`
+  refuse inside one (they also need the operator's terminal, which an agent does not have).
+  A command - or a file an agent writes, to run next - that sets, clears or unsets the
+  marker is refused: ``CLAUDECODE=0 ...``, ``env -u CLAUDECODE``, ``env -i``,
+  ``unset ${!CLAUDE@}``, ``$env:CLAUDECODE=''``, ``Remove-Item Env:CLAUDE*``,
+  ``os.environ.pop('CLAUDECODE')``. Naming or reading it (``git grep CLAUDECODE``,
+  ``os.environ.get("CLAUDECODE")``) is not refused, and neither is a test file (``tests/``,
+  ``test_*``), where these spellings are the planted inputs.
 * **The household store by name.** leak.toml ``[guard] names`` lists the real store's
-  container and database. A command that names one, or a file an agent writes that names
-  one (a script it would then run), is refused: real values never enter an agent's context.
-  A statement whose command word is ``rails`` (the operator's `rails snapshot`) is not.
+  container and database. A command that names one, or a file an agent writes that names one
+  (a script it would then run), is refused: real values never enter an agent's context.
+  There is no exemption: the operator's `rails snapshot` runs in their own shell, which this
+  hook never sees, and `rails receipt -- <cmd>` runs whatever follows it.
 
 What it cannot see: a name assembled at run time, or a script written before this gate.
 Tamper-evident, not tamper-proof - the receipts say the same of themselves.
@@ -24,16 +28,21 @@ import tomllib
 
 from rails import store
 from rails.hookio import Deny, Event
-from rails.shell import segments, words
 
 NAME = "operator_bounds"
 
-_AGENT_MARKER = re.compile(r"\bCLAUDECODE\b")
+#: Setting, clearing or unsetting the marker, in bash, PowerShell, cmd or a script.
+_MARKER_TOUCH = re.compile(
+    r"\bCLAUDECODE\s*=(?!=)|"
+    r"(?:\bunset\b|\benv\s+-u\b|\b(?:Remove|Clear|Set)-Item\b|SetEnvironmentVariable|"
+    r"\$env:|\bEnv:|\bputenv\b|\bunsetenv\b|\bdelete\s+process\.env)[^\n;|&]*\bCLAUDE|"
+    r"\benviron\s*\.\s*(?:pop|clear|update)\b|\bdel\s+os\.environ\b|"
+    r"\benviron\s*\[\s*['\"]CLAUDE\w*['\"]\s*\]\s*=(?!=)|"
+    r"\$\{!CLAUDE|\benv\s+(?:-\w*i\b|--ignore-environment)|-UseNewEnvironment\b",
+    re.IGNORECASE,
+)
 _WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
-
-
-def _shell(evt: Event) -> str:
-    return "powershell" if evt.tool_name == "PowerShell" else "bash"
+_TEST_FILE = re.compile(r"(?:^|[/\\])(?:tests?[/\\]|test_[^/\\]*$|[^/\\]*_test\.py$)")
 
 
 def store_names(evt: Event) -> list[str]:
@@ -54,49 +63,42 @@ def _names_in(text: str, names: list[str]) -> str | None:
     return None
 
 
-def _is_rails_statement(segment: str, shell: str) -> bool:
-    try:
-        toks = [t for t in words(segment, shell) if "=" not in t.split("/")[0]]
-    except Exception:  # noqa: BLE001 - an unparsable statement is not exempt
-        return False
-    head = toks[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if toks else ""
-    return head in ("rails", "rails.cmd")
+def _written(evt: Event) -> str:
+    ti = evt.tool_input
+    parts = [str(ti.get(k, "")) for k in ("content", "new_string", "new_source")]
+    parts += [str(e.get("new_string", "")) for e in ti.get("edits", []) if isinstance(e, dict)]
+    return "\n".join(parts)
 
 
 def check(evt: Event):
     command = evt.command or ""
-    if command and _AGENT_MARKER.search(command):
-        return Deny(
-            "rails: CLAUDECODE is how the plugin tells an agent's shell from the operator's; an agent's command "
-            "never sets, clears or unsets it. The operator's words (`used`, `approve`, `release`) come from them."
-        )
-    names = store_names(evt) if (command or evt.tool_name in _WRITE_TOOLS) else []
+    written = _written(evt) if evt.tool_name in _WRITE_TOOLS else ""
+    target = str(evt.tool_input.get("file_path") or evt.tool_input.get("notebook_path") or "")
+    marker_texts = [(command, "command")]
+    if written and not _TEST_FILE.search(target):
+        marker_texts.append((written, "file"))
+    for text, where in marker_texts:
+        if text and _MARKER_TOUCH.search(text):
+            return Deny(
+                f"rails: this {where} sets, clears or unsets CLAUDECODE - how the plugin tells an agent's shell "
+                "from the operator's. An agent never changes it; the operator's words (`used`, `approve`, "
+                "`release`) come from them, in a prompt or their own terminal."
+            )
+    if not command and not written:
+        return None
+    names = store_names(evt)
     if not names:
         return None
-    if command:
-        shell = _shell(evt)
-        try:
-            parts = segments(command, shell) or [command]
-        except Exception:  # noqa: BLE001
-            parts = [command]
-        for part in parts:
-            if _is_rails_statement(part, shell):
-                continue
-            hit = _names_in(part, names)
-            if hit:
-                return Deny(
-                    f"rails: `{hit}` is the household store (leak.toml [guard] names). Port the question to the "
-                    "planted database, or ask the operator to run it; real values never enter an agent's context."
-                )
-    if evt.tool_name in _WRITE_TOOLS:
-        ti = evt.tool_input
-        written = "\n".join(
-            str(ti.get(k, "")) for k in ("content", "new_string", "new_source")
-        ) + "\n".join(str(e.get("new_string", "")) for e in ti.get("edits", []) if isinstance(e, dict))
-        hit = _names_in(written, names)
-        if hit:
-            return Deny(
-                f"rails: this writes `{hit}` (the household store, leak.toml [guard] names) into a file an agent "
-                "would then run or commit. Point it at the planted database instead."
-            )
+    hit = _names_in(command, names)
+    if hit:
+        return Deny(
+            f"rails: `{hit}` is the household store (leak.toml [guard] names). Port the question to the "
+            "planted database, or ask the operator to run it; real values never enter an agent's context."
+        )
+    hit = _names_in(written, names)
+    if hit:
+        return Deny(
+            f"rails: this writes `{hit}` (the household store, leak.toml [guard] names) into a file an agent "
+            "would then run or commit. Point it at the planted database instead."
+        )
     return None
