@@ -4,6 +4,19 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.3.1] — 2026-10-09
+
+### Fixed
+- **A timed-out lane killed only its launcher.** `rails check` ran each lane with
+  `subprocess.run(timeout=...)`, which on a timeout kills the direct child only. A lane's direct
+  child is a launcher (`uv run`, `pnpm`), so in jarvis's `suite` lane, pytest and its xdist workers
+  ran about 9 minutes past the 60-minute timeout (14 processes), alongside another session's suite.
+  A timeout now kills the lane's whole tree: `taskkill /T /F` on Windows. On POSIX the lane runs in
+  its own session and its process group is killed. The exit code (124) and the log line are
+  unchanged. Because the POSIX lane no longer shares the terminal's process group, Ctrl+C, SIGTERM
+  and SIGHUP sent to `rails check` while a lane runs now kill the lane's tree too. A signal that was
+  already ignored, as under `nohup`, stays ignored.
+
 ## [1.3.0] — 2026-10-08
 
 The loop enforces itself, and there is one template set. From the 2026-10-08 audit of the design

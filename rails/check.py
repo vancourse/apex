@@ -18,11 +18,14 @@ written only when every selected lane passed at this exact commit.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -97,6 +100,70 @@ def _resolve(argv: list[str]) -> list[str]:
     return [found, *argv[1:]] if found else argv
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the lane and everything it started, then reap it."""
+    if os.name == "nt":
+        # By full path: a bare name is looked up in the current directory first.
+        root = os.environ.get("SystemRoot", r"C:\Windows")
+        taskkill = os.path.join(root, "System32", "taskkill.exe")
+        try:
+            subprocess.run(
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    proc.kill()  # the direct child, if taskkill could not run; a no-op once it is gone
+    proc.wait()
+
+
+@contextlib.contextmanager
+def _hangup_exits():
+    """POSIX: the lane leads its own session, so a terminal hangup or a SIGTERM sent to
+    the caller's process group reaches rails alone. While the lane runs, either one
+    becomes an exit (128 + signal) that stops the lane first. A signal already ignored
+    (`nohup`) or handled stays as it was."""
+    if os.name != "posix" or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _exit(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(sig) == signal.SIG_DFL:
+            previous[sig] = signal.signal(sig, _exit)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _run_tree(argv: list[str], timeout: float, **popen) -> int:
+    """`subprocess.run(argv, timeout=...)`, except that stopping the lane stops its tree.
+
+    `subprocess.run` kills only the direct child on a timeout. A lane's direct child is
+    a launcher (`uv run`, `pnpm`), so pytest and its xdist workers kept running ~9 minutes
+    past a 60-minute timeout, beside another session's suite (2026-10-09). On POSIX the
+    lane leads its own session and its process group is killed; on Windows
+    `taskkill /T` kills the tree. A timeout, Ctrl+C or hangup all take this path."""
+    proc = subprocess.Popen(argv, start_new_session=os.name == "posix", **popen)
+    with _hangup_exits():
+        try:
+            return proc.wait(timeout=timeout)
+        except BaseException:
+            _kill_tree(proc)
+            raise
+
+
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -107,15 +174,14 @@ def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, floa
         log.write(f"$ {' '.join(lane.command)}\n")
         log.flush()
         try:
-            proc = subprocess.run(
+            code = _run_tree(
                 _resolve(lane.command),
+                lane.timeout_min * 60,
                 cwd=str(top),
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                timeout=lane.timeout_min * 60,
             )
-            code = proc.returncode
         except subprocess.TimeoutExpired:
             log.write(f"\nRAILS: lane timed out after {lane.timeout_min} min\n")
             code = 124
