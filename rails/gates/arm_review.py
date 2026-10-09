@@ -117,7 +117,7 @@ def check(evt: Event):
     try:
         arming = any(_arms(tokens, evt.cwd, command) for _, tokens in commands(command, shell))
     except Exception:  # noqa: BLE001 - an unparsable command is judged by text
-        arming = "--auto" in command and "merge" in command
+        arming = ("--auto" in command and "merge" in command) or "automerge" in command.lower()
     if not arming:
         return None
     repo = store.find_repo(evt.cwd)
@@ -133,10 +133,10 @@ def check(evt: Event):
             return Deny("rails: not arming auto-merge from a detached HEAD: check out the PR's branch first.")
         # The PR's head is origin/<branch>; a branch cut from origin/master tracks that as
         # @{u}, so either one holding HEAD counts as pushed.
-        remotes = {
-            git(repo.top, "rev-parse", "--verify", "-q", ref, check=False).strip()
-            for ref in (f"origin/{br}", "@{u}")
-        }
+        pr_head = git(repo.top, "rev-parse", "--verify", "-q", f"origin/{br}", check=False).strip()
+        # origin/<branch> is the PR's head when it exists; @{u} only stands in when it does not
+        # (a HEAD reset to origin/master must not count as the PR's head, review of 1.3.0)
+        remotes = {pr_head} if pr_head else {git(repo.top, "rev-parse", "--verify", "-q", "@{u}", check=False).strip()}
         if local not in remotes:
             return Deny(
                 "rails: not arming auto-merge: HEAD is not what the branch's remote holds, and auto-merge merges "

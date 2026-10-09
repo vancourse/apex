@@ -108,7 +108,8 @@ def check(evt: Event):
                 # Void the shown state too: otherwise the operator's NEXT message ("how is it
                 # going?") acked the very intent they had just corrected (review of 1.3.0).
                 intent.update(
-                    repo, acked_hash="", acked_at=0, shown_at=0, corrected_hash=h, rewrite_requested=now
+                    repo, acked_hash="", acked_at=0, shown_at=0, corrected_hash=h, blocked_hash="",
+                    rewrite_requested=now,
                 )
                 notices.append(
                     "rails: that message changes what is built. Rewrite .rails/intent.md before any edit, "

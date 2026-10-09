@@ -148,7 +148,9 @@ def mine(repo: store.RepoId) -> Claim | None:
 def used_milestones(repo: store.RepoId) -> set[str]:
     state = store.read_json(repo.dir / "state.json", {}) or {}
     return {
-        str(u.get("milestone")) for u in state.get("used", []) if isinstance(u, dict)
+        str(u.get("milestone"))
+        for u in state.get("used", [])
+        if isinstance(u, dict) and u.get("by") == "prompt"  # as `rails close` reads it (1.3.0)
     }
 
 
@@ -213,7 +215,11 @@ def add(
         # sessions on one issue is how a finished slice ends up behind a conflict (1.3.0).
         exclusive = {i for i in items if i.startswith("#") and i[1:].isdigit()}
         for leaf, other in entries.items():
-            if leaf == repo.leaf or not isinstance(other, dict) or (live is not None and leaf not in live):
+            # the main checkout's claims are advisory: every desktop session starts there and its
+            # key holds dozens of items, so it cannot fence an issue off from a worktree (1.3.0)
+            if leaf in (repo.leaf, repo.main.name) or not isinstance(other, dict) or (
+                live is not None and leaf not in live
+            ):
                 continue
             held = sorted(exclusive & set(other.get("items", [])))
             if held:

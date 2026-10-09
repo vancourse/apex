@@ -799,3 +799,136 @@ def test_a_corrected_intent_is_not_acked_even_if_marked_shown(repo):
 def test_a_python_test_file_may_plant_the_marker_code():
     planted = {"file_path": "C:/r/tests/test_bounds.py", "content": "os.environ.pop('CLAUDECODE')\n"}
     assert operator_bounds.check(_evt("Write", planted)) is None
+
+
+# --- verify-only round on 8d87dac ---------------------------------------------------------
+
+
+def test_a_shell_hold_does_not_relabel_the_operators_prompt_hold(repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    rid = store.find_repo(repo)
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["hold"] = {"on": True, "since": "now", "by": "prompt"}
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert cli.cmd_words("hold", []) == 0
+    monkeypatch.delenv("CLAUDECODE")
+    assert cli.cmd_words("release", []) == 2
+    assert store.read_json(rid.dir / "state.json")["hold"] == {"on": True, "since": "now", "by": "prompt"}
+
+
+def test_a_correction_lets_the_stop_hook_ask_for_the_rewrite(repo):
+    from rails.dispatch import dispatch
+    from rails.gates import intent_shown
+
+    (repo / ".rails").mkdir()
+    (repo / ".rails" / "intent.md").write_text("# build the export\n", encoding="utf-8")
+    rid = store.find_repo(repo)
+    h = intent.current_hash(repo)
+    import time as _t
+
+    intent.update(rid, hash=h, shown_at=int(_t.time()) - 60, blocked_hash=h)  # blocked once before
+    row = GateRow(name="prompt_words", module="prompt_words", events=["UserPromptSubmit"], mode="enforce")
+    evt = Event(name="UserPromptSubmit", payload={"hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+                                                  "session_id": "s", "prompt": "no, use xlsx instead"})
+    dispatch(evt, [row])
+    assert intent.get(rid).get("blocked_hash") == ""
+    out = intent_shown.check(Event(name="Stop", payload={"hook_event_name": "Stop", "cwd": str(repo),
+                                                          "session_id": "s", "transcript_path": ""}))
+    assert out is not None and "Rewrite" in out.reason
+
+
+def test_store_names_are_judged_across_a_command_that_reaches_a_database(repo):
+    (repo / "rails").mkdir()
+    (repo / "rails" / "leak.toml").write_text('[guard]\nnames = ["house-db-1", "house_db"]\n', encoding="utf-8")
+    cwd = str(repo)
+    assert operator_bounds.check(_evt("Bash", {"command": "export PGDATABASE=house_db; psql -c 'select 1'"}, cwd=cwd))
+    assert operator_bounds.check(_evt("PowerShell", {"command": "$c='house-db-1'; docker exec $c psql -c 'select 1'"}, cwd=cwd))
+    edit = {"file_path": f"{cwd}/q.sh", "old_string": "planted", "new_string": "house_db"}
+    assert operator_bounds.check(_evt("Edit", edit, cwd=cwd))  # a fragment swapped into a script
+    assert operator_bounds.check(_evt("PowerShell", {"command": "Get-ChildItem Env:CLAUDE* | Remove-Item; rails release"}))
+
+
+def test_milestone_close_attached_flags_and_a_variable_endpoint(tmp_path):
+    cwd = str(tmp_path)
+    for command in (
+        "U=repos/a/b/milestones/75; gh api $U -X PATCH -f state=closed",
+        "gh api repos/a/b/milestones/75 -XPATCH -fstate=closed",
+        "gh api repos/a/b/milestones/75 -fstate=closed",
+    ):
+        assert milestone_close.check(_evt("Bash", {"command": command}, cwd=cwd)), command
+
+
+def test_must_fix_ignores_nested_and_quoted_clean_objects():
+    nested = '{"must_fix": [{"file": "a", "x": {"must_fix": []}}]}'
+    assert review.must_fix_count(nested) == 1
+    after = '{"reviewed_sha": "d", "must_fix": [{"file": "a"}]}\nThe clean case is `{"must_fix": []}`.'
+    assert review.must_fix_count(after) == 1
+    detail = "## Must-fix\n### 1. ship.py drops it\n- reproducer: x\n- why: y\n### 2. cli.py\n"
+    assert review.must_fix_count(detail) == 2
+
+
+def test_allow_edit_does_not_read_a_mention_as_a_write():
+    assert allow_edit.check(_evt("Bash", {"command": "rg -n copy rails/leak.toml"}, agent_id="s")) is None
+    assert allow_edit.check(_evt("Bash", {"command": "git log -- rails/leak_allow.toml | head"}, agent_id="s")) is None
+    assert allow_edit.check(_evt("Bash", {"command": "cat a.toml | tee rails/leak_allow.toml"}, agent_id="s"))
+
+
+def test_claims_wip_counts_only_prompt_recorded_use(repo):
+    from rails import claims
+
+    rid = store.find_repo(repo)
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["used"] = [{"milestone": "#7", "by": "shell"}, {"milestone": "#8", "by": "prompt"}]
+    assert claims.used_milestones(rid) == {"#8"}
+
+
+def test_the_marker_set_behind_other_assignments_or_by_env(tmp_path):
+    for command in ("env CLAUDECODE=0 git push origin HEAD", "GIT_TRACE=0 CLAUDECODE= git push", "(CLAUDECODE= git push)"):
+        assert operator_bounds.check(_evt("Bash", {"command": command})), command
+    script = {"file_path": f"{tmp_path}/p.sh", "content": "env CLAUDECODE=0 git push\n"}
+    assert operator_bounds.check(_evt("Write", script))
+    assert operator_bounds.check(_evt("Bash", {"command": "env PYTHONUTF8=1 git push"})) is None
+
+
+def test_a_python_script_that_connects_and_names_the_store(repo):
+    (repo / "rails").mkdir()
+    (repo / "rails" / "leak.toml").write_text('[guard]\nnames = ["house-db-1", "house_db"]\n', encoding="utf-8")
+    cwd = str(repo)
+    probe = {"file_path": f"{cwd}/scratch/probe.py", "content": 'import psycopg\npsycopg.connect("host=127.0.0.1 dbname=house_db")\n'}
+    assert operator_bounds.check(_evt("Write", probe, cwd=cwd))
+    assert operator_bounds.check(_evt("Bash", {"command": "$env:PGDATABASE='house_db'; psql -h 127.0.0.1 -c 'select 1'"}, cwd=cwd))
+
+
+def test_milestone_close_sees_powershell_and_python_writes(tmp_path):
+    cwd = str(tmp_path)
+    for command in (
+        "Invoke-RestMethod -Method Patch -Uri https://api.github.com/repos/o/r/milestones/75 -Body '{\"state\":\"closed\"}'",
+        "irm -Method Post -Uri https://api.github.com/repos/o/r/milestones/75 -Body '{\"state\":\"closed\"}'",
+        "python -c \"import requests; requests.patch('https://api.github.com/repos/o/r/milestones/75', json={'state': 'closed'})\"",
+        "curl -XPATCH https://api.github.com/repos/o/r/milestones/75 -d'{\"state\":\"closed\"}'",
+    ):
+        assert milestone_close.check(_evt("PowerShell", {"command": command}, cwd=cwd)), command
+
+
+def test_arm_review_prefers_the_prs_branch_over_the_upstream(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)  # origin/work holds the reviewed-or-not code commit
+    git(repo, "remote", "add", "origin", "https://example.invalid/app.git")
+    git(repo, "branch", "--set-upstream-to=origin/main")
+    git(repo, "reset", "-q", "--hard", "origin/main")  # HEAD == @{u}, but not the PR's head
+    reason = arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto"}, cwd=str(repo))).reason
+    assert "push" in reason
+
+
+def test_a_main_checkout_claim_does_not_fence_an_issue_off(repo, git, tmp_path):
+    from rails import claims
+
+    rid = store.find_repo(repo)  # the main checkout
+    assert claims.add(rid, "work", ["#12"])[0]
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "wt", str(wt))
+    assert claims.add(store.find_repo(wt), "wt", ["#12"])[0]
+
+
+def test_a_nested_must_fix_list_is_not_the_report():
+    assert review.must_fix_count('{"must_fix": [], "notes": {"must_fix": [1, 2]}}') == 0

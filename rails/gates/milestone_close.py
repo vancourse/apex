@@ -33,8 +33,9 @@ _GET = re.compile(r"(?:-X|--method)[=\s]+['\"]?GET\b", re.IGNORECASE)
 #: curl's data flags). Without one, `gh api` and curl send GET - a `--jq` that mentions
 #: "closed" is a read (review of 1.3.0).
 _WRITES = re.compile(
-    r"(?:-X|--method|--request)[=\s]+['\"]?(?:PATCH|POST|PUT)\b|['\"](?:PATCH|POST|PUT)['\"]|"
-    r"\s(?:-f|-F|--field|--raw-field|--input|-d|--data(?:-raw|-binary|-urlencode)?|--json)(?=[\s=])",
+    r"(?:-X|--method|--request)[=\s]*['\"]?(?:PATCH|POST|PUT)\b|['\"](?:PATCH|POST|PUT)['\"]|"
+    r"\s(?:-f|-F|--field|--raw-field|--input|-d|--data(?:-raw|-binary|-urlencode)?|--json)(?=[\s=])|"
+    r"\s-[fFd]\S|-Method\s+['\"]?(?:Patch|Post|Put)\b|\s-Body\b|\.(?:patch|post|put)\s*\(|\b(?:json|data)\s*=",
     re.IGNORECASE,
 )
 _CLOSED = re.compile(r"state\W{0,6}closed\b", re.IGNORECASE)
@@ -82,8 +83,10 @@ def check(evt: Event):
     command = evt.command or ""
     if "milestones/" not in command:
         return None
+    named = _MILESTONE.search(command)
     for statement in _statements(evt, command):
-        m = _MILESTONE.search(statement)
+        # the endpoint may be a variable set in an earlier statement (`U=.../milestones/75; gh api $U`)
+        m = _MILESTONE.search(statement) or named
         if not m or _GET.search(statement) or not _WRITES.search(statement):
             continue
         # a pipe feeding `--input -` lives in the same statement, so the source is found

@@ -44,17 +44,23 @@ def _json_report(text: str) -> dict | None:
     to fall through to a count of 0 (review of 1.3.0).
     """
     decoder = json.JSONDecoder()
-    first, last = None, None
+    first, best, end = None, None, -1
     for m in re.finditer(r"\{", text):
+        if m.start() < end:
+            continue  # inside an object already read: a nested dict is not a report
         try:
-            obj, _ = decoder.raw_decode(text, m.start())
+            obj, end = decoder.raw_decode(text, m.start())
         except ValueError:
             continue
         if isinstance(obj, dict):
-            if isinstance(obj.get("must_fix"), list):
-                last = obj  # the reviewer's own object comes last; a quoted one comes before it
+            # the most must-fix items wins: a clean `{"must_fix": []}` quoted before or after
+            # the reviewer's own object never lowers the count (fail safe)
+            if isinstance(obj.get("must_fix"), list) and (
+                best is None or len(obj["must_fix"]) >= len(best["must_fix"])
+            ):
+                best = obj
             first = first if first is not None else obj
-    return last if last is not None else first
+    return best if best is not None else first
 
 
 def must_fix_count(text: str) -> int | None:
@@ -69,18 +75,19 @@ def must_fix_count(text: str) -> int | None:
         return len(data["must_fix"])
     if _JSON_KEY.search(text):
         return None
-    count, in_section, level = 0, False, 0
+    count, in_section, level, by_heading = 0, False, 0, False
     for line in text.splitlines():
         if _HEADING.match(line):
             depth = len(line.strip()) - len(line.strip().lstrip("#"))
             if in_section and depth > level:
                 count += 1  # "### 1. ship.py:308 ..." under "## Must-fix" is an item
+                by_heading = True  # its bullets are its detail, not more items
                 continue
-            in_section, level = bool(_MUST_FIX_HEADING.match(line)), depth
+            in_section, level, by_heading = bool(_MUST_FIX_HEADING.match(line)), depth, False
             continue
         if _NONE.search(line):
             continue
-        if (in_section and _ITEM.match(line)) or (not in_section and _MUST_FIX.match(line)):
+        if (in_section and not by_heading and _ITEM.match(line)) or (not in_section and _MUST_FIX.match(line)):
             count += 1
     return count
 
@@ -213,7 +220,7 @@ def main(argv: list[str]) -> int:
     if repo is None:
         print("rails review: not inside a git checkout")
         return 2
-    row = latest_for_tree(repo, tree(toplevel(Path.cwd())))
+    row = covering(repo, toplevel(Path.cwd()), "HEAD")
     if row is None:
         print("rails review: HEAD's tree has no review receipt. Run rails:reviewer-coop and "
               "rails:reviewer-adversary on the diff, then `rails review record --coop F --adversary F`.")

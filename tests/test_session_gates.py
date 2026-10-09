@@ -77,7 +77,9 @@ def test_wip_one_app_refuses_a_second_release_milestone(repo, tmp_path):
     ok, message = claims.add(rid, "work", ["Sherpa R2"], kind="release")
     assert not ok and "WIP is one app" in message
     assert claims.add(rid, "work", ["Sherpa R2"], kind="prep")[0]
-    store.write_json(rid.dir / "state.json", {"used": [{"milestone": "Purser R14"}]})
+    store.write_json(rid.dir / "state.json", {"used": [{"milestone": "Purser R14", "by": "shell"}]})
+    assert not claims.add(rid, "work", ["Sherpa R2"], kind="release")[0]  # a shell `used` lifts nothing
+    store.write_json(rid.dir / "state.json", {"used": [{"milestone": "Purser R14", "by": "prompt"}]})
     assert claims.add(rid, "work", ["Sherpa R2"], kind="release")[0]
 
 
@@ -589,21 +591,38 @@ def test_a_reship_keeps_the_first_ships_closes_line(repo, git, commit, monkeypat
     )
     assert ship.ship(repo, title="t", body="", base="main", closes=[], arm=False, out=io.StringIO()) == 0
     patched = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls/7" and c[1] == "PATCH"]
-    assert patched and "Closes #457" in patched[-1][2]["body"] and "b" in patched[-1][2]["body"]
+    body = patched[-1][2]["body"]
+    assert "Closes #457" in body and body.startswith("b\n") and body.count("Closes #457") == 1
+
+
+def test_a_merged_prs_lines_do_not_leak_into_the_next_pr(repo, git, commit, monkeypatch):
+    import io
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    assert ship.ship(repo, title="t", body="first", base="main", closes=["#457"], detected_by="review",
+                     arm=False, out=io.StringIO()) == 0
+    monkeypatch.setattr(
+        ship, "gh", lambda top, *a, check=True, timeout=60: '{"number": 7, "state": "MERGED", "url": "u"}'
+    )
+    assert ship.ship(repo, title="next", body="second", base="main", closes=[], arm=False, out=io.StringIO()) == 0
+    created = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls"]
+    assert "Closes #457" not in created[-1][2]["body"] and "Detected-by" not in created[-1][2]["body"]
 
 
 def test_claims_hold_an_issue_in_one_worktree_and_follow_a_branch_switch(repo, git, tmp_path):
-    rid = store.find_repo(repo)
-    assert claims.add(rid, "work", ["#12"])[0]
+    first_top = tmp_path / "first"
+    git(repo, "worktree", "add", "-q", "-b", "first", str(first_top))
+    rid = store.find_repo(first_top)  # a worktree, not the main checkout (whose claims are advisory)
+    assert claims.add(rid, "first", ["#12"])[0]
     other_top = tmp_path / "other"
     git(repo, "worktree", "add", "-q", "-b", "other", str(other_top))
     other = store.find_repo(other_top)
     ok, message = claims.add(other, "other", ["#12"])
     assert not ok and "already held by" in message
     assert claims.add(other, "other", ["#13"])[0]
-    assert claims.add(rid, "work2", ["#14"])[0]  # same worktree, new branch: the claim follows
+    assert claims.add(rid, "first2", ["#14"])[0]  # same worktree, new branch: the claim follows
     mine = claims.mine(rid)
-    assert mine.branch == "work2" and set(mine.items) == {"#12", "#14"}
+    assert mine.branch == "first2" and set(mine.items) == {"#12", "#14"}
 
 
 def test_ship_refuses_without_the_full_marker(repo, commit):
@@ -633,3 +652,19 @@ def test_ship_leak_check_follows_the_leak_gates_shadow(repo, git, commit, monkey
     out = io.StringIO()
     assert ship.ship(repo, title="t", body="b", base="main", closes=[], arm=False, out=out) == 1
     assert "could not look" in out.getvalue()
+
+
+def test_a_reship_reads_the_current_intent_not_the_first_ones(repo, git, commit, monkeypatch):
+    import io
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    (repo / ".rails").mkdir(exist_ok=True)
+    (repo / ".rails" / "intent.md").write_text("# Export\n\nBuilds: CSV.\n", encoding="utf-8")
+    assert ship.ship(repo, title="", body="", base="main", closes=[], arm=False, out=io.StringIO()) == 0
+    (repo / ".rails" / "intent.md").write_text("# Export\n\nBuilds: XLSX.\n", encoding="utf-8")
+    monkeypatch.setattr(
+        ship, "gh", lambda top, *a, check=True, timeout=60: '{"number": 7, "state": "OPEN", "url": "u"}'
+    )
+    assert ship.ship(repo, title="", body="", base="main", closes=[], arm=False, out=io.StringIO()) == 0
+    patched = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls/7" and c[1] == "PATCH"]
+    assert "XLSX" in patched[-1][2]["body"] and "CSV" not in patched[-1][2]["body"]

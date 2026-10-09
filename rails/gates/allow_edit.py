@@ -24,10 +24,13 @@ _ALLOWLIST = re.compile(
     r"(?:^|[/\\])(?:[\w.-]*(?:_allow|allowlist)[\w.-]*\.toml|leak\.toml)$", re.IGNORECASE
 )
 _IN_COMMAND = re.compile(r"[\w./\\-]*(?:_allow|allowlist)[\w.-]*\.toml|[\w./\\-]*leak\.toml", re.IGNORECASE)
+#: Write verbs count only as a statement's command word, so a read that mentions one
+#: (`rg -n copy rails/leak.toml`) is not a write (review of 1.3.0).
 _SHELL_WRITE = re.compile(
-    r"(?<![0-9&>])>>?(?![&>])|\btee\b|Set-Content|Add-Content|Out-File|\bsed\b[^\n;|&]*\s-\w*i|"
-    r"\bperl\b[^\n;|&]*\s-\w*i|\bmv\b|\bcp\b|Copy-Item|Move-Item|\bgit\s+(?:apply|rm|checkout)\b|"
-    r"\brm\b|Remove-Item|\bdel\b|\berase\b|\bri\b|\b(?:copy|cpi|move|mi|ren|rni)\b|New-Item\b[^\n;|&]*-Value",
+    r"(?<![0-9&>])>>?(?![&>])|\|\s*(?:tee|Out-File|Set-Content|Add-Content)\b|"
+    r"(?:^|[;&|(]\s*)(?:rm|mv|cp|del|erase|ri|copy|cpi|move|mi|ren|rni|tee|Set-Content|Add-Content|Out-File|"
+    r"Remove-Item|Copy-Item|Move-Item|New-Item|git\s+(?:apply|rm|checkout)|sed\s[^\n;|&]*-\w*i|"
+    r"perl\s[^\n;|&]*-\w*i)\b",
     re.IGNORECASE,
 )
 _INTERPRETER_WRITE = re.compile(

@@ -214,13 +214,22 @@ def ship(
             file=out,
         )
         return 1
-    # A re-ship of the same branch's open PR rewrites its body; what the first ship said
-    # (Closes lines, Detected-by, an explicit body) is carried, never dropped (review of 1.3.0).
+    # A re-ship of the same open PR rewrites its body; what the first ship said (Closes lines,
+    # Detected-by, an explicit --body-file body) is carried, never dropped - but only onto that
+    # PR: a merged one's lines must not leak into the next PR on a reused branch (1.3.0).
+    closes = [str(c).lstrip("#") for c in closes]
     prev = store.read_json(repo.leaf_dir / "pr.json", None)
-    if isinstance(prev, dict) and prev.get("state", "OPEN") == "OPEN" and prev.get("branch") == branch(top):
-        closes = list(dict.fromkeys([*(str(c) for c in prev.get("closes", [])), *closes]))
-        detected_by = detected_by or prev.get("detected_by")
-        body = body or str(prev.get("body", ""))
+    if isinstance(prev, dict) and prev.get("number") and prev.get("branch") == branch(top):
+        view = gh(top, "pr", "view", str(prev["number"]), "--json", "number,state", check=False).strip()
+        try:
+            info = json.loads(view) if view else {}
+        except ValueError:
+            info = {}
+        if info.get("state") == "OPEN" and info.get("number") == prev.get("number"):
+            closes = list(dict.fromkeys([*(str(c).lstrip("#") for c in prev.get("closes", [])), *closes]))
+            detected_by = detected_by or prev.get("detected_by")
+            body = body or str(prev.get("body", ""))
+    explicit_body = body  # the intent's text is re-read on every ship, never frozen into pr.json
     data = work.load(repo)
     unverified = [i["id"] for i in data["items"] if i.get("status") == "unverified"]
     if unverified and closes:
@@ -351,7 +360,7 @@ def ship(
             "at": int(time.time()),
             "closes": closes,
             "detected_by": detected_by,
-            "body": body,
+            "body": explicit_body,
         },
     )
     if len(closes) == 1:

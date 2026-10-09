@@ -210,6 +210,10 @@ def cmd_words(word: str, argv: list[str]) -> int:
     now = int(time.time())
     with store.updating(repo.dir / "state.json", {}) as state:
         if word == "hold":
+            current = state.get("hold") if isinstance(state.get("hold"), dict) else {}
+            if current.get("on") and current.get("by") == "prompt":
+                print("rails: hold already on (set in a prompt)")
+                return 0
             state["hold"] = {
                 "on": True,
                 "since": time.strftime("%Y-%m-%d %H:%M"),
@@ -233,7 +237,7 @@ def cmd_words(word: str, argv: list[str]) -> int:
             if len(argv) != 2:
                 print("rails approve <rulebook> <examples_hash>")
                 return 2
-            state.setdefault("approved", {})[argv[0]] = {"hash": argv[1], "at": now}
+            state.setdefault("approved", {})[argv[0]] = {"hash": argv[1], "at": now, "by": "shell"}
     print(f"rails: {word} recorded")
     return 0
 

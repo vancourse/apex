@@ -38,7 +38,10 @@ from rails.hookio import Deny, Event
 NAME = "operator_bounds"
 
 #: An assignment to a CLAUDE* variable at the start of a statement or a script line.
-_ASSIGN = re.compile(r"^\s*(?:export\s+|set\s+|setx\s+)?(?:\$env:)?CLAUDE\w*\s*=(?!=)", re.IGNORECASE)
+_ASSIGN = re.compile(
+    r"^[\s(]*(?:\w+=\S*\s+)*(?:export\s+|set\s+|setx\s+|env\s+(?:-\S+\s+|\w+=\S*\s+)*)?(?:\$env:)?CLAUDE\w*\s*=(?!=)",
+    re.IGNORECASE,
+)
 #: Code that changes the marker, wherever it appears: each spelling names CLAUDE itself, so
 #: `os.environ.update(env)` or a `Remove-Item` of a `.claude` path is not caught (review of 1.3.0).
 _ANYWHERE = re.compile(
@@ -89,8 +92,13 @@ def _statement_touches(segment: str, tokens: list[str]) -> bool:
     return False
 
 
+_PIPED_ENV_REMOVE = re.compile(
+    r"Env:\\?CLAUDE[^|;\n]*\|\s*(?:Remove-Item|Clear-Item|ri|rm|del|erase)\b", re.IGNORECASE
+)
+
+
 def _command_touches(command: str, shell: str | None) -> bool:
-    if _ANYWHERE.search(command):
+    if _ANYWHERE.search(command) or _PIPED_ENV_REMOVE.search(command):
         return True
     if shell is None:
         return False
@@ -159,21 +167,18 @@ def check(evt: Event):
     names = store_names(evt)
     if not names:
         return None
-    hit = None
-    if command:
-        try:
-            statements = [segment for segment, _ in commands(command, evt.shell)] if evt.shell else [command]
-        except Exception:  # noqa: BLE001
-            statements = [command]
-        for statement in statements:
-            if _DB_ACCESS.search(statement):
-                hit = hit or _names_in(statement, names)
+    # Any statement reaching a database makes the whole command judged: the name can sit in the
+    # statement before it (`export PGDATABASE=<name>; psql`, `$c='<name>'; docker exec $c`).
+    hit = _names_in(command, names) if command and _DB_ACCESS.search(command) else None
     if hit:
         return Deny(
             f"rails: `{hit}` is the household store (leak.toml [guard] names). Port the question to the "
             "planted database, or ask the operator to run it; real values never enter an agent's context."
         )
-    hit = _names_in(written, names) if _SHELL_SCRIPT.search(target) and _DB_ACCESS.search(written) else None
+    judged = _SHELL_SCRIPT.search(target) or (
+        _PY_SCRIPT.search(target) and not _TEST_FILE.search(target) and _DB_ACCESS.search(written)
+    )
+    hit = _names_in(written, names) if judged else None
     if hit:
         return Deny(
             f"rails: this writes `{hit}` (the household store, leak.toml [guard] names) into a file an agent "

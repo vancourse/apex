@@ -110,7 +110,7 @@ def open_pr(repo: store.RepoId, branch: str) -> bool:
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return True  # unknown is open, as below
     if done.returncode != 0:
         # "no pull requests found" is a clean no; any other failure is unknown, and unknown is
         # treated as open: the full marker and the review are asked (review of 1.3.0).

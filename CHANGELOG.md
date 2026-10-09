@@ -111,6 +111,21 @@ and verification goes through.
   cannot read; `test_filter` reads `Set-Item Env:` and `SetEnvironmentVariable`, and `timeout`,
   `coverage` and `python3.x` as runners; `allow_edit` counts deletes and PowerShell's copy aliases.
 
+### Fixed (verify-only round on the third round's fixes: 6 + 3 must-fixes)
+- A shell `hold` no longer relabels the operator's prompt hold (which a shell `release` could
+  then lift); the one-app WIP limit counts only prompt-recorded `used`.
+- A re-ship carries Closes / Detected-by / an explicit body only onto the same open PR (a merged
+  PR's lines leaked into the next one), and re-reads the intent instead of freezing it.
+- A correction clears the Stop hook's once-per-hash block, so it asks for the rewrite.
+- Store names are judged across a whole command once any statement reaches a database, in shell
+  scripts whatever else they hold, and in Python files that connect.
+- The marker set behind other assignments, by `env`, or piped `Env:CLAUDE* | Remove-Item`.
+- `milestone_close`: attached `-XPATCH`/`-fstate=`, an endpoint in a variable, PowerShell
+  `-Method Patch`/`-Body`, and `requests.patch(`.
+- `arm_review` takes `origin/<branch>` as the PR head when it exists; a main-checkout claim is
+  advisory (it no longer fences an issue off from worktrees); nested `must_fix` objects are not
+  reports, and a clean object quoted near the reviewer's never lowers the count.
+
 ## [1.2.1] — 2026-10-07
 
 ### Fixed
