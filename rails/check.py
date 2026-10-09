@@ -130,25 +130,29 @@ def _descendants(pid: int) -> list[int] | None:
     return found
 
 
-def _freeze_tree(pid: int) -> list[int] | None:
-    """POSIX: SIGSTOP `pid` and every process under it, parents first, walking again until
-    a walk finds nothing new: a stopped process cannot start another, so nothing is born
-    between the listing and the kill. None when the process table could not be read."""
-    frozen: list[int] = []
+def _freeze_tree(pid: int, frozen: list[int]) -> bool:
+    """POSIX: SIGSTOP `pid` and every process under it into `frozen`, parents first,
+    walking again until a walk finds nothing new: a stopped process cannot start
+    another, so nothing is born between the listing and the kill. `frozen` stays empty
+    when the process table could not be read. The caller owns the list, so what was
+    stopped is killed even when the walk is cut short. False when the last walk was
+    not a clean one (a later `ps` failed, or 20 walks kept finding more)."""
+    seen: set[int] = set()
     for _ in range(20):
         below = _descendants(pid)
         if below is None:
-            return frozen or None
-        new = [p for p in [pid, *below] if p not in frozen]
+            return False
+        new = [p for p in [pid, *below] if p not in seen]
         if not new:
-            break
+            return True
         for p in new:
+            seen.add(p)
             frozen.append(p)
             try:
                 os.kill(p, signal.SIGSTOP)
             except OSError:
                 pass
-    return frozen
+    return False
 
 
 def _kill_tree(proc: subprocess.Popen) -> str:
@@ -180,12 +184,15 @@ def _kill_tree(proc: subprocess.Popen) -> str:
         except (OSError, subprocess.TimeoutExpired) as exc:
             note = f"taskkill could not run ({exc}); stopped only the lane's own process"
     else:
-        tree = _freeze_tree(proc.pid)
-        if tree is None:
-            note = "could not read the process table (`ps`); stopped only the lane's own process"
-        else:
-            killed, missed = 0, []
-            for pid in tree:
+        frozen: list[int] = []
+        complete = False
+        killed, missed = 0, []
+        try:
+            complete = _freeze_tree(proc.pid, frozen)
+        finally:
+            # Whatever was stopped dies, even if Ctrl+C cut the walk short. Leaves
+            # first: a frozen parent's death would SIGCONT an orphaned stopped group.
+            for pid in reversed(frozen):
                 try:
                     os.kill(pid, signal.SIGKILL)
                     killed += 1
@@ -193,9 +200,14 @@ def _kill_tree(proc: subprocess.Popen) -> str:
                     pass  # it exited between the listing and the kill
                 except OSError as exc:
                     missed.append(f"{pid} ({exc.strerror})")
-            note = f"killed {killed} of the lane's {len(tree)} process(es)"
+        if not frozen:
+            note = "could not read the process table (`ps`); stopped only the lane's own process"
+        else:
+            note = f"killed {killed} of the lane's {len(frozen)} process(es)"
             if missed:
                 note += f"; could not kill {', '.join(missed)}"
+            if not complete:
+                note += "; the last walk of the process table failed, so the list may be short"
     try:
         proc.kill()  # a no-op once it is gone
     except OSError:

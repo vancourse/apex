@@ -235,10 +235,11 @@ def _planted_tree(tmp_path: Path, py: str, timeout_s: float):
 
     On POSIX the grandchild leads its own session (as Playwright starts a browser), so a
     process-group kill would miss it; Windows ignores the flag. The pid lands by rename,
-    so a reader never sees an empty file."""
+    so a reader never sees an empty file. The child's own pid goes to `child.pid` beside it."""
     pid_file = tmp_path / "grandchild.pid"
     child = (
         "import os, subprocess, sys, time; "
+        f"open({str(tmp_path / 'child.pid')!r}, 'w').write(str(os.getpid())); "
         "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
         "start_new_session=True); "
         f"open({str(pid_file)!r} + '.tmp', 'w').write(str(p.pid)); "
@@ -283,8 +284,9 @@ def test_a_tree_kill_that_fails_says_so_and_still_stops_the_lane(tmp_path, py, m
     else:
         monkeypatch.setattr(check, "_descendants", lambda pid: None)
         expected = "could not read the process table (`ps`); stopped only the lane's own process"
+    # A short sleep: with taskkill faked, a launcher's real python would outlive the lane.
     lane = lanes.Lane(
-        name="slow", command=[py, "-c", "import time; time.sleep(60)"], timeout_min=2 / 60
+        name="slow", command=[py, "-c", "import time; time.sleep(10)"], timeout_min=2 / 60
     )
     log_path = tmp_path / "slow.log"
     assert check.run_lane(lane, tmp_path, log_path)[0] == 124
@@ -319,6 +321,32 @@ def test_a_lane_still_forking_at_the_timeout_leaves_nothing_behind(tmp_path, py)
     finally:
         for pid in started:
             _reap(pid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX freezes the tree before the kill")
+def test_ctrl_c_during_the_freeze_leaves_nothing_stopped(tmp_path, py, monkeypatch):
+    """A stopped process ignores everything but SIGKILL and SIGCONT; an interrupted
+    freeze must not strand the lane frozen."""
+    real = check._descendants
+    walks: list[int] = []
+
+    def interrupted_second_walk(pid):
+        walks.append(pid)
+        if len(walks) == 2:
+            raise KeyboardInterrupt
+        return real(pid)
+
+    monkeypatch.setattr(check, "_descendants", interrupted_second_walk)
+    lane, pid_file = _planted_tree(tmp_path, py, timeout_s=3)
+    with pytest.raises(KeyboardInterrupt):
+        check.run_lane(lane, tmp_path, tmp_path / "slow.log")
+    assert len(walks) == 2 and pid_file.is_file()
+    pid = int(pid_file.read_text())
+    try:
+        assert _gone_within(pid, 3), f"grandchild {pid} left frozen by an interrupted kill"
+    finally:
+        _reap(pid)
+        _reap(int((tmp_path / "child.pid").read_text()))  # a frozen root is not reaped
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups")

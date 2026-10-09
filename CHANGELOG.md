@@ -13,7 +13,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   ran about 9 minutes past the 60-minute timeout (14 processes), alongside another session's suite.
   A timeout now kills the lane's whole tree, found by parent pid: `taskkill /T /F` on Windows. On
   POSIX a `ps` walk SIGSTOPs the tree, walking again until nothing new appears, then SIGKILLs it, so
-  nothing can start between the listing and the kill. The exit code (124) and the `lane timed out` line are
+  no process it stopped can start another before the kill. The exit code (124) and the `lane timed out` line are
   unchanged. A second log line says what was killed, or that taskkill or `ps` failed and only the
   lane's own process was stopped. The lane stays in rails's process group, so Ctrl+C, a hangup or a
   kill aimed at the group still reach it as before.
