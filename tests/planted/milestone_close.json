@@ -1,0 +1,14 @@
+{
+  "event": "PreToolUse",
+  "payload": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "planted-milestone-close",
+    "cwd": "C:/Users/dev/repos/app",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh api repos/acme/app/milestones/76 -X PATCH -f state=closed",
+      "description": "Close the milestone"
+    }
+  },
+  "expect": "deny"
+}

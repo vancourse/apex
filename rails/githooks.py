@@ -9,8 +9,11 @@ repo's own hooks (the hazard of a single-directory hooks setting).
 pre-push refuses, in order:
   * ``hold`` (the operator's word, set from a prompt or ``rails hold``);
   * a ref carrying history the repo rewrote away (``rails history retire``);
+  * no acked intent, for an agent's push (``prepush_intent``);
   * no check marker for the pushed commit: ``--quick`` while the branch has no
-    open PR, the full marker once one exists;
+    open PR, the full marker once one exists (a gh error reads as open);
+  * a code tree pushed to an open PR - which may be armed - with no review receipt
+    covering it, or one with open must-fix items (``ship_review``);
   * the leak check: a value matched (3) or no fresh snapshot (4). Fails closed.
 Every pushed ref is judged by its remote ref and sha, whatever the source was
 spelled as (``HEAD:x`` and a raw sha used to skip the marker and leak checks).
@@ -107,9 +110,11 @@ def open_pr(repo: store.RepoId, branch: str) -> bool:
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return True  # unknown is open, as below
     if done.returncode != 0:
-        return False
+        # "no pull requests found" is a clean no; any other failure is unknown, and unknown is
+        # treated as open: the full marker and the review are asked (review of 1.3.0).
+        return "no pull requests found" not in (done.stderr or "").lower()
     try:
         return json.loads(done.stdout).get("state") == "OPEN"
     except ValueError:
@@ -156,6 +161,8 @@ def pre_push(
         parts = line.split()
         if parts[2].startswith("refs/heads/"):
             pushes.append((parts[2].removeprefix("refs/heads/"), parts[1]))
+    if pushes and not is_operator:
+        intent_refusal(repo, refusal)
     if not is_operator:
         for branch, sha in pushes:
             full = open_pr(repo, branch)
@@ -166,6 +173,8 @@ def pre_push(
                     f"rails: refused - no {'full' if full else 'quick'} check marker for {sha[:12]} ({branch}).\n"
                     f"  run `{need}` on this commit, then push again (it never blocks a commit).",
                 )
+            if full:
+                review_refusal(repo, sha, refusal)
     if sending:
         from rails.check import find_lanes_file
         from rails import lanes as lanes_mod
@@ -180,6 +189,63 @@ def pre_push(
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
     return (1 if refuse else 0), messages
+
+
+def review_refusal(repo: store.RepoId, sha: str, refusal) -> None:
+    """`ship_review` at push: a commit pushed to an open PR carries a review of its own tree.
+
+    `rails ship` checks the receipt once, when it arms; GitHub's auto-merge then merges
+    whatever the branch holds. A fix pushed after CI feedback to an armed PR merged a tree
+    nobody reviewed (review of 1.3.0). So a push to a branch with an open PR - which may be
+    armed - needs the pushed tree's review, the same check arming makes. Fails closed.
+    """
+    from rails import review, ship
+
+    try:
+        if not ship.needs_review(repo.top, None, rev=sha):
+            return
+        problem = review.arming_problem(review.covering(repo, repo.top, sha))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        refusal("ship_review", f"rails: refused - the review receipt could not be checked ({type(exc).__name__})")
+        return
+    if problem:
+        refusal(
+            "ship_review",
+            f"rails: refused - {sha[:12]} goes to an open PR that may be armed, and {problem}\n"
+            "  run the two reviewers on this commit and `rails review record`, then push.",
+        )
+
+
+def intent_refusal(repo: store.RepoId, refusal) -> None:
+    """`prepush_intent`: an agent pushes only work whose intent the operator saw and acked (R24).
+
+    The intent is ``.rails/intent.md``; it is acked when the operator's next message after a
+    turn that SHOWED it (its ``intent:<hash>`` marker in the final message) did not change
+    what is built. A push from the operator's own shell is not an agent's and is not asked.
+    """
+    from rails import intent
+    from rails.gitutil import in_agent
+
+    if not in_agent():
+        return
+    try:
+        h = intent.current_hash(repo.top)
+        acked = intent.acked(repo, repo.top) if h else False
+    except Exception as exc:  # noqa: BLE001 - fail closed here, not open in main()
+        refusal("prepush_intent", f"rails: refused - the intent could not be read ({type(exc).__name__})")
+        return
+    if h is None:
+        refusal(
+            "prepush_intent",
+            "rails: refused - no intent for this work. Write .rails/intent.md (`rails template intent`), "
+            "end the turn SHOWING it with its intent:<hash> line, and push after the operator's next message.",
+        )
+    elif not acked:
+        refusal(
+            "prepush_intent",
+            f"rails: refused - intent {h} has not been acked. End the turn showing it (its line "
+            f"`{intent.marker(h)}` in your final message); the operator's next message acks it.",
+        )
 
 
 def retired_refusals(repo: store.RepoId, ref_lines: list[str], refusal) -> None:

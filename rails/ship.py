@@ -32,10 +32,10 @@ from rails.gitutil import GitError, branch, dirty_tracked, gh, gh_api, head, ori
 
 
 def _intent_title_body(top: Path) -> tuple[str, str]:
-    path = top / ".rails" / "intent.md"
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    from rails.intent import read_any
+
+    text = (read_any(top / ".rails" / "intent.md") or "").strip()
+    if not text:
         return "", ""
     lines = text.splitlines()
     title = ""
@@ -47,9 +47,99 @@ def _intent_title_body(top: Path) -> tuple[str, str]:
     return title, "\n".join(lines).strip()
 
 
+#: A claim that something is ABSENT from the code - the kind a grep can get wrong (design
+#: R29) - not every sentence with "no" or "only" in it. 1.0's word list flagged ordinary
+#: prose ("no code", "the only lane") on every PR it shipped, which trains the reader to
+#: skip the advisory.
 _ABSENCE = re.compile(
-    r"\b(no|never|missing|does not exist|nothing|only)\b", re.IGNORECASE
+    r"\b(?:does not exist|doesn'?t exist|is not (?:implemented|wired|called|used)|"
+    r"(?:no|zero) (?:\w+ ){0,2}(?:callers?|consumers?|importers?|references?|readers?|writers?|"
+    r"tests? (?:for|of|cover)|usages?|uses)\b|"
+    r"never (?:called|used|read|written|imported|reached|wired)|"
+    r"nothing (?:calls|reads|uses|writes|imports|references)|"
+    r"(?:is|are) (?:missing|absent) from)",
+    re.IGNORECASE,
 )
+
+
+def _import_acceptance(repo: store.RepoId, top: Path, number: str, out) -> None:
+    """`--closes N` turns N's acceptance lines into work items (design R28), once.
+
+    The turn-end gate then holds the PR to them: an armed PR may not close an item whose
+    step has no passing walk receipt. Best effort - an unreadable issue is said, not fatal.
+    """
+    ref = f"#{number.lstrip('#')}"
+    if any(i.get("closes") == ref and i.get("from_issue") for i in work.load(repo)["items"]):
+        return
+    try:
+        raw = gh(top, "issue", "view", ref.lstrip("#"), "--json", "body").strip()
+        body = json.loads(raw).get("body", "") if raw else ""
+    except (GitError, ValueError) as exc:
+        print(f"  work: could not read {ref} ({str(exc)[:80]}); its Done-when lines are NOT items", file=out)
+        return
+    added = work.add_from_issue(repo, ref, body) if body else []
+    print(
+        f"  work: {len(added)} acceptance line(s) from {ref} are now items"
+        + ("" if added else " (the issue has no Done-when section or `step:` lines)"),
+        file=out,
+    )
+
+
+_CODE_SUFFIXES = (".py", ".ps1", ".sh", ".cmd", ".bat", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".toml", ".yml", ".yaml")
+
+
+def is_prose(path: str) -> bool:
+    """Prose a reviewer need not read: docs/ that is not code, and README / CHANGELOG / LICENSE.
+
+    Everything else is behaviour: agents/*.md and skills/*/SKILL.md are prompts that run,
+    CLAUDE.md / AGENTS.md (at any depth) are the instructions every session obeys,
+    templates/*.md are the shapes every artifact takes, and a script under docs/ is code
+    (review of 1.3.0).
+    """
+    name = path.rsplit("/", 1)[-1].upper()
+    if name in ("CLAUDE.MD", "AGENTS.MD"):
+        return False
+    if path.startswith("docs/"):
+        return not path.endswith(_CODE_SUFFIXES)
+    return "/" not in path and name.startswith(("README", "CHANGELOG", "LICENSE"))
+
+
+def needs_review(top: Path, base_ref: str | None, rev: str = "HEAD") -> bool:
+    """A diff that changes anything but prose gets the two-voice review. ``rev`` is the commit
+    judged: HEAD for ship and arming, the pushed sha at pre-push (review of 1.3.0)."""
+    from rails.check import find_lanes_file
+    from rails import lanes as lanes_mod
+    from rails.gitutil import changed_files, merge_base
+
+    if not base_ref:
+        lanes_file = find_lanes_file(top)
+        base_ref = lanes_mod.load(lanes_file).base if lanes_file else None
+    base_sha = None
+    for ref in (base_ref, "origin/HEAD", "origin/main", "origin/master"):
+        if ref and (base_sha := merge_base(top, ref, rev)):
+            break
+    if not base_sha:
+        return True
+    return any(not is_prose(p) for p in changed_files(top, base_sha, rev))
+
+
+def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | None = None) -> bool:
+    """`ship_review`: a code diff arms only with a review of HEAD's tree and no open must-fix (R26)."""
+    from rails import review
+    from rails.githooks import _log, _shadowed
+    from rails.gitutil import tree
+
+    if not needs_review(top, base_ref):
+        return True
+    text = review.arming_problem(review.covering(repo, top, "HEAD"))
+    if text is None:
+        return True
+    if _shadowed("ship_review"):
+        _log(repo, "ship_review", "would-deny")
+        print(f"  [rails shadow: ship_review would refuse to arm] {text}", file=out)
+        return True
+    print(f"rails ship: {text}", file=out)
+    return False
 
 
 def unreceipted_absences(body: str) -> list[str]:
@@ -81,6 +171,15 @@ def compose_body(
         parts.append(
             f"**Local lanes at {sha[:12]}** (posted as `rails/<lane>` statuses): {lanes}"
         )
+    try:
+        from rails import review
+        from rails.gitutil import tree, toplevel
+
+        line = review.summary_line(review.covering(repo, toplevel(repo.top), "HEAD"))
+    except Exception:  # noqa: BLE001 - the body must not fail to compose over a summary line
+        line = ""
+    if line:
+        parts.append(line)
     if detected_by:
         # read back by `rails metrics` (the automation catch rate); one line, its own paragraph
         parts.append(f"Detected-by: {detected_by}")
@@ -115,6 +214,22 @@ def ship(
             file=out,
         )
         return 1
+    # A re-ship of the same open PR rewrites its body; what the first ship said (Closes lines,
+    # Detected-by, an explicit --body-file body) is carried, never dropped - but only onto that
+    # PR: a merged one's lines must not leak into the next PR on a reused branch (1.3.0).
+    closes = [str(c).lstrip("#") for c in closes]
+    prev = store.read_json(repo.leaf_dir / "pr.json", None)
+    if isinstance(prev, dict) and prev.get("number") and prev.get("branch") == branch(top):
+        view = gh(top, "pr", "view", str(prev["number"]), "--json", "number,state", check=False).strip()
+        try:
+            info = json.loads(view) if view else {}
+        except ValueError:
+            info = {}
+        if info.get("state") == "OPEN" and info.get("number") == prev.get("number"):
+            closes = list(dict.fromkeys([*(str(c).lstrip("#") for c in prev.get("closes", [])), *closes]))
+            detected_by = detected_by or prev.get("detected_by")
+            body = body or str(prev.get("body", ""))
+    explicit_body = body  # the intent's text is re-read on every ship, never frozen into pr.json
     data = work.load(repo)
     unverified = [i["id"] for i in data["items"] if i.get("status") == "unverified"]
     if unverified and closes:
@@ -132,6 +247,8 @@ def ship(
             file=out,
         )
         return 2
+    for c in closes:
+        _import_acceptance(repo, top, c, out)
     full_body = compose_body(body, closes, repo, sha, detected_by)
     if not detected_by and re.search(r"(?i)\b(fix|hotfix|bugfix)", title):
         print(
@@ -205,7 +322,19 @@ def ship(
     if number is None:
         print("rails ship: could not determine the PR number", file=out)
         return 1
+    elif existing:
+        # A re-ship (after `rails review record --accept`, or new commits) refreshes the body,
+        # so the review line the operator judges by is the current one (review of 1.3.0).
+        slug = origin_slug(top)
+        try:
+            if slug:
+                gh_api(top, f"repos/{slug}/pulls/{number}", method="PATCH", payload={"body": full_body})
+        except GitError as exc:
+            print(f"  could not refresh the PR body: {exc}", file=out)
     armed = False
+    if arm and not _review_allows_arming(repo, top, out, base):
+        arm = False
+        print("  not arming (the reason is above); `rails ship` again arms it once the review allows", file=out)
     if arm:
         done = subprocess.run(
             ["gh", "pr", "merge", str(number), "--auto", "--squash"],
@@ -229,13 +358,18 @@ def ship(
             "sha": sha,
             "monitor": "unbound",
             "at": int(time.time()),
+            "closes": closes,
+            "detected_by": detected_by,
+            "body": explicit_body,
         },
     )
-    for c in closes:
+    if len(closes) == 1:
+        # Hand-added items (`rails work add`) belong to the one issue this PR closes; with
+        # several, which item closes which is unknowable, so none is guessed (review of 1.3.0).
         with store.updating(work.path(repo), {}) as wdata:
             for item in wdata.get("items", []):
                 if item.get("status") == "open" and not item.get("closes"):
-                    item["closes"] = f"#{c.lstrip('#')}"
+                    item["closes"] = f"#{closes[0].lstrip('#')}"
     from rails.check import post
 
     post(top, out=out)

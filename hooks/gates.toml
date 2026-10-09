@@ -334,3 +334,101 @@ cites = ["R27: 'one PR per line of work' restated 25+ times by the operator", "d
 planted = "tests/planted/second_pr.json"
 fp_count = 0
 fp_measured_on = "unmeasured: shadow week starts 2026-10-06"
+
+# --- added in rails 1.3.0 (2026-10-08): the loop enforces itself; shadow for 7 days ------
+
+[[gate]]
+name = "prepush_intent"
+module = "prepush"
+events = ["git:pre-push"]
+kind = "git_hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R24: misread intent 84 + built the wrong thing 55 (op)", "1.2 audit 2026-10-08: the intent was shown and acked but nothing required the ack before a push"]
+planted = "tests/test_loop_enforcement.py::test_an_agent_push_needs_an_acked_intent"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "ship_review"
+module = "cli"
+events = ["rails:ship"]
+kind = "cli"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R26: cold two-voice review was among the few mechanisms with measured catches", "1.2 audit 2026-10-08: reviewer agents existed, nothing required them"]
+planted = "tests/test_loop_enforcement.py::test_ship_does_not_arm_a_code_diff_without_a_review"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "test_filter"
+module = "test_filter"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R2: `pytest --deselect` / `-k not` turn a red into a green nobody decided", "evidence report lesson 1: tests written to pass"]
+planted = "tests/planted/test_filter.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "allow_edit"
+module = "allow_edit"
+events = ["PreToolUse"]
+tools = ["Edit", "Write", "MultiEdit", "Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R2: `*_allow.toml` edits by a delegated agent", "R25: 17 of 20 overrides self-granted"]
+planted = "tests/planted/allow_edit.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "milestone_close"
+module = "milestone_close"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R18: a milestone closes on the operator's `used`, not on its issue count", "milestone 75 sat finished-but-open 59 h with no close path that checked use"]
+planted = "tests/planted/milestone_close.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "operator_bounds"
+module = "operator_bounds"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit"]
+kind = "hook"
+class = "lockout"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R2 reference deny: an agent's command naming the household store", "review of 1.3.0: `CLAUDECODE=0 rails used` forged the operator's word"]
+planted = "tests/planted/operator_bounds.json"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
+
+[[gate]]
+name = "arm_review"
+module = "arm_review"
+events = ["PreToolUse"]
+tools = ["Bash", "PowerShell"]
+kind = "hook"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-15"
+cites = ["R26: the review receipt", "review of 1.3.0: `gh pr merge --auto` armed what `rails ship` refused"]
+planted = "tests/test_loop_enforcement.py::test_arm_review_refuses_a_hand_armed_merge_without_a_review"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-08"

@@ -1,0 +1,46 @@
+name: Work item
+description: One unit of work. Its milestone is the release; its Done-when lines become the PR's work items.
+labels: ["work-item"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Claim it before the first edit with `rails claim "#<n>"`. Claims are local: every session
+        drives the same GitHub login, so assignment cannot tell two sessions apart.
+        Close it from the PR (`rails ship --closes <n>`), never by hand.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: The work, in a few sentences, as the person who uses it would describe it. Not the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now
+      description: What is broken, blocked or at risk without it. "Would be nice" is an honest answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: >
+        One observation per line that could come out the OTHER way when checked. Add `step: <id>`
+        to a line a walk can show, so it closes only on a passing walk receipt. `rails work from-issue <n>`
+        turns these lines into the PR's work items.
+      placeholder: |
+        step: a1 the export lists every account, including closed ones
+        a row with no date is refused with its line number
+    validations:
+      required: true
+
+  - type: textarea
+    id: not
+    attributes:
+      label: Does not build
+      description: The nearest thing someone might assume is included.

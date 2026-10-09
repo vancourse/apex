@@ -108,6 +108,8 @@ def test_every_row_module_imports_and_exposes_check(raw):
     module_name = raw.get("module", raw["name"])
     if _git_hook_only(raw) and module_name == "prepush":
         pytest.skip("git-hook anchor: never dispatched")
+    if module_name == "cli" and all(str(e).startswith("rails:") for e in raw.get("events", [])):
+        pytest.skip("CLI anchor: runs inside a rails command (rails/ship.py), never dispatched")
     module = importlib.import_module(f"rails.gates.{module_name}")
     assert callable(getattr(module, "check", None)), f"{module_name} has no check()"
 

@@ -1,0 +1,55 @@
+name: Defect
+description: Something built behaves wrongly - in use, in CI, or locally.
+title: "[defect] "
+labels: ["defect"]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: Observed behaviour, with the error text or log line if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Steps, or the commit and command. If it cannot be reproduced, say what was tried - it is not fixed on a guess.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: detected_by
+    attributes:
+      label: What found it first
+      description: Becomes `rails ship --detected-by` on the fix; `rails metrics` counts how much automation catches.
+      options:
+        - ci
+        - lane
+        - hook
+        - walk
+        - boot
+        - review
+        - audit
+        - operator
+        - agent
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: >
+        The regression test that fails before the fix and passes after, and any `step: <id>` a walk shows.
+        One line each; `rails work from-issue <n>` reads them.
+    validations:
+      required: true

@@ -72,8 +72,8 @@ def untracked(cwd: Path) -> list[str]:
     return [line[3:] for line in out.splitlines() if line.startswith("??")]
 
 
-def merge_base(cwd: Path, base: str) -> str | None:
-    out = run(["git", "merge-base", "HEAD", base], cwd, check=False).strip()
+def merge_base(cwd: Path, base: str, rev: str = "HEAD") -> str | None:
+    out = run(["git", "merge-base", rev, base], cwd, check=False).strip()
     return out or None
 
 

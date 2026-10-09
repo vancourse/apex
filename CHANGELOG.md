@@ -4,6 +4,128 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.3.0] — 2026-10-08
+
+The loop enforces itself, and there is one template set. From the 2026-10-08 audit of the design
+against the code (20 of 31 mechanisms partial): the parts every future PR, requirement, design, test
+and verification goes through.
+
+### Added
+- **`rails template [name]`** - the plugin's templates are the one set (intent, spec, adr, milestone,
+  rulebook, PR); repos read them from here instead of keeping copies that drift.
+- **Intent at push (`prepush_intent`):** an agent's push refuses without an intent the operator saw
+  and acked (R24). The operator's own shell is not asked.
+- **`rails work from-issue <n>`** and `rails ship --closes <n>` turn an issue's Done-when lines (a
+  heading's bullets or plain lines, and any `step: <id>`) into work items, so the turn-end gate holds
+  the PR to them (R28).
+- **`rails review record --coop F --adversary F`** seals the two reviewer agents' reports for HEAD's
+  tree; `rails ship` does not arm a non-prose diff without one (`ship_review`, R26).
+- **`rails close <milestone>`** closes only after the operator's `used #<n>` and with no open issue;
+  the raw API close is refused (`milestone_close`, R18).
+- **Denies:** `test_filter` (`pytest --deselect` / `-k ... not ...`, read from the pytest
+  statement, not from a commit message that mentions it), `allow_edit` (a subagent editing an
+  allowlist or leak.toml, by tool or by shell write), `operator_bounds` (a command that touches
+  `CLAUDECODE`, or a command or written file naming the household store's container or database
+  from leak.toml `[guard] names`), and `arm_review` (`gh pr merge --auto` by hand, which skipped
+  the review `rails ship` requires) (R2, R26).
+- **`rails check` hook-removal check:** deleting a hook script the base branch's settings still run
+  fails the check (it blocks every prompt in older worktrees, 2026-10-07); `rails retire-hook <path>`
+  writes the dated do-nothing placeholder instead.
+- apex follows its own loop: `lanes.toml` (suite, kit) and rails-shaped issue forms (work-item,
+  defect with "what found it first").
+
+### Changed
+- `rails used|approve|release` refuse inside an agent: they record the operator's words.
+- The `rails ship` absence advisory flags claims of absence (`no callers`, `does not exist`,
+  `nothing calls`), not every sentence with "no" or "only".
+- Every new refusal is in shadow until 2026-10-15 (logs `would-deny`, refuses nothing).
+
+### Fixed (two-voice review of this release, before it shipped)
+- An open must-fix now blocks arming: the reviewers' JSON `must_fix` list is counted, and a tree
+  with open items arms only with `rails review record ... --accept "<reason>"`, shown in the PR body.
+- `used` needs `#<number>`: "Used 3 hours on this" no longer recorded use of milestone 3.
+- Work-item ids are `<issue>-<step>`, so two issues with `step: a1` keep both; an edited issue adds
+  its new line instead of dropping it; "Steps to reproduce" is not read as acceptance.
+- The hook-removal check counts scripts only and lets an expired placeholder go.
+- `milestone_close` sees a variable milestone number, `PATCH` inside a script one-liner, and a
+  closed state in an `--input` file.
+- The pre-push intent check fails closed, and reads a UTF-16 or BOM-prefixed intent file.
+- Markdown that runs (agents/, skills/, templates/, CLAUDE.md and AGENTS.md at any depth) needs
+  review; prose is docs/ that is not code, and README / CHANGELOG / LICENSE.
+
+### Fixed (second two-voice review, 10 + 12 must-fixes, 7 shared)
+- **A push to an open PR needs a review of the pushed tree.** Arming was checked once; auto-merge
+  then merged a later, unreviewed push. pre-push now checks the pushed tree's receipt when the
+  branch has an open PR (`ship_review`), and `arm_review` refuses to arm a HEAD the remote does not
+  hold.
+- **The must-fix count no longer fails open.** The reviewers' JSON is found wherever it sits (a
+  brace in the prose made it unparsable and the count 0); a report naming `must_fix` that does not
+  parse is refused; `## Must-fix` sections count their items. `rails review record` refuses a dirty
+  working copy (the voices read the disk; the receipt names HEAD's tree).
+- **The operator's words need the operator's terminal.** `rails used|approve|release` refuse
+  without a TTY as well as inside an agent, since an agent's own command could clear
+  `CLAUDECODE`. `operator_bounds` refuses setting, clearing or unsetting it (`env -i`,
+  `Remove-Item Env:CLAUDE*`, `${!CLAUDE@}`, `os.environ.pop`) in a command or a written script, and
+  has no `rails` exemption: `rails receipt -- <cmd>` named the store and ran. It is a lockout row.
+  `rails used` takes the number bare and records it as `#<n>`.
+- `arm_review` reads command words (`gh.exe`, `gh -R o/r pr merge`, a continued line, GraphQL in
+  an `@file`), so a commit message that mentions the command is not an arm; an allowed arm stamps
+  `pr.json` armed so `turn_end` holds the turn to the PR's steps.
+- A re-ship refreshes the open PR's body (the review line and any `--accept` reason).
+- A correction voids the shown intent: the next message no longer acks the intent just corrected.
+  The intent hash ignores line endings, and every reader shares one decoder.
+- A ticked `- [x]` Done-when box is still owed; "Acceptance criteria" is a heading; a multi-line
+  comment is skipped.
+- `test_filter`: `PYTEST_ADDOPTS` set by `$env:`/`export` in an earlier statement, pytest after
+  runner options (`uv run --directory d python -m pytest`, `docker compose exec`), `-o addopts`.
+  `allow_edit`: interpreter one-liners and `perl -i` write; `2>` does not. `milestone_close`: any
+  milestone path, `--input -` from a pipe (fail closed when the source is unreadable), and the POST
+  GitHub accepts for PATCH.
+- `rails check --post` does not post lane statuses after a RED check; hook-removal counts JS/TS
+  scripts.
+
+### Fixed (third two-voice review, 8 + 6 must-fixes, 3 shared; and the jarvis branch's review)
+- **The operator's words come from the prompt.** Measured on this box: an agent's Bash and
+  PowerShell tool calls report a TTY on stdin, so the terminal check added in the second round
+  proved nothing and is removed. `rails close` honours only a `used` recorded from a prompt; a hold
+  set in a prompt lifts only by `release` in a prompt; `rails used` from a shell is kept as
+  `by: shell`, for the record.
+- The push check judges the pushed commit's own diff, not HEAD's; `arm_review` refuses a detached
+  HEAD, counts `origin/<branch>` or the upstream as pushed, reads GraphQL bodies from `--input`
+  files, pipes and variables, and refuses when it cannot check. A review receipt covers a later
+  tree that differs only in prose, so a docs commit does not need the voices again.
+- The must-fix count takes the reviewer's last JSON object (a quoted `{"must_fix": []}` before it
+  no longer wins), counts `###` items and bold numbered items under a must-fix heading, and reads
+  "Must-fix: none" as zero.
+- A re-ship keeps the first ship's `Closes` lines, `Detected-by` and body.
+- A corrected intent re-shown unchanged is not acked; the Stop hook asks for the rewrite.
+- `operator_bounds` judges command words and code shapes: reading the marker, a `.claude` path,
+  `os.environ.update(env)` or a docstring are not refused; a shell script (also under tests/) is
+  read line by line. Store names are judged only in a statement that reaches a database
+  (`psql`, `docker`, a driver, a DSN), so `rg <name>` and an edit to fleet config are not refused.
+- `pipe_mask` catches pytest behind `timeout`, `env`, `nice`, `xvfb-run`, `coverage run` and
+  python flags before `-m`, which jarvis's copy caught and the port had dropped.
+- `rails claim` holds an issue in one worktree at a time, and a worktree that switches branch
+  keeps its claim (jarvis #2599), as jarvis's `claim.py` does: the two writers of the store agree.
+- `milestone_close` judges only the statement that writes, and refuses an `--input` file it
+  cannot read; `test_filter` reads `Set-Item Env:` and `SetEnvironmentVariable`, and `timeout`,
+  `coverage` and `python3.x` as runners; `allow_edit` counts deletes and PowerShell's copy aliases.
+
+### Fixed (verify-only round on the third round's fixes: 6 + 3 must-fixes)
+- A shell `hold` no longer relabels the operator's prompt hold (which a shell `release` could
+  then lift); the one-app WIP limit counts only prompt-recorded `used`.
+- A re-ship carries Closes / Detected-by / an explicit body only onto the same open PR (a merged
+  PR's lines leaked into the next one), and re-reads the intent instead of freezing it.
+- A correction clears the Stop hook's once-per-hash block, so it asks for the rewrite.
+- Store names are judged across a whole command once any statement reaches a database, in shell
+  scripts whatever else they hold, and in Python files that connect.
+- The marker set behind other assignments, by `env`, or piped `Env:CLAUDE* | Remove-Item`.
+- `milestone_close`: attached `-XPATCH`/`-fstate=`, an endpoint in a variable, PowerShell
+  `-Method Patch`/`-Body`, and `requests.patch(`.
+- `arm_review` takes `origin/<branch>` as the PR head when it exists; a main-checkout claim is
+  advisory (it no longer fences an issue off from worktrees); nested `must_fix` objects are not
+  reports, and a clean object quoted near the reviewer's never lowers the count.
+
 ## [1.2.1] — 2026-10-07
 
 ### Fixed

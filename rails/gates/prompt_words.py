@@ -25,7 +25,9 @@ from rails.hookio import Event, Notice
 
 NAME = "prompt_words"
 
-_USED = re.compile(r"^\s*used\s+(#?\S+)\s*(.*)$", re.IGNORECASE)
+#: `used #<number> <task>` - the `#` and the digits are required: "Used 3 hours on this, still
+#: broken" recorded `used` for milestone 3, which `rails close 3` then honoured (review of 1.3.0).
+_USED = re.compile(r"^\s*used\s+(#\d+)\b\s*(.*)$", re.IGNORECASE)
 _APPROVE = re.compile(r"^\s*approve\s+(\S+)\s+([0-9a-f]{6,64})\s*$", re.IGNORECASE)
 _CEREMONY = {
     "push": re.compile(r"\b(push|pushed|pushing)\b", re.I),
@@ -76,7 +78,7 @@ def check(evt: Event):
     elif m := _USED.match(first):
         with store.updating(repo.dir / "state.json", {}) as state:
             state.setdefault("used", []).append(
-                {"milestone": m.group(1), "task": m.group(2)[:200], "at": now}
+                {"milestone": m.group(1), "task": m.group(2)[:200], "at": now, "by": "prompt"}
             )
         notices.append(
             f"rails: recorded `used {m.group(1)}` - the operator used it for a real task."
@@ -98,11 +100,17 @@ def check(evt: Event):
             and st.get("hash") == h
             and st.get("shown_at")
             and st.get("acked_hash") != h
+            and st.get("corrected_hash") != h
         ):
             if now - int(st.get("shown_at", 0)) < 5:
                 pass  # <5 s after showing: a relay or an automation, not a read
             elif intent.classify(prompt) == "changes":
-                intent.update(repo, acked_hash="", acked_at=0, rewrite_requested=now)
+                # Void the shown state too: otherwise the operator's NEXT message ("how is it
+                # going?") acked the very intent they had just corrected (review of 1.3.0).
+                intent.update(
+                    repo, acked_hash="", acked_at=0, shown_at=0, corrected_hash=h, blocked_hash="",
+                    rewrite_requested=now,
+                )
                 notices.append(
                     "rails: that message changes what is built. Rewrite .rails/intent.md before any edit, "
                     "and end the turn showing it with its new marker."
