@@ -8,8 +8,8 @@ dated: ``@pytest.mark.skip(reason="#<issue>: ...")`` or the repo's quarantine ma
 Refused, when the command runs pytest (``pytest``, ``python -m pytest``, ``uv run [opts]
 pytest``, ``docker compose exec svc python -m pytest``): ``--deselect``, a ``-k`` expression
 with ``not`` in it, the same through ``-o addopts=...``, and the same set in
-``PYTEST_ADDOPTS`` - as a prefix, or by ``export`` / ``$env:`` / ``set`` in an earlier
-statement of the same command (PowerShell has no other way to set it).
+``PYTEST_ADDOPTS`` - as a prefix, or in an earlier statement of the same command (``export``,
+``$env:``, ``set``, ``Set-Item Env:``, ``[Environment]::SetEnvironmentVariable``).
 Not refused: ``-k name`` (running one test), ``-m "not db"`` (a marker the repo's own lanes
 select by) and ``--ignore`` (lanes split by path) - and the word pytest inside a commit
 message or other quoted text. Override in the command, where a reviewer sees it:
@@ -29,18 +29,21 @@ _OVERRIDE = re.compile(r"#\s*deselect-ok:\s*#?\d+")
 _NOT = re.compile(r"\bnot\b")
 _PYTEST = ("pytest", "py.test")
 #: Commands that run another command after their own options: pytest may sit after them.
-_RUNNERS = ("uv", "uvx", "poetry", "pdm", "hatch", "rye", "pipx", "python", "python3", "py", "docker",
-            "docker-compose", "podman", "kubectl", "nox", "tox", "env", "sudo", "time")
+_RUNNERS = ("uv", "uvx", "poetry", "pdm", "hatch", "rye", "pipx", "py", "docker", "docker-compose", "podman",
+            "kubectl", "nox", "tox", "env", "sudo", "time", "timeout", "nice", "coverage", "xvfb-run")
 #: --deselect, or a -k whose expression (before the next option) has "not" in it.
 _NARROW_TEXT = re.compile(r"--deselect\b|(?<![\w-])-k\W{0,3}[^-]{0,80}?\bnot\b")
-_ADDOPTS_SET = re.compile(r"PYTEST_ADDOPTS\s*=\s*(.+)", re.IGNORECASE | re.DOTALL)
+_ADDOPTS_SET = re.compile(
+    r"(?:PYTEST_ADDOPTS\s*=|Env:PYTEST_ADDOPTS['\"]?\s+(?:-Value\s+)?|['\"]PYTEST_ADDOPTS['\"]\s*,)\s*(.+)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _is_pytest(tokens: list[str]) -> bool:
     names = [command_name(t) for t in tokens]
     if names[0] in _PYTEST:
         return True
-    if names[0] not in _RUNNERS:
+    if names[0] not in _RUNNERS and not names[0].startswith("python"):
         return False
     return any(n in _PYTEST for n in names[1:]) or any(
         names[i] == "-m" and names[i + 1] in _PYTEST for i in range(len(names) - 1)

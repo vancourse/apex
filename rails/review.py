@@ -30,7 +30,9 @@ from rails.gitutil import dirty_tracked, head, toplevel, tree
 _MUST_FIX = re.compile(r"(?i)^\s*(?:[-*]\s*|\d+[.)]\s*)?(?:\*\*)?must[- _]fix\b")
 _MUST_FIX_HEADING = re.compile(r"(?i)^\s*#{1,6}\s*(?:\*\*)?must[- _]fix")
 _HEADING = re.compile(r"^\s*#{1,6}\s")
-_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+_ITEM = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+\S|\*\*\d+[.)])")
+#: "Must-fix: none", "- None", "**Must-fix:** n/a" - an empty list said in words.
+_NONE = re.compile(r"(?i)^\s*(?:[-*+]\s*|\d+[.)]\s*)?(?:\*\*)?(?:must[- _]fix\W*)?(?:none|n/?a|nothing)\b\W*$")
 _JSON_KEY = re.compile(r"[\"']must_fix[\"']\s*:")
 
 
@@ -42,7 +44,7 @@ def _json_report(text: str) -> dict | None:
     to fall through to a count of 0 (review of 1.3.0).
     """
     decoder = json.JSONDecoder()
-    first = None
+    first, last = None, None
     for m in re.finditer(r"\{", text):
         try:
             obj, _ = decoder.raw_decode(text, m.start())
@@ -50,9 +52,9 @@ def _json_report(text: str) -> dict | None:
             continue
         if isinstance(obj, dict):
             if isinstance(obj.get("must_fix"), list):
-                return obj
+                last = obj  # the reviewer's own object comes last; a quoted one comes before it
             first = first if first is not None else obj
-    return first
+    return last if last is not None else first
 
 
 def must_fix_count(text: str) -> int | None:
@@ -67,10 +69,16 @@ def must_fix_count(text: str) -> int | None:
         return len(data["must_fix"])
     if _JSON_KEY.search(text):
         return None
-    count, in_section = 0, False
+    count, in_section, level = 0, False, 0
     for line in text.splitlines():
         if _HEADING.match(line):
-            in_section = bool(_MUST_FIX_HEADING.match(line))
+            depth = len(line.strip()) - len(line.strip().lstrip("#"))
+            if in_section and depth > level:
+                count += 1  # "### 1. ship.py:308 ..." under "## Must-fix" is an item
+                continue
+            in_section, level = bool(_MUST_FIX_HEADING.match(line)), depth
+            continue
+        if _NONE.search(line):
             continue
         if (in_section and _ITEM.match(line)) or (not in_section and _MUST_FIX.match(line)):
             count += 1
@@ -133,6 +141,25 @@ def record(cwd: Path, coop: Path, adversary: Path, accept: str = "") -> tuple[in
         f"rails review: recorded for tree {tree_sha[:12]} "
         f"(must-fix: coop {counts['coop']}, adversary {counts['adversary']}){note}"
     )
+
+
+def covering(repo: store.RepoId, top: Path, rev: str = "HEAD") -> dict | None:
+    """The newest valid receipt for ``rev``'s tree, or for an earlier tree that differs from
+    it only in prose (`ship.is_prose`): a docs commit after the review does not need the voices
+    again. Anything else that changed needs a new review."""
+    from rails.gitutil import git
+    from rails.ship import is_prose
+
+    target = tree(top, rev)
+    rows = [r for r in receipts.read(repo, "review") if receipts.valid(r) and r.get("tree")]
+    for row in reversed(rows):
+        if row["tree"] == target:
+            return row
+        out = git(top, "diff", "--name-only", "--no-renames", row["tree"], target, check=False)
+        names = [n for n in out.splitlines() if n.strip()]
+        if names and all(is_prose(n) for n in names):
+            return row
+    return None
 
 
 def latest_for_tree(repo: store.RepoId, tree_sha: str) -> dict | None:

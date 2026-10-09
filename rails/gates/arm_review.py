@@ -3,7 +3,8 @@
 `rails ship` will not arm a code diff whose tree has no review receipt (``ship_review``). But
 ``gh pr merge <n> --auto --squash`` is the arm the merge gate allows - and recommends - so an
 agent told "not arming" could arm by hand. This refuses that arm, and the GraphQL
-``enablePullRequestAutoMerge`` mutation (inline, or in an ``@file`` it names), when:
+``enablePullRequestAutoMerge`` mutation (inline, in a variable set earlier in the command, in an
+``@file`` or ``--input`` file, or piped into ``--input -``; a body it cannot read counts), when:
 
 * the worktree's HEAD tree is a code diff with no review, or a review with open must-fix
   items; or
@@ -21,6 +22,7 @@ another worktree is judged by this one's tree, and a `gh alias` hides the words 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from rails import store
@@ -46,14 +48,55 @@ def _file_names_mutation(token: str, cwd: Path | None) -> bool:
         return False
 
 
-def _arms(tokens: list[str], cwd: Path | None) -> bool:
+_STDIN_SOURCE = re.compile(
+    r"(?:\b(?:cat|type|Get-Content|gc)\s+['\"]?([^\s'\"|;]+)['\"]?[^|;\n]*\||<\s*['\"]?([^\s'\"|;<]+))",
+    re.IGNORECASE,
+)
+
+
+def _read(name: str, cwd: Path | None) -> str | None:
+    path = Path(name)
+    if not path.is_absolute() and cwd is not None:
+        path = cwd / path
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _graphql_arms(rest: list[str], command: str, cwd: Path | None) -> bool:
+    """A GraphQL call arms when the mutation is anywhere it could come from: the command
+    text (inline, or a variable set earlier in it), an ``--input`` file, or what is piped into
+    ``--input -``. A body it cannot read is treated as an arm (fail closed)."""
+    if _MUTATION in command or any(_file_names_mutation(tok, cwd) for tok in rest):
+        return True
+    for i, tok in enumerate(rest):
+        if tok == "--input" and i + 1 < len(rest) or tok.startswith("--input="):
+            name = rest[i + 1] if tok == "--input" else tok.split("=", 1)[1]
+            if name == "-":
+                sources = [a or b for a, b in _STDIN_SOURCE.findall(command)]
+                texts = [_read(s, cwd) for s in sources]
+                if not sources or any(t is None or _MUTATION in t for t in texts):
+                    return True
+            else:
+                text = _read(name, cwd)
+                if text is None or _MUTATION in text:
+                    return True
+    return False
+
+
+def _arms(tokens: list[str], cwd: Path | None, command: str) -> bool:
     name = command_name(tokens[0])
     rest = tokens[1:]
     if name == "gh":
         for i in range(len(rest) - 1):
             if rest[i] == "pr" and rest[i + 1] == "merge":
                 return "--auto" in rest[i + 2 :]
+        if "api" in rest and "graphql" in rest:
+            return _graphql_arms(rest, command, cwd)
     if name in _HTTP:
+        if any(tok.rstrip("/").endswith("/graphql") for tok in rest) and _graphql_arms(rest, command, cwd):
+            return True
         return any(_MUTATION in tok or _file_names_mutation(tok, cwd) for tok in rest)
     return False
 
@@ -69,10 +112,10 @@ def _stamp_armed(repo: store.RepoId) -> None:
 def check(evt: Event):
     shell = evt.shell
     command = evt.command or ""
-    if shell is None or ("merge" not in command and _MUTATION not in command and "@" not in command):
+    if shell is None or not any(w in command for w in ("merge", _MUTATION, "@", "graphql")):
         return None
     try:
-        arming = any(_arms(tokens, evt.cwd) for _, tokens in commands(command, shell))
+        arming = any(_arms(tokens, evt.cwd, command) for _, tokens in commands(command, shell))
     except Exception:  # noqa: BLE001 - an unparsable command is judged by text
         arming = "--auto" in command and "merge" in command
     if not arming:
@@ -85,20 +128,25 @@ def check(evt: Event):
 
     try:
         local = head(repo.top)
-        remote = git(repo.top, "rev-parse", "--verify", "-q", "@{u}", check=False).strip()
-        if not remote:
-            br = git(repo.top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
-            remote = git(repo.top, "rev-parse", "--verify", "-q", f"origin/{br}", check=False).strip()
-        if remote != local:
+        br = git(repo.top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+        if br in ("", "HEAD"):
+            return Deny("rails: not arming auto-merge from a detached HEAD: check out the PR's branch first.")
+        # The PR's head is origin/<branch>; a branch cut from origin/master tracks that as
+        # @{u}, so either one holding HEAD counts as pushed.
+        remotes = {
+            git(repo.top, "rev-parse", "--verify", "-q", ref, check=False).strip()
+            for ref in (f"origin/{br}", "@{u}")
+        }
+        if local not in remotes:
             return Deny(
                 "rails: not arming auto-merge: HEAD is not what the branch's remote holds, and auto-merge merges "
                 "the pushed head. Push first (the pre-push hook checks this tree's review), then arm."
             )
         if ship.needs_review(repo.top, None):
-            problem = review.arming_problem(review.latest_for_tree(repo, tree(repo.top)))
+            problem = review.arming_problem(review.covering(repo, repo.top, "HEAD"))
             if problem:
                 return Deny(f"rails: not arming auto-merge: {problem}")
-    except (GitError, OSError):
-        return None
+    except Exception as exc:  # noqa: BLE001 - an arm it cannot check is refused, like pre-push
+        return Deny(f"rails: not arming auto-merge: the review could not be checked ({type(exc).__name__})")
     _stamp_armed(repo)
     return None

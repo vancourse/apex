@@ -26,11 +26,12 @@ _ALLOWLIST = re.compile(
 _IN_COMMAND = re.compile(r"[\w./\\-]*(?:_allow|allowlist)[\w.-]*\.toml|[\w./\\-]*leak\.toml", re.IGNORECASE)
 _SHELL_WRITE = re.compile(
     r"(?<![0-9&>])>>?(?![&>])|\btee\b|Set-Content|Add-Content|Out-File|\bsed\b[^\n;|&]*\s-\w*i|"
-    r"\bperl\b[^\n;|&]*\s-\w*i|\bmv\b|\bcp\b|Copy-Item|Move-Item|\bgit\s+apply\b",
+    r"\bperl\b[^\n;|&]*\s-\w*i|\bmv\b|\bcp\b|Copy-Item|Move-Item|\bgit\s+(?:apply|rm|checkout)\b|"
+    r"\brm\b|Remove-Item|\bdel\b|\berase\b|\bri\b|\b(?:copy|cpi|move|mi|ren|rni)\b|New-Item\b[^\n;|&]*-Value",
     re.IGNORECASE,
 )
 _INTERPRETER_WRITE = re.compile(
-    r"(?:\bpython\w*(?:\.exe)?\s+-c|\bnode\s+-e|\bruby\s+-e|\[IO\.File\]::)[^\n]*"
+    r"(?:\bpython[\w.]*(?:\.exe)?\s+-(?:c\b|\s|$)|\bnode\s+-e|\bruby\s+-e|\[IO\.File\]::)[\s\S]*"
     r"(?:['\"][wax]\+?['\"]|\bwrite|WriteAll|AppendAll)",
     re.IGNORECASE,
 )

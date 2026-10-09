@@ -149,6 +149,8 @@ def stamp_if_shown(repo: store.RepoId, top: Path, last_text: str) -> bool:
     if h is None or marker(h) not in last_text:
         return False
     st = _state(repo)
+    if st.get("corrected_hash") == h:
+        return False  # the operator corrected this text: showing it again is not a rewrite
     if st.get("hash") != h or not st.get("shown_at"):
         update(repo, hash=h, shown_at=int(time.time()))
     return True

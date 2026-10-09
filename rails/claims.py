@@ -164,6 +164,26 @@ def wip_conflict(repo: store.RepoId, milestone: str) -> Claim | None:
     return None
 
 
+def _live_leaves(main: Path) -> set[str] | None:
+    """Leaf names of the worktrees git lists; None when git cannot say (then every holder is live)."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(main), "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0:
+        return None
+    return {
+        Path(line.split(" ", 1)[1].strip()).name
+        for line in done.stdout.splitlines()
+        if line.startswith("worktree ")
+    }
+
+
 def add(
     repo: store.RepoId,
     branch: str,
@@ -186,13 +206,29 @@ def add(
                     f'or the operator raises the limit with --wip-override "<reason>".'
                 )
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    live = _live_leaves(repo.main)
     with _lock(repo.main):
         entries = _read(repo.main)
+        # An issue is held by one worktree at a time, as jarvis's claim.py has it: two
+        # sessions on one issue is how a finished slice ends up behind a conflict (1.3.0).
+        exclusive = {i for i in items if i.startswith("#") and i[1:].isdigit()}
+        for leaf, other in entries.items():
+            if leaf == repo.leaf or not isinstance(other, dict) or (live is not None and leaf not in live):
+                continue
+            held = sorted(exclusive & set(other.get("items", [])))
+            if held:
+                return False, (
+                    f"refused: {', '.join(held)} already held by {leaf} (branch {other.get('branch', '?')}). "
+                    "Join that worktree, or its owner releases it (`rails claim --release` there)."
+                )
         body = (
             entries.get(repo.leaf) if isinstance(entries.get(repo.leaf), dict) else None
         )
-        if body is None or body.get("branch") != branch:
+        if body is None:
             body = {"branch": branch, "items": [], "at": now}
+        # A worktree that switches branch keeps its claim (jarvis #2599): the worktree is the
+        # line of work; its owner releases what it no longer holds.
+        body["branch"] = branch
         for item in items:
             if item not in body["items"]:
                 body["items"].append(item)

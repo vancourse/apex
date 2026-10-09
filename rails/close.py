@@ -24,9 +24,15 @@ from rails.gitutil import GitError, gh_api, origin_slug
 
 
 def used_records(repo: store.RepoId, number: str) -> list[dict]:
+    """`used #N` rows the operator typed in a prompt. A row from a shell (`rails used`) is kept
+    but does not close: nothing on a command line tells the operator from an agent (1.3.0)."""
     state = store.read_json(repo.dir / "state.json", {}) or {}
     want = number.lstrip("#")
-    return [u for u in state.get("used", []) if str(u.get("milestone", "")).lstrip("#") == want]
+    return [
+        u
+        for u in state.get("used", [])
+        if str(u.get("milestone", "")).lstrip("#") == want and u.get("by") == "prompt"
+    ]
 
 
 def close(cwd: Path, number: str) -> tuple[int, str]:
@@ -41,7 +47,7 @@ def close(cwd: Path, number: str) -> tuple[int, str]:
     if not used:
         return 1, (
             f"rails close: milestone {n} has no `used` record. Done is the operator using it for a real "
-            f"task: they say `used #{n} <task>` in a prompt (or run `rails used {n} <task>` in their own terminal)."
+            f"task: they say `used #{n} <task>` in a prompt."
         )
     try:
         ms = gh_api(repo.top, f"repos/{slug}/milestones/{n}")

@@ -64,14 +64,20 @@ OVERRIDES = ("JARVIS_PIPE_OK", "RAILS_PIPE_OK")
 #: or `python -m`. The original's bare `\bpytest\b` refused
 #: `cat pytest.ini | tail -3` (measured 2026-10-06, live): the word inside a
 #: FILENAME is not a test run.
+#: Wrappers that run pytest and pass its status on (``timeout``'s 124 is the case the gate
+#: exists for) are prefixes too: jarvis's copy caught them by the bare word, and the port's
+#: command-word rule had dropped them (review of 1.3.0, when jarvis stopped registering its copy).
 _STATUS_BEARING = re.compile(
     r"\bgit\s+(?:push|commit)\b"
     r"|\bgh\s+pr\s+(?:create|edit|merge|close)\b"
     r"|\bgh\s+issue\s+(?:create|edit)\b"
-    r"|(?:^|[|&(]\s*)(?:\w+=\S*\s+)*"
+    r"|(?:^|[|&(;]\s*)(?:\w+=\S*\s+)*"
+    r"(?:(?:timeout(?:\s+-{1,2}\S+)*\s+\S+|nice(?:\s+-n)?(?:\s+-?\d+)?|env(?:\s+-{1,2}\S+|\s+\w+=\S*)*"
+    r"|xvfb-run(?:\s+-{1,2}\S+)*|time|coverage\s+run(?:\s+-{1,2}\S+)*)\s+)*"
     r"(?:(?:uv|poetry|pipenv|pdm|hatch)\s+run\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*"
-    r"|uvx\s+|time\s+)?"
-    r"(?:(?:\S*[/\\])?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+-m\s+)?"
+    r"|uvx\s+)?"
+    r"(?:(?:(?:\S*[/\\])?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-(?!m\b)[A-Za-z0-9]\S*\s+(?:(?!-)\S+\s+)?)*)?"
+    r"-m\s+)?"
     r"(?:\S*[/\\])?pytest(?:\.exe)?\b(?![.\w-])"
 )
 

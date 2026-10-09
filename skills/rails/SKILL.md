@@ -45,10 +45,13 @@ status` (worktrees on rewritten-away history: never push from one, cherry-pick o
 Templates (one set, no other): `rails template` lists intent, spec, adr, milestone, rulebook and the PR
 template. A milestone closes with `rails close <n>`, which needs the operator's `used #<n>` and no open
 issue. Retiring a hook script: `rails retire-hook <path>` (a deleted one blocks older worktrees).
-The operator's own commands, never an agent's (they refuse inside one, and the words need the
-operator's terminal): `rails release|used|approve`, `rails snapshot`, `rails enable`. In a shell it is
-`rails used 75 <task>` (the number bare: `#` starts a comment); in a prompt, `used #75 <task>`.
-`rails hold` anyone may ask for. An agent never sets or clears `CLAUDECODE` (`operator_bounds`).
+The operator's words are typed in a prompt: `used #75 <task>`, `hold`, `release`, `approve`.
+`rails close` honours only a `used` from a prompt, and a hold set in a prompt lifts only by `release`
+in a prompt: nothing on a command line tells the operator's terminal from an agent's tool call (an
+agent can clear `CLAUDECODE`, and its calls report a TTY on Windows). `rails used 75 <task>` from a
+shell is recorded as `by: shell`, for the record only. `rails snapshot` and `rails enable` are the
+operator's commands. `rails hold` anyone may ask for. An agent never sets or clears `CLAUDECODE`
+(`operator_bounds`).
 
 New app: `rails new <app>` gives a walking skeleton with contracts, settings, roots, clock, limits,
 concepts and the auth matrix already enforced; its first milestone's step 0 is the operator using it.

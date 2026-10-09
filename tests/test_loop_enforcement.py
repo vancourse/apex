@@ -231,7 +231,12 @@ def test_close_needs_the_operators_used_and_no_open_issues(repo, monkeypatch, gi
     assert code == 1 and "no `used` record" in text and calls == []
     rid = store.find_repo(repo)
     with store.updating(rid.dir / "state.json", {}) as state:
-        state.setdefault("used", []).append({"milestone": "#7", "task": "filed a real claim", "at": 1})
+        # from a shell: nothing tells the operator's terminal from an agent's, so it does not close
+        state.setdefault("used", []).append({"milestone": "#7", "task": "x", "at": 1, "by": "shell"})
+    code, text = close.close(repo, "#7")
+    assert code == 1 and "no `used` record" in text
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["used"].append({"milestone": "#7", "task": "filed a real claim", "at": 2, "by": "prompt"})
     code, text = close.close(repo, "#7")
     assert code == 1 and "1 open issue" in text
     milestone["open_issues"] = 0
@@ -398,16 +403,23 @@ def test_operator_bounds_refuses_touching_the_agent_marker(tmp_path):
     assert operator_bounds.check(_evt("Write", planted)) is None
 
 
-def test_the_operators_words_need_the_operators_terminal(repo, monkeypatch, capsys):
-    """Clearing CLAUDECODE is not enough: `rails used|approve|release` also need a TTY."""
+def test_the_operators_shell_words_are_recorded_but_weaker(repo, monkeypatch, capsys):
+    """An agent can clear CLAUDECODE and its tool calls report a TTY (measured on Windows), so
+    a word from a shell neither closes a milestone nor lifts a hold set in a prompt."""
     monkeypatch.chdir(repo)
-    monkeypatch.setattr(cli, "_interactive", lambda: False)
-    assert cli.cmd_words("used", ["75", "x"]) == 2  # CLAUDECODE unset, still no terminal
-    monkeypatch.setattr(cli, "_interactive", lambda: True)
     assert cli.cmd_words("used", ["walked", "it"]) == 2  # not a milestone number
     assert cli.cmd_words("used", ["76", "filed", "a", "claim"]) == 0
-    rows = store.read_json(store.find_repo(repo).dir / "state.json")["used"]
+    rid = store.find_repo(repo)
+    rows = store.read_json(rid.dir / "state.json")["used"]
     assert rows[-1]["milestone"] == "#76" and rows[-1]["by"] == "shell"
+    assert close.used_records(rid, "76") == []
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["hold"] = {"on": True, "since": "now", "by": "prompt"}
+    assert cli.cmd_words("release", []) == 2
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["hold"] = {"on": True, "since": "now", "by": "shell"}
+    assert cli.cmd_words("release", []) == 0
 
 
 def _pushed(git, repo):
@@ -598,3 +610,192 @@ def test_the_push_intent_check_fails_closed(repo, commit, monkeypatch):
     monkeypatch.setattr(intent, "current_hash", boom)
     code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
     assert code == 1 and any("could not be read" in m for m in msgs)
+
+
+# --- third review round -------------------------------------------------------------------
+
+
+def test_the_push_check_judges_the_pushed_commit_not_head(repo, commit, git, monkeypatch):
+    """A code commit pushed from a checkout whose HEAD is elsewhere still needs its review."""
+    _rows(monkeypatch, names=("prepush_hold", "prepush_marker", "prepush_retired", "prepush_leak", "ship_review"))
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: True)
+    rid = store.find_repo(repo)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    git(repo, "checkout", "-q", "--detach", "origin/main")  # HEAD's own diff is empty
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 1 and any("open PR" in m for m in msgs)
+
+
+def test_must_fix_reads_the_reviewers_last_object_and_its_sections():
+    quoted = 'Steelman: the clean case `{"must_fix": []}` is pinned.\n{"reviewed_sha": "d", "must_fix": [{"file": "a"}]}'
+    assert review.must_fix_count(quoted) == 1
+    sub = "## Must-fix\n\n### 1. ship.py:308 drops Closes\nReproducer: x\n\n### 2. githooks.py:201\n\n## Questions\n- q\n"
+    assert review.must_fix_count(sub) == 2
+    assert review.must_fix_count("## Must-fix\n**1. ship.py** drops it\n**2. cli.py** too\n") == 2
+    assert review.must_fix_count("**Must-fix:** none\n") == 0
+    assert review.must_fix_count("## Must-fix\n- None\n## Consider\n- x\n") == 0
+
+
+def test_a_docs_commit_after_the_review_is_still_covered(repo, commit, tmp_path, monkeypatch):
+    monkeypatch.chdir(repo)
+    commit(repo, "src/a.py", "x = 1\n")
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    rid = store.find_repo(repo)
+    commit(repo, "docs/notes.md", "the design amendment\n")
+    assert review.covering(rid, repo, "HEAD") is not None  # prose after the review: covered
+    commit(repo, "src/a.py", "x = 2\n")
+    assert review.covering(rid, repo, "HEAD") is None  # code after the review: not
+
+
+def test_arm_review_sees_graphql_bodies_and_refuses_a_detached_head(repo, commit, git, tmp_path):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    cwd = str(repo)
+    (repo / "arm.json").write_text('{"query": "mutation { enablePullRequestAutoMerge(input: {}) { x } }"}', encoding="utf-8")
+    (repo / "read.json").write_text('{"query": "query { viewer { login } }"}', encoding="utf-8")
+    for command in (
+        "gh api graphql --input arm.json",
+        "Get-Content arm.json | gh api graphql --input -",
+        "$q = 'mutation { enablePullRequestAutoMerge(input: {}) { x } }'; gh api graphql -f query=$q",
+        "gh api graphql --input missing.json",  # a body it cannot read counts
+    ):
+        assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=cwd)), command
+    assert arm_review.check(_evt("Bash", {"command": "gh api graphql --input read.json"}, cwd=cwd)) is None
+    git(repo, "checkout", "-q", "--detach", "HEAD")
+    assert "detached" in arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto"}, cwd=cwd)).reason
+
+
+def test_arm_review_counts_origin_branch_as_pushed_and_fails_closed(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "docs/a.md", "prose only\n")
+    _pushed(git, repo)
+    git(repo, "remote", "add", "origin", "https://example.invalid/app.git")
+    git(repo, "branch", "--set-upstream-to=origin/main")  # cut from master: @{u} is not the PR head
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    assert arm_review.check(arm) is None  # origin/work holds HEAD; a prose diff needs no review
+
+    def boom(*a, **k):
+        raise ValueError("lanes.toml: duplicate lane")
+
+    monkeypatch.setattr(ship, "needs_review", boom)
+    assert "could not be checked" in arm_review.check(arm).reason
+
+
+def test_operator_bounds_reads_shapes_not_mentions(repo, tmp_path):
+    for command in (
+        "Write-Output $env:CLAUDECODE",
+        "Get-ChildItem Env:CLAUDE*",
+        "Remove-Item C:/Users/me/AppData/Local/Temp/claude/proj/scratchpad/out.json",
+        "Get-Content \"$env:USERPROFILE/.claude/settings.json\"",
+        "git commit -m 'operator_bounds: refuse env -i'",
+    ):
+        assert operator_bounds.check(_evt("PowerShell", {"command": command})) is None, command
+    py = {"file_path": f"{tmp_path}/launcher.py", "content": "os.environ.update(env)\n# the harness exports CLAUDECODE=1\n"}
+    assert operator_bounds.check(_evt("Write", py)) is None
+    script = {"file_path": f"{tmp_path}/tests/u.ps1", "content": "Remove-Item Env:CLAUDECODE; rails used 75 walked\n"}
+    assert operator_bounds.check(_evt("Write", script))  # a shell script under tests/ is still a script
+    pyset = {"file_path": f"{tmp_path}/u.py", "content": "os.environ.pop('CLAUDECODE')\n"}
+    assert operator_bounds.check(_evt("Write", pyset))
+
+
+def test_operator_bounds_judges_store_names_only_where_a_database_is_reached(repo):
+    (repo / "rails").mkdir()
+    (repo / "rails" / "leak.toml").write_text('[guard]\nnames = ["house-db-1", "house_db"]\n', encoding="utf-8")
+    cwd = str(repo)
+    assert operator_bounds.check(_evt("Bash", {"command": "rg -n house_db scripts/"}, cwd=cwd)) is None
+    assert operator_bounds.check(_evt("Bash", {"command": "git log -S house_db --oneline"}, cwd=cwd)) is None
+    fleet = {"file_path": f"{cwd}/scripts/fleet.py", "content": 'DATABASE = "house_db"\n'}
+    assert operator_bounds.check(_evt("Write", fleet, cwd=cwd)) is None
+    assert operator_bounds.check(_evt("Bash", {"command": "psql -h 127.0.0.1 -d house_db -c 'select 1'"}, cwd=cwd))
+
+
+def test_milestone_close_judges_the_writing_statement_only(tmp_path):
+    cwd = str(tmp_path)
+    for command in (
+        "gh api repos/o/r/milestones/75; gh issue list --milestone 75 --state closed",
+        "gh api repos/o/r/milestones/75 --jq 'select(.state==\"closed\")'",
+    ):
+        assert milestone_close.check(_evt("Bash", {"command": command}, cwd=cwd)) is None, command
+    (tmp_path / "c.json").write_text('{"state": "closed"}', encoding="utf-8")
+    unread = "gh api repos/o/r/milestones/75 -X PATCH --input $env:TEMP/c.json"
+    assert milestone_close.check(_evt("PowerShell", {"command": unread}, cwd=cwd))  # cannot read it: fail closed
+
+
+def test_allow_edit_sees_powershell_copy_aliases():
+    assert allow_edit.check(_evt("PowerShell", {"command": "copy $env:TEMP/a.toml rails/leak_allow.toml"}, agent_id="s"))
+    assert allow_edit.check(_evt("Bash", {"command": "rm rails/leak.toml"}, agent_id="s"))
+
+
+def test_test_filter_sees_every_way_to_set_addopts():
+    for command in (
+        "Set-Item Env:PYTEST_ADDOPTS '--deselect tests/a.py::t'; uv run pytest",
+        "[Environment]::SetEnvironmentVariable('PYTEST_ADDOPTS','--deselect tests/a.py::t'); uv run pytest",
+        "timeout 600 pytest -k 'not slow'",
+        "python3.12 -m pytest -k 'not slow'",
+    ):
+        assert test_filter.check(_evt("PowerShell", {"command": command})), command
+
+
+def test_the_push_check_takes_the_merge_base_of_the_pushed_commit(repo, commit, git, monkeypatch):
+    """Trunk took the same change since: from HEAD's merge-base the diff is empty, from the
+    pushed commit's it is the code change the review must cover."""
+    _rows(monkeypatch, names=("prepush_hold", "prepush_marker", "prepush_retired", "prepush_leak", "ship_review"))
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: True)
+    rid = store.find_repo(repo)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    git(repo, "checkout", "-q", "-b", "trunk", "origin/main")
+    commit(repo, "src/a.py", "x = 1\n", "trunk took the same change")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "checkout", "-q", "--detach", "origin/main")
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 1 and any("open PR" in m for m in msgs)
+
+
+def test_open_pr_reads_a_gh_failure_as_open(repo, monkeypatch):
+    import shutil
+    import subprocess as sp
+
+    rid = store.find_repo(repo)
+    monkeypatch.setattr(shutil, "which", lambda name: "gh")
+
+    def gh(stderr):
+        return lambda *a, **k: sp.CompletedProcess(a[0], 1, "", stderr)
+
+    monkeypatch.setattr(githooks.subprocess, "run", gh("no pull requests found for branch \"work\""))
+    assert githooks.open_pr(rid, "work") is False
+    monkeypatch.setattr(githooks.subprocess, "run", gh("HTTP 401: Bad credentials"))
+    assert githooks.open_pr(rid, "work") is True  # unknown: the full marker and the review are asked
+
+
+def test_a_corrected_intent_is_not_acked_even_if_marked_shown(repo):
+    from rails.dispatch import dispatch
+    from rails.gates import prompt_words
+
+    (repo / ".rails").mkdir()
+    (repo / ".rails" / "intent.md").write_text("# build the export\n", encoding="utf-8")
+    rid = store.find_repo(repo)
+    h = intent.current_hash(repo)
+    import time as _t
+
+    intent.update(rid, hash=h, shown_at=int(_t.time()) - 60, corrected_hash=h)  # an older stamp
+    row = GateRow(name="prompt_words", module="prompt_words", events=["UserPromptSubmit"], mode="enforce")
+    evt = Event(name="UserPromptSubmit", payload={"hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+                                                  "session_id": "s", "prompt": "ok"})
+    dispatch(evt, [row])
+    assert not intent.acked(rid, repo)
+    assert prompt_words.NAME == "prompt_words"
+
+
+def test_a_python_test_file_may_plant_the_marker_code():
+    planted = {"file_path": "C:/r/tests/test_bounds.py", "content": "os.environ.pop('CLAUDECODE')\n"}
+    assert operator_bounds.check(_evt("Write", planted)) is None

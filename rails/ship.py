@@ -104,8 +104,9 @@ def is_prose(path: str) -> bool:
     return "/" not in path and name.startswith(("README", "CHANGELOG", "LICENSE"))
 
 
-def needs_review(top: Path, base_ref: str | None) -> bool:
-    """A diff that changes anything but prose gets the two-voice review."""
+def needs_review(top: Path, base_ref: str | None, rev: str = "HEAD") -> bool:
+    """A diff that changes anything but prose gets the two-voice review. ``rev`` is the commit
+    judged: HEAD for ship and arming, the pushed sha at pre-push (review of 1.3.0)."""
     from rails.check import find_lanes_file
     from rails import lanes as lanes_mod
     from rails.gitutil import changed_files, merge_base
@@ -115,11 +116,11 @@ def needs_review(top: Path, base_ref: str | None) -> bool:
         base_ref = lanes_mod.load(lanes_file).base if lanes_file else None
     base_sha = None
     for ref in (base_ref, "origin/HEAD", "origin/main", "origin/master"):
-        if ref and (base_sha := merge_base(top, ref)):
+        if ref and (base_sha := merge_base(top, ref, rev)):
             break
     if not base_sha:
         return True
-    return any(not is_prose(p) for p in changed_files(top, base_sha))
+    return any(not is_prose(p) for p in changed_files(top, base_sha, rev))
 
 
 def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | None = None) -> bool:
@@ -130,7 +131,7 @@ def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | No
 
     if not needs_review(top, base_ref):
         return True
-    text = review.arming_problem(review.latest_for_tree(repo, tree(top)))
+    text = review.arming_problem(review.covering(repo, top, "HEAD"))
     if text is None:
         return True
     if _shadowed("ship_review"):
@@ -174,7 +175,7 @@ def compose_body(
         from rails import review
         from rails.gitutil import tree, toplevel
 
-        line = review.summary_line(review.latest_for_tree(repo, tree(toplevel(repo.top))))
+        line = review.summary_line(review.covering(repo, toplevel(repo.top), "HEAD"))
     except Exception:  # noqa: BLE001 - the body must not fail to compose over a summary line
         line = ""
     if line:
@@ -213,6 +214,13 @@ def ship(
             file=out,
         )
         return 1
+    # A re-ship of the same branch's open PR rewrites its body; what the first ship said
+    # (Closes lines, Detected-by, an explicit body) is carried, never dropped (review of 1.3.0).
+    prev = store.read_json(repo.leaf_dir / "pr.json", None)
+    if isinstance(prev, dict) and prev.get("state", "OPEN") == "OPEN" and prev.get("branch") == branch(top):
+        closes = list(dict.fromkeys([*(str(c) for c in prev.get("closes", [])), *closes]))
+        detected_by = detected_by or prev.get("detected_by")
+        body = body or str(prev.get("body", ""))
     data = work.load(repo)
     unverified = [i["id"] for i in data["items"] if i.get("status") == "unverified"]
     if unverified and closes:
@@ -341,6 +349,9 @@ def ship(
             "sha": sha,
             "monitor": "unbound",
             "at": int(time.time()),
+            "closes": closes,
+            "detected_by": detected_by,
+            "body": body,
         },
     )
     if len(closes) == 1:

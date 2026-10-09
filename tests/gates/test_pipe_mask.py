@@ -168,3 +168,20 @@ def test_operator_environment_override_allows(verdict, monkeypatch):
 
 def test_non_shell_tools_are_untouched(verdict):
     assert verdict(pipe_mask, OBSERVED_PYTEST, tool="Read") == "allow"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "timeout 900 uv run pytest -q ci/ 2>&1 | tail -40",
+        "env PYTHONUTF8=1 uv run pytest -q | tail -5",
+        "nice pytest -q | tail",
+        "py -3 -m pytest | tail",
+        "python -X utf8 -m pytest | tail",
+        "xvfb-run pytest | grep passed",
+        "coverage run -m pytest | tail",
+    ],
+)
+def test_a_wrapper_still_runs_pytest(command):
+    """jarvis's copy caught these by the bare word; jarvis now relies on this one (1.3.0)."""
+    assert pipe_mask._STATUS_BEARING.search(command)

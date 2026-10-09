@@ -100,13 +100,16 @@ def check(evt: Event):
             and st.get("hash") == h
             and st.get("shown_at")
             and st.get("acked_hash") != h
+            and st.get("corrected_hash") != h
         ):
             if now - int(st.get("shown_at", 0)) < 5:
                 pass  # <5 s after showing: a relay or an automation, not a read
             elif intent.classify(prompt) == "changes":
                 # Void the shown state too: otherwise the operator's NEXT message ("how is it
                 # going?") acked the very intent they had just corrected (review of 1.3.0).
-                intent.update(repo, acked_hash="", acked_at=0, shown_at=0, rewrite_requested=now)
+                intent.update(
+                    repo, acked_hash="", acked_at=0, shown_at=0, corrected_hash=h, rewrite_requested=now
+                )
                 notices.append(
                     "rails: that message changes what is built. Rewrite .rails/intent.md before any edit, "
                     "and end the turn showing it with its new marker."

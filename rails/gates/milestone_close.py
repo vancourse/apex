@@ -9,8 +9,10 @@ for it (``gh api`` sends POST when given fields); the state inline, in an ``--in
 or piped into ``--input -`` (``cat f |``, ``Get-Content f |``, ``< f``). Piping from a
 source it cannot read is refused too: write the body to a file and name it.
 
-Still allowed: reading a milestone (``-X GET``, or no state field), listing closed ones
-(``milestones?state=closed``), and changing a title or description (an operator correction is
+Only a statement that writes is judged (a write method, or a body: gh's field flags and
+``--input``, curl's data flags), so reads are allowed: ``-X GET``, a plain ``gh api`` with a
+``--jq`` that mentions "closed", listing closed ones (``milestones?state=closed``), and a
+``--state closed`` in another statement. Changing a title or description is allowed too (an operator correction is
 written into the milestone description, and that goes through this API). What it cannot see:
 a request built in a script file, or a closed state assembled at run time. Shadow-first, like
 every new deny.
@@ -27,6 +29,14 @@ NAME = "milestone_close"
 
 _MILESTONE = re.compile(r"milestones/(\S+)")
 _GET = re.compile(r"(?:-X|--method)[=\s]+['\"]?GET\b", re.IGNORECASE)
+#: A statement that writes: an explicit write method, or a body (gh's field flags and --input,
+#: curl's data flags). Without one, `gh api` and curl send GET - a `--jq` that mentions
+#: "closed" is a read (review of 1.3.0).
+_WRITES = re.compile(
+    r"(?:-X|--method|--request)[=\s]+['\"]?(?:PATCH|POST|PUT)\b|['\"](?:PATCH|POST|PUT)['\"]|"
+    r"\s(?:-f|-F|--field|--raw-field|--input|-d|--data(?:-raw|-binary|-urlencode)?|--json)(?=[\s=])",
+    re.IGNORECASE,
+)
 _CLOSED = re.compile(r"state\W{0,6}closed\b", re.IGNORECASE)
 _INPUT = re.compile(r"--input[=\s]+['\"]?([^\s'\"]+)")
 _STDIN_SOURCE = re.compile(
@@ -54,17 +64,31 @@ def _input_closes(evt: Event, command: str) -> bool:
             if any(_reads_closed(evt, s) is not False for s in sources):
                 return True
             continue
-        if _reads_closed(evt, name):
+        if _reads_closed(evt, name) is not False:  # unreadable (`$env:TEMP\\c.json`): fail closed
             return True
     return False
 
 
+def _statements(evt: Event, command: str) -> list[str]:
+    from rails.shell import segments
+
+    try:
+        return segments(command, evt.shell or "bash") or [command]
+    except Exception:  # noqa: BLE001
+        return [command]
+
+
 def check(evt: Event):
     command = evt.command or ""
-    m = _MILESTONE.search(command)
-    if not m or _GET.search(command):
+    if "milestones/" not in command:
         return None
-    if _CLOSED.search(command) or _input_closes(evt, command):
+    for statement in _statements(evt, command):
+        m = _MILESTONE.search(statement)
+        if not m or _GET.search(statement) or not _WRITES.search(statement):
+            continue
+        # a pipe feeding `--input -` lives in the same statement, so the source is found
+        if not (_CLOSED.search(statement) or _input_closes(evt, statement)):
+            continue
         n = m.group(1).strip("'\")")
         n = n if n.isdigit() else "<n>"
         return Deny(

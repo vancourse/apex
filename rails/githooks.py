@@ -9,8 +9,11 @@ repo's own hooks (the hazard of a single-directory hooks setting).
 pre-push refuses, in order:
   * ``hold`` (the operator's word, set from a prompt or ``rails hold``);
   * a ref carrying history the repo rewrote away (``rails history retire``);
+  * no acked intent, for an agent's push (``prepush_intent``);
   * no check marker for the pushed commit: ``--quick`` while the branch has no
-    open PR, the full marker once one exists;
+    open PR, the full marker once one exists (a gh error reads as open);
+  * a code tree pushed to an open PR - which may be armed - with no review receipt
+    covering it, or one with open must-fix items (``ship_review``);
   * the leak check: a value matched (3) or no fresh snapshot (4). Fails closed.
 Every pushed ref is judged by its remote ref and sha, whatever the source was
 spelled as (``HEAD:x`` and a raw sha used to skip the marker and leak checks).
@@ -109,7 +112,9 @@ def open_pr(repo: store.RepoId, branch: str) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     if done.returncode != 0:
-        return False
+        # "no pull requests found" is a clean no; any other failure is unknown, and unknown is
+        # treated as open: the full marker and the review are asked (review of 1.3.0).
+        return "no pull requests found" not in (done.stderr or "").lower()
     try:
         return json.loads(done.stdout).get("state") == "OPEN"
     except ValueError:
@@ -195,12 +200,11 @@ def review_refusal(repo: store.RepoId, sha: str, refusal) -> None:
     armed - needs the pushed tree's review, the same check arming makes. Fails closed.
     """
     from rails import review, ship
-    from rails.gitutil import tree
 
     try:
-        if not ship.needs_review(repo.top, None):
+        if not ship.needs_review(repo.top, None, rev=sha):
             return
-        problem = review.arming_problem(review.latest_for_tree(repo, tree(repo.top, sha)))
+        problem = review.arming_problem(review.covering(repo, repo.top, sha))
     except Exception as exc:  # noqa: BLE001 - fail closed
         refusal("ship_review", f"rails: refused - the review receipt could not be checked ({type(exc).__name__})")
         return

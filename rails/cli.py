@@ -189,26 +189,21 @@ def cmd_retire_hook(argv: list[str]) -> int:
 _OPERATOR_WORDS = ("used", "approve", "release")
 
 
-def _interactive() -> bool:
-    """The operator's own terminal: stdin is a TTY. An agent's tool call has none.
-
-    `CLAUDECODE` alone is not enough - the agent's own command can clear it
-    (`Remove-Item Env:CLAUDE*`, `unset ${!CLAUDE@}`, a script) - so the operator's words
-    also need a terminal the agent does not have (review of 1.3.0).
-    """
-    try:
-        return sys.stdin is not None and sys.stdin.isatty()
-    except (AttributeError, ValueError, OSError):
-        return False
-
-
 def cmd_words(word: str, argv: list[str]) -> int:
+    """The operator's words from a shell. Recorded `by: shell`, and weaker than the prompt's.
+
+    Nothing a command line carries tells the operator's terminal from an agent's tool call:
+    `CLAUDECODE` can be cleared by the agent's own command, and stdin reports a TTY inside an
+    agent's Bash and PowerShell calls on Windows (measured 2026-10-08). So `rails close`
+    honours only a `used` the operator typed in a prompt, and a hold set in a prompt is
+    lifted only by `release` in a prompt (review of 1.3.0).
+    """
     from rails.gitutil import in_agent
 
-    if word in _OPERATOR_WORDS and (in_agent() or not _interactive()):
+    if word in _OPERATOR_WORDS and in_agent():
         print(
-            f"rails {word} is the operator's word: they type `{word} ...` in a prompt or run it in their own "
-            "terminal. An agent recording it would forge the receipt it exists to be."
+            f"rails {word} is the operator's word: they type `{word} ...` in a prompt. An agent recording it "
+            "would forge the receipt it exists to be."
         )
         return 2
     repo = _repo_or_die()
@@ -221,7 +216,11 @@ def cmd_words(word: str, argv: list[str]) -> int:
                 "by": "shell",
             }
         elif word == "release":
-            state["hold"] = {"on": False, "since": "", "lifted": now}
+            hold = state.get("hold") if isinstance(state.get("hold"), dict) else {}
+            if hold.get("on") and hold.get("by") == "prompt":
+                print("rails: the hold was set in a prompt; the operator lifts it with `release` in a prompt")
+                return 2
+            state["hold"] = {"on": False, "since": "", "lifted": now, "by": "shell"}
         elif word == "used":
             # `#75` is a comment in both shells, so the number is typed bare here.
             if not argv or not argv[0].lstrip("#").isdigit():

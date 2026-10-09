@@ -84,6 +84,33 @@ and verification goes through.
 - `rails check --post` does not post lane statuses after a RED check; hook-removal counts JS/TS
   scripts.
 
+### Fixed (third two-voice review, 8 + 6 must-fixes, 3 shared; and the jarvis branch's review)
+- **The operator's words come from the prompt.** Measured on this box: an agent's Bash and
+  PowerShell tool calls report a TTY on stdin, so the terminal check added in the second round
+  proved nothing and is removed. `rails close` honours only a `used` recorded from a prompt; a hold
+  set in a prompt lifts only by `release` in a prompt; `rails used` from a shell is kept as
+  `by: shell`, for the record.
+- The push check judges the pushed commit's own diff, not HEAD's; `arm_review` refuses a detached
+  HEAD, counts `origin/<branch>` or the upstream as pushed, reads GraphQL bodies from `--input`
+  files, pipes and variables, and refuses when it cannot check. A review receipt covers a later
+  tree that differs only in prose, so a docs commit does not need the voices again.
+- The must-fix count takes the reviewer's last JSON object (a quoted `{"must_fix": []}` before it
+  no longer wins), counts `###` items and bold numbered items under a must-fix heading, and reads
+  "Must-fix: none" as zero.
+- A re-ship keeps the first ship's `Closes` lines, `Detected-by` and body.
+- A corrected intent re-shown unchanged is not acked; the Stop hook asks for the rewrite.
+- `operator_bounds` judges command words and code shapes: reading the marker, a `.claude` path,
+  `os.environ.update(env)` or a docstring are not refused; a shell script (also under tests/) is
+  read line by line. Store names are judged only in a statement that reaches a database
+  (`psql`, `docker`, a driver, a DSN), so `rg <name>` and an edit to fleet config are not refused.
+- `pipe_mask` catches pytest behind `timeout`, `env`, `nice`, `xvfb-run`, `coverage run` and
+  python flags before `-m`, which jarvis's copy caught and the port had dropped.
+- `rails claim` holds an issue in one worktree at a time, and a worktree that switches branch
+  keeps its claim (jarvis #2599), as jarvis's `claim.py` does: the two writers of the store agree.
+- `milestone_close` judges only the statement that writes, and refuses an `--input` file it
+  cannot read; `test_filter` reads `Set-Item Env:` and `SetEnvironmentVariable`, and `timeout`,
+  `coverage` and `python3.x` as runners; `allow_edit` counts deletes and PowerShell's copy aliases.
+
 ## [1.2.1] — 2026-10-07
 
 ### Fixed

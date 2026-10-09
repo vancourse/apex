@@ -30,6 +30,11 @@ def check(evt: Event):
     if evt.payload.get("stop_hook_active") or st.get("blocked_hash") == h:
         return None
     intent.update(repo, blocked_hash=h)
+    if st.get("corrected_hash") == h:
+        return Block(
+            "rails: the operator corrected this intent and .rails/intent.md has not changed. Rewrite it with "
+            "their correction, then end the turn showing the new text and its new marker."
+        )
     return Block(
         "rails: .rails/intent.md changed and the operator has not seen it. End this turn by SHOWING it: "
         f"paste the intent block into your final message with the line `{intent.marker(h)}` so they can read it "
