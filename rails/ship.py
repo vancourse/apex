@@ -123,21 +123,42 @@ def needs_review(top: Path, base_ref: str | None, rev: str = "HEAD") -> bool:
     return any(not is_prose(p) for p in changed_files(top, base_sha, rev))
 
 
-def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | None = None) -> bool:
+def _review_problem(
+    repo: store.RepoId, top: Path, base_ref: str | None = None, number: int | None = None
+) -> str | None:
+    """Why HEAD's tree may not arm for want of a review, or None. The base is the remote's
+    copy (`origin/<base>`): a stale local `master` would count other PRs' code as this one's."""
+    from rails import review
+    from rails.gitutil import git
+
+    if base_ref and not base_ref.startswith("origin/"):
+        remote = f"origin/{base_ref}"
+        if git(top, "rev-parse", "--verify", "-q", remote, check=False).strip():
+            base_ref = remote
+    if not needs_review(top, base_ref):
+        return None
+    return review.arming_problem(review.covering(repo, top, "HEAD"), repo, number)
+
+
+def _review_allows_arming(
+    repo: store.RepoId, top: Path, out, base_ref: str | None = None, number: int | None = None
+) -> bool:
     """`ship_review`: a code diff arms only with a review of HEAD's tree and no open must-fix (R26)."""
     from rails import review
     from rails.githooks import _log, _shadowed
     from rails.gitutil import tree
 
-    if not needs_review(top, base_ref):
-        return True
-    text = review.arming_problem(review.covering(repo, top, "HEAD"))
+    text = _review_problem(repo, top, base_ref, number)
     if text is None:
         return True
     if _shadowed("ship_review"):
+        # Logged as the shadow week asks, and still not armed: the disarm (p2) acts in the
+        # shadow week, so an unreviewed arm here would be undone by this ship's own
+        # `post()`, or merge first if the commit's statuses were already green.
         _log(repo, "ship_review", "would-deny")
         print(f"  [rails shadow: ship_review would refuse to arm] {text}", file=out)
-        return True
+        print("  not arming: no review covers this tree, and the disarm acts this week too", file=out)
+        return False
     print(f"rails ship: {text}", file=out)
     return False
 
@@ -332,8 +353,9 @@ def ship(
         except GitError as exc:
             print(f"  could not refresh the PR body: {exc}", file=out)
     armed = False
-    if arm and not _review_allows_arming(repo, top, out, base):
-        arm = False
+    declined = False
+    if arm and not _review_allows_arming(repo, top, out, base, number):
+        arm, declined = False, True
         print("  not arming (the reason is above); `rails ship` again arms it once the review allows", file=out)
     if arm:
         done = subprocess.run(
@@ -347,6 +369,15 @@ def ship(
         armed = done.returncode == 0
         if not armed:
             print(f"  could not arm auto-merge: {done.stderr.strip()[:300]}", file=out)
+    from rails.githooks import hold_pr, release_pr_hold
+
+    if armed:
+        release_pr_hold(repo, number)
+    elif _review_problem(repo, top, base, number):
+        # Held until a review covers the tree, `--no-arm` or not: a hand `gh pr merge --auto`
+        # must not arm what this ship would not (`rearm_disarmed`).
+        hold_pr(repo, number, sha, "rails ship found no review covering its tree", br)
+    current = store.read_json(repo.leaf_dir / "pr.json", None)
     store.write_json(
         repo.leaf_dir / "pr.json",
         {
@@ -355,6 +386,12 @@ def ship(
             "branch": br,
             "state": "OPEN",
             "armed": armed,
+            # The disarm's mark survives a ship of the same PR that did not arm, so a hand
+            # re-arm stays refused (`rearm_disarmed`); a ship that arms (reviewed) clears it,
+            # and another PR never inherits it.
+            "disarmed_by": current.get("disarmed_by")
+            if isinstance(current, dict) and not armed and str(current.get("number")) == str(number)
+            else None,
             "sha": sha,
             "monitor": "unbound",
             "at": int(time.time()),
@@ -377,6 +414,8 @@ def ship(
     print(f"rails ship: PR #{number} {url}", file=out)
     if arm:
         print("  armed: auto-squash" if armed else "  NOT armed (see above)", file=out)
+    elif declined:
+        print("  NOT armed: no review covers this tree; review, record, then `rails ship` again", file=out)
     else:
         print("  not armed (--no-arm): it waits for a named outside step; say which in the PR body", file=out)
     print(

@@ -12,7 +12,63 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   body, and prints how to re-arm (the two reviewers, `rails review record`, then `rails ship`). It
   acts whether `ship_review` only logged the push (shadow) or the operator pushed with
   `RAILS_OPERATOR=1`; a prose-only push the receipt still covers leaves the PR armed. A body it could
-  not read is never rewritten. (morphyxAI/jarvis#2621)
+  not read is never rewritten. It judges the PR this worktree armed, and acts only on a push to
+  `origin` that the chained hook accepted. `rails check --post` disarms too (a `--no-verify` push
+  skipped the hook), judging the pushed head. `rails ship` does not arm a tree no review covers, in
+  the shadow week too: the disarm would undo it, or the PR could merge first. It judges the review
+  against `origin/<base>`, not a stale local branch. The PR body is read and written as UTF-8, and
+  `gh pr merge N --disable-auto`, the disarm's own remedy, is never refused as a merge
+  (`merge_by_effect`). (morphyxAI/jarvis#2621)
+- **`rearm_disarmed` (new gate, enforced from the start):** a PR is held when a push no review covers
+  lands on it (armed or not; the hold is written before the disarm, so a failed disarm still holds),
+  or when `rails ship` found no review covering its tree. The hold is kept per PR number, with its
+  branch, in the repo's shared state. An arm or a direct `gh pr merge` of a held PR (by number, by
+  branch, or with no selector in that branch's folder) is refused from a folder that does not hold it,
+  on another branch, or until a review covers the pushed head. A command that changes folder in a way
+  rails cannot follow (`cd "$WT"`) must then name the PR by number. A reviewed arm, or the PR leaving
+  OPEN, releases it. `arm_review` only logs until 2026-10-15, and a hand re-arm undid the disarm.
+  `arm_review` trusts `pr.json`'s PR number only on the branch it was opened from.
+  (morphyxAI/jarvis#2621)
+
+### Fixed (the holes the 1.3.0 review left open, morphyxAI/jarvis#2622)
+- **An agent's `--accept` no longer arms (p3b).** A review receipt whose open must-fixes an agent
+  accepted arms only after the operator's own prompt says `accept #<pr> <tree>` for that PR and the
+  receipt's tree (its first 7 or more hex digits), after the receipt. The operator's own accept arms
+  as before. New prompt word: `accept #<pr> <tree>`.
+- **Walk receipts are bound to their tree and their line of work (p3c, p3d).** `rails work done` and
+  `turn_end` count a walk only for this worktree's code tree (or one that differs only in prose) and
+  this line of work (the claim's branch, its first item, and when it was first claimed, pinned the
+  first time it is read: adding an issue keeps it, with jarvis's `claim.py` too). A later line reusing
+  `step: a1` does not inherit it. `rails walk` refuses a dirty tree.
+- **Launchers and `gh` aliases are judged as their plain form (p3e).** The shared command parser
+  unwraps `env ...`, `cmd /c`, `bash -c`/`pwsh -c "..."`, `Start-Process ... -ArgumentList`, and
+  `gh <alias>` from gh's own config, with its `$1`... filled in. The launcher's own words are still
+  judged too. Launchers nested past eight deep are refused; a script's own `-c` is its argument.
+  `bash -lc`, `bash -o pipefail -c` and `powershell -NoProfile -ExecutionPolicy Bypass -Command` are
+  unwrapped too.
+- **`arm_review` judges the PR it arms (p3f).** `gh pr merge N --auto` for a PR headed by another
+  worktree's branch, or one whose head cannot be read, is refused. This worktree's `pr.json` naming N,
+  or GitHub saying this branch heads it, lets it through. A PR URL is judged as its number; no
+  selector, as this worktree's PR. An arm after `cd <worktree>` (a Git Bash `/c/...` path too) is
+  judged for that worktree, and a branch selector naming another branch is refused.
+- **`pr.json` follows the PR (p3g).** Any `rails` command re-reads an OPEN record's state (at most
+  once a minute); a merged or closed PR stops reading OPEN, and `armed` is cleared. A `gh` that
+  hangs (10 s) or fails is remembered for the minute too.
+- **A GraphQL read is judged by the body it reads (p3h).** An `--input` file that exists, also after a
+  `cd`, is read; a body that cannot be read is refused naming the path, instead of being judged an arm
+  (and stamping the PR armed). A body in a heredoc or piped from `echo` is read from the command; a
+  file fed in (`< q.json`) is read even when an echo or a heredoc sits elsewhere in the command.
+- **The intent ack works from the main folder (p3i).** A session started in the main checkout that
+  shows a worktree's intent stamps that worktree, and its next human message acks it there, while
+  that intent is still the one it showed, whether or not the main folder has an intent of its own.
+- **A milestone close from a script file is refused (p3j).** `python x.py`, `bash x.sh`, `pwsh -File
+  x.ps1`, `./x.sh`, `uv run x.py` and `uv run [--with ...] python[3] x.py` are judged by the
+  script's text. A test file, a script handed to `python -m tool`, and a read that assigns `data =`,
+  are not a close.
+- **A receipt's own fields win.** `kind`, `ts`, `leaf` and `via_agent` are written after the caller's
+  fields, so a caller cannot pass its own.
+
+Not yet: p3a (marking the shadow week's `would-deny` rows, which ends 2026-10-15).
 
 ## [1.3.0] — 2026-10-08
 

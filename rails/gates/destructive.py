@@ -145,16 +145,154 @@ def pipeline_stages(tokens: list[str]) -> list[list[str]]:
     return [stage for stage in stages if stage]
 
 
-def commands(command: str, shell: str) -> list[tuple[str, list[str]]]:
+def commands(command: str, shell: str, _depth: int = 0) -> list[tuple[str, list[str]]]:
     """`(statement text, command words)` for every pipeline stage of every
-    statement — the unit the tokenised gates judge."""
+    statement — the unit the tokenised gates judge. A command reached through a
+    launcher or a `gh` alias is judged as its plain form (p3e): `env ... cmd`,
+    `cmd /c cmd`, `bash -c "cmd"`, `pwsh -c "cmd"`, `Start-Process cmd
+    -ArgumentList ...`, and `gh <alias>` from gh's own config."""
     found: list[tuple[str, list[str]]] = []
     for segment in segments(command, shell):
         for stage in pipeline_stages(words(segment, shell)):
             tokens = command_words(stage)
             if tokens:
+                # The launcher's own words stay judged too (`env -u CLAUDECODE ...` is
+                # operator_bounds' business); the command it runs is added beside them.
                 found.append((segment, tokens))
+                found.extend((segment, t) for t in _launched(tokens, _depth) if t != tokens)
     return found
+
+
+_SHELL_STRING = {
+    "bash": ("bash", ("-c",)),
+    "sh": ("bash", ("-c",)),
+    "zsh": ("bash", ("-c",)),
+    "pwsh": ("powershell", ("-c", "-command")),
+    "powershell": ("powershell", ("-c", "-command")),
+}
+#: Shell options that take a value, so the value is not where the command starts.
+_SHELL_VALUED = {
+    "bash": frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}),
+    "powershell": frozenset(
+        {"-executionpolicy", "-ep", "-ex", "-windowstyle", "-w", "-workingdirectory", "-wd", "-version",
+         "-inputformat", "-if", "-outputformat", "-of", "-configurationname", "-psconsolefile", "-settingsfile"}
+    ),
+}
+_START = frozenset({"start-process", "saps", "start"})
+#: The command a launcher nest too deep to judge stands for; `destructive` refuses it.
+TOO_DEEP = "rails-launchers-nested-too-deep"
+
+
+def _launched(tokens: list[str], depth: int) -> list[list[str]]:
+    """The command words a launcher runs, or ``[tokens]`` when it is not one."""
+    if not tokens:
+        return [tokens]
+    if depth > 8:
+        # Launchers nested past this are judged as one command no gate allows.
+        return [[TOO_DEEP]]
+    name = command_name(tokens[0])
+    rest = tokens[1:]
+    if name == "env":
+        i = 0
+        while i < len(rest) and (rest[i].startswith("-") or re.match(r"^[A-Za-z_]\w*=", rest[i])):
+            i += 2 if rest[i] in ("-u", "--unset", "-C", "--chdir") else 1
+        return _launched(rest[i:], depth + 1) if rest[i:] else [tokens]
+    if name == "cmd":
+        for i, tok in enumerate(rest):
+            if tok.lower() in ("/c", "/k"):
+                inner = rest[i + 1 :]
+                if len(inner) == 1:
+                    return [c for _, c in commands(inner[0], "bash", depth + 1)] or [tokens]
+                return _launched(inner, depth + 1) if inner else [tokens]
+        return [tokens]
+    if name in _SHELL_STRING:
+        inner_shell, flags = _SHELL_STRING[name]
+        valued = _SHELL_VALUED[inner_shell]
+        i = 0
+        while i < len(rest) - 1:
+            tok = rest[i]
+            # `bash -lc`, `sh -ec`: a cluster of short options that holds c
+            if tok.lower() in flags or (inner_shell == "bash" and re.fullmatch(r"-[a-z]*c[a-z]*", tok)):
+                return [c for _, c in commands(rest[i + 1], inner_shell, depth + 1)] or [tokens]
+            if not tok.startswith(("-", "+")):
+                break  # `bash script.sh -c x`: -c is the script's argument
+            # `bash -o pipefail -c`, `powershell -ExecutionPolicy Bypass -Command`
+            i += 2 if (tok.lower() if inner_shell == "powershell" else tok) in valued else 1
+        return [tokens]
+    if name in _START:
+        target, args, i = "", [], 0
+        while i < len(rest):
+            tok = rest[i]
+            low = tok.lower()
+            if low in ("-filepath", "-file") and i + 1 < len(rest):
+                target, i = rest[i + 1], i + 2
+                continue
+            if low in ("-argumentlist", "-args") and i + 1 < len(rest):
+                args += [a for part in rest[i + 1].split(",") for a in part.split() if a]
+                i += 2
+                continue
+            if low.startswith("-"):
+                i += 2 if low in ("-workingdirectory", "-verb", "-windowstyle") else 1
+                continue
+            if not target:
+                target = tok
+            else:
+                args.append(tok)
+            i += 1
+        stripped = [a.strip("'\"") for a in args]
+        return _launched([target.strip("'\""), *stripped], depth + 1) if target else [tokens]
+    if name == "gh" and rest:
+        expansion = gh_aliases().get(rest[0])
+        if expansion is not None:
+            if expansion.startswith("!"):
+                return [c for _, c in commands(expansion[1:], "bash", depth + 1)] or [tokens]
+            words, extra = expansion.split(), list(rest[1:])
+            # gh substitutes $1..$9 with the arguments, then appends the rest.
+            used: set[int] = set()
+            for i, word in enumerate(words):
+                if len(word) == 2 and word[0] == "$" and word[1].isdigit():
+                    n = int(word[1]) - 1
+                    if 0 <= n < len(extra):
+                        words[i] = extra[n]
+                        used.add(n)
+            return [[tokens[0], *words, *(a for i, a in enumerate(extra) if i not in used)]]
+    return [tokens]
+
+
+def gh_aliases() -> dict[str, str]:
+    """`gh alias` definitions from gh's config file (``GH_CONFIG_DIR``, else the platform's
+    default). A tiny reader of the ``aliases:`` block, no YAML library: a value it cannot read
+    is skipped, never guessed."""
+    import os
+
+    candidates = []
+    if os.environ.get("GH_CONFIG_DIR"):
+        candidates.append(Path(os.environ["GH_CONFIG_DIR"]) / "config.yml")
+    if os.environ.get("APPDATA"):
+        candidates.append(Path(os.environ["APPDATA"]) / "GitHub CLI" / "config.yml")
+    candidates.append(Path.home() / ".config" / "gh" / "config.yml")
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        out: dict[str, str] = {}
+        inside = False
+        for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if not line.startswith((" ", "\t")):
+                inside = line.split(":", 1)[0].strip() == "aliases"
+                continue
+            if inside and ":" in line:
+                key, value = line.strip().split(":", 1)
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                    value = value[1:-1]
+                if key and value:
+                    out[key.strip()] = value
+        return out
+    return {}
 
 
 def command_name(token: str) -> str:
@@ -296,6 +434,8 @@ def _env_write(tokens: list[str]) -> bool:
 
 def _verdict(tokens: list[str], cwd: Path) -> str | None:
     """The original rule's label for the first rule this statement breaks."""
+    if tokens and tokens[0] == TOO_DEEP:
+        return "launchers nested too deep to judge what they run"
     if _rm_rf(tokens) or _ps_remove_recurse(tokens):
         return "rm -rf targeting root, home, or parent directory"
     if command_name(tokens[0]) == "git":

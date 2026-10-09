@@ -15,6 +15,8 @@ agent may add items, never remove them.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import re
 import time
 from typing import Any
@@ -60,15 +62,57 @@ def add(repo: store.RepoId, text: str, step: str = "") -> dict[str, Any]:
         return item
 
 
+def line_of_work(repo: store.RepoId) -> str:
+    """What this worktree is building: its claim (branch and items), else its branch. A walk
+    receipt carries it, so a later line reusing a step id cannot inherit the receipt (p3d)."""
+    from rails import claims
+    from rails.gitutil import git
+
+    claim = claims.mine(repo)
+    if claim is not None:
+        # The claim's creation stamp, not its items: adding an issue to the same line
+        # keeps its walks; a release and a new claim is a new line.
+        first = claim.items[0] if claim.items else claim.adhoc
+        return f"{claim.branch}|{claims.pinned_since(repo, claim)}|{first}"
+    return git(repo.top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+
+
+def walk_scope(repo: store.RepoId) -> dict[str, str]:
+    """The fields a walk receipt is bound by: the tree it walked and the line of work (p3c, p3d)."""
+    from rails.gitutil import tree
+
+    return {"tree": tree(repo.top), "line": line_of_work(repo)}
+
+
+def _covers(top: Path, walked: object, current: str) -> bool:
+    """A walk of ``walked`` stands for ``current`` when they are the same tree or differ only
+    in prose (the rule a review receipt follows: `review.covering`)."""
+    from rails.gitutil import git
+    from rails.ship import is_prose
+
+    if not isinstance(walked, str) or not walked:
+        return False
+    if walked == current:
+        return True
+    out = git(top, "diff", "--name-only", "--no-renames", walked, current, check=False)
+    names = [n for n in out.splitlines() if n.strip()]
+    return bool(names) and all(is_prose(n) for n in names)
+
+
 def passing_steps(repo: store.RepoId) -> set[str]:
-    """Step ids that passed in a sealed walk receipt with an allowed instrument."""
+    """Step ids that passed in a sealed walk receipt with an allowed instrument, walked on this
+    worktree's code tree (or one that differs only in prose) for this line of work. A receipt
+    from another tree or another line closes nothing (p3c, p3d)."""
     banned = ("fixture", "mock", "/dev/login", "standalone", "superuser")
+    scope = walk_scope(repo)
     ok: set[str] = set()
     for row in receipts.read(repo, "walk"):
         if not receipts.valid(row):
             continue
         instrument = str(row.get("instrument", ""))
         if any(b in instrument for b in banned):
+            continue
+        if row.get("line") != scope["line"] or not _covers(repo.top, row.get("tree"), scope["tree"]):
             continue
         for step in row.get("steps", []):
             if isinstance(step, dict) and step.get("pass"):

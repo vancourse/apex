@@ -117,11 +117,19 @@ def test_item_closes_only_on_a_passing_step(repo):
     ok, message = work.mark_done(rid, "a1")
     assert not ok and "no passing walk receipt" in message
     receipts.write(
-        rid, "walk", instrument="walk:fixture", steps=[{"step": "a1", "pass": True}]
+        rid,
+        "walk",
+        instrument="walk:fixture",
+        steps=[{"step": "a1", "pass": True}],
+        **work.walk_scope(rid),
     )
     assert not work.mark_done(rid, "a1")[0], "a fixture instrument cannot close an item"
     receipts.write(
-        rid, "walk", instrument="walk:planted", steps=[{"step": "a1", "pass": True}]
+        rid,
+        "walk",
+        instrument="walk:planted",
+        steps=[{"step": "a1", "pass": True}],
+        **work.walk_scope(rid),
     )
     assert work.mark_done(rid, "a1")[0]
 
@@ -541,10 +549,21 @@ def _ship_fixture(repo, git, commit, monkeypatch):
     return rid, sha, calls
 
 
-def test_ship_opens_one_pr_through_the_api_and_arms_it(repo, git, commit, monkeypatch):
+def test_ship_opens_one_pr_through_the_api_and_arms_it(repo, git, commit, monkeypatch, tmp_path):
+    """A reviewed tree arms; an unreviewed one does not, shadow week or not (p2)."""
     import io
 
+    from rails import review
+
     rid, sha, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    monkeypatch.chdir(repo)
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    from rails import githooks
+
+    githooks.hold_pr(rid, 7, "earlier", "a push no review covers disarmed it")
     out = io.StringIO()
     code = ship.ship(repo, title="Export CSV — the summary", body="b", base=None, closes=["12"], out=out)
     assert code == 0, out.getvalue()
@@ -554,6 +573,7 @@ def test_ship_opens_one_pr_through_the_api_and_arms_it(repo, git, commit, monkey
     assert calls["merge"] == [["gh", "pr", "merge", "7", "--auto", "--squash"]]
     pr = store.read_json(rid.leaf_dir / "pr.json")
     assert pr["number"] == 7 and pr["armed"] is True and pr["sha"] == sha
+    assert "7" not in githooks.pr_holds(rid), "a reviewed arm releases the hold"
 
 
 def test_ship_no_arm_leaves_the_pr_unarmed(repo, git, commit, monkeypatch):
@@ -668,3 +688,268 @@ def test_a_reship_reads_the_current_intent_not_the_first_ones(repo, git, commit,
     assert ship.ship(repo, title="", body="", base="main", closes=[], arm=False, out=io.StringIO()) == 0
     patched = [c for c in calls["api"] if c[0] == "repos/acme/app/pulls/7" and c[1] == "PATCH"]
     assert "XLSX" in patched[-1][2]["body"] and "CSV" not in patched[-1][2]["body"]
+
+
+# --- p3c, p3d: a walk receipt is bound to its tree and its line of work ---------------
+
+
+def _walked(rid, step="a1"):
+    receipts.write(
+        rid,
+        "walk",
+        instrument="walk:planted",
+        steps=[{"step": step, "pass": True}],
+        **work.walk_scope(rid),
+    )
+
+
+def test_p3c_a_receipt_from_another_code_tree_closes_nothing(repo, commit):
+    rid = store.find_repo(repo)
+    work.add(rid, "export works", step="a1")
+    _walked(rid)
+    commit(repo, "docs/notes.md", "# notes\n")
+    assert work.mark_done(rid, "a1")[0], "a prose-only change keeps the walk"
+    work.add(rid, "import works", step="b1")
+    _walked(rid, step="b1")
+    commit(repo, "src/app.py", "x = 2\n")
+    ok, message = work.mark_done(rid, "b1")
+    assert not ok and "no passing walk receipt" in message
+
+
+def test_p3d_two_lines_of_work_do_not_share_a_receipt(repo):
+    rid = store.find_repo(repo)
+    assert claims.add(rid, "work", ["#1"])[0]
+    _walked(rid)
+    claims.release(rid)
+    assert claims.add(rid, "work", ["#2"])[0]
+    work.add(rid, "the second line's a1", step="a1")
+    ok, message = work.mark_done(rid, "a1")
+    assert not ok and "no passing walk receipt" in message
+
+
+# --- p3i: a session started in the main folder, working in a worktree --------------------
+
+
+def test_p3i_a_worktree_intent_is_shown_and_acked_from_the_main_folder(repo, git, tmp_path):
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "line", str(wt))
+    (wt / ".rails").mkdir()
+    (wt / ".rails" / "intent.md").write_text("# build the export\n", encoding="utf-8")
+    h = intent.current_hash(wt)
+    other = store.find_repo(wt)
+    stop = dispatch(
+        _evt("Stop", repo, transcript_path=_transcript(tmp_path, f"Intent:\n...\n{intent.marker(h)}")),
+        [_row("intent_shown", ["Stop"])],
+    )
+    assert not stop.blocks
+    assert intent.get(other).get("shown_at"), "the worktree's intent is stamped shown"
+    intent.update(other, shown_at=int(time.time()) - 60)
+    out = dispatch(
+        _evt("UserPromptSubmit", repo, prompt="looks right"), [_row("prompt_words", ["UserPromptSubmit"])]
+    )
+    assert intent.acked(other, wt), out.notices
+    assert not intent.acked(store.find_repo(repo), repo)
+
+
+# --- p1c: rails state prints every worktree's line of work ------------------------------
+
+
+
+# --- apex review round 1 ---------------------------------------------------------------
+
+
+def test_p2_ship_does_not_rearm_a_pr_its_push_disarmed(repo, git, commit, monkeypatch):
+    """`ship_review` only logs this week; a ship after the disarm must not undo it."""
+    import io
+
+    from rails import githooks
+    from rails.dispatch import GateRow
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    sha = commit(repo, "src/app.py", "x = 1\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    rows = {"ship_review": GateRow(name="ship_review", module="cli", events=["rails:ship"], mode="shadow")}
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN", "branch": "work", "disarmed_by": sha})
+    out = io.StringIO()
+    ship.ship(repo, title="t", body="b", base="main", closes=[], out=out)
+    assert calls["merge"] == [], out.getvalue()
+    pr = store.read_json(rid.leaf_dir / "pr.json")
+    assert pr["armed"] is False and pr["disarmed_by"] == sha
+
+
+def test_p3c_a_walk_over_a_dirty_tree_is_refused(repo, monkeypatch, capsys):
+    from rails import cli
+
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert cli.cmd_walk([]) == 2
+    assert "commit first" in capsys.readouterr().out
+
+
+def test_p3d_a_claim_that_grows_keeps_its_line(repo, monkeypatch):
+    rid = store.find_repo(repo)
+    assert claims.add(rid, "work", ["#1"])[0]
+    line = work.line_of_work(rid)
+    stamps = iter(["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-03T00:00:00Z"])
+
+    class _Later:
+        @staticmethod
+        def now(tz=None):
+            class _At:
+                def strftime(self, fmt):
+                    return next(stamps)
+
+            return _At()
+
+    monkeypatch.setattr(claims, "datetime", _Later)
+    assert claims.add(rid, "work", ["#2"])[0]
+    assert claims.add(rid, "work", ["#3"])[0]
+    assert work.line_of_work(rid) == line, "adding issues to the same line keeps its walks"
+    claims.release(rid)
+    assert claims.add(rid, "work", ["#1"])[0]
+    assert work.line_of_work(rid) != line, "a release and a new claim is a new line"
+
+
+def test_p3i_a_binding_acks_only_the_intent_that_session_showed(repo, git, tmp_path):
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "line2", str(wt))
+    (wt / ".rails").mkdir()
+    (wt / ".rails" / "intent.md").write_text("# first\n", encoding="utf-8")
+    h1 = intent.current_hash(wt)
+    dispatch(_evt("Stop", repo, transcript_path=_transcript(tmp_path, intent.marker(h1))), [_row("intent_shown", ["Stop"])])
+    (wt / ".rails" / "intent.md").write_text("# a later intent another session shows\n", encoding="utf-8")
+    other = store.find_repo(wt)
+    intent.update(other, hash=intent.current_hash(wt), shown_at=int(time.time()) - 60)
+    dispatch(_evt("UserPromptSubmit", repo, prompt="looks right"), [_row("prompt_words", ["UserPromptSubmit"])])
+    assert not intent.acked(other, wt), "this session showed h1, not the later intent"
+
+
+def test_p3_receipt_fields_cannot_overwrite_its_marker(repo, monkeypatch):
+    rid = store.find_repo(repo)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    row = receipts.write(rid, "review", via_agent=False, ts=0)
+    assert row["via_agent"] is True and row["ts"] > 0
+
+
+
+# --- apex review round 2 ---------------------------------------------------------------
+
+
+def test_p2_a_shadow_ship_of_an_uncovered_tree_does_not_arm(repo, git, commit, monkeypatch):
+    """The disarm acts this week; a ship that armed would be undone by its own post()."""
+    import io
+
+    from rails import githooks
+    from rails.dispatch import GateRow
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    sha = commit(repo, "src/app.py", "x = 1\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    rows = {"ship_review": GateRow(name="ship_review", module="cli", events=["rails:ship"], mode="shadow")}
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    out = io.StringIO()
+    ship.ship(repo, title="t", body="b", base="main", closes=[], out=out)
+    assert calls["merge"] == [], out.getvalue()
+    assert "not arming" in out.getvalue()
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False
+
+
+def test_p2_another_pr_does_not_inherit_a_disarm(repo, git, commit, monkeypatch):
+    import io
+
+    from rails import githooks
+    from rails.dispatch import GateRow
+
+    rid, _, _ = _ship_fixture(repo, git, commit, monkeypatch)
+    sha = commit(repo, "src/app.py", "x = 1\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    rows = {"ship_review": GateRow(name="ship_review", module="cli", events=["rails:ship"], mode="shadow")}
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 3, "state": "MERGED", "branch": "work", "disarmed_by": "x"})
+    ship.ship(repo, title="t", body="b", base="main", closes=[], out=io.StringIO())
+    pr = store.read_json(rid.leaf_dir / "pr.json")
+    assert pr["number"] != 3 and pr["disarmed_by"] is None, pr
+
+
+def test_p2_a_pr_that_left_open_forgets_its_disarm(repo, monkeypatch):
+    from rails import cli, gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN", "armed": False, "disarmed_by": "x"})
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "MERGED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
+    assert "disarmed_by" not in store.read_json(rid.leaf_dir / "pr.json")
+
+
+def test_p3i_a_main_folder_with_its_own_intent_still_acks_the_worktree_s(repo, git, tmp_path):
+    (repo / ".rails").mkdir()
+    (repo / ".rails" / "intent.md").write_text("# the main folder's old intent\n", encoding="utf-8")
+    main = store.find_repo(repo)
+    hm = intent.current_hash(repo)
+    intent.update(main, hash=hm, shown_at=1, acked_hash=hm)
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "line3", str(wt))
+    (wt / ".rails").mkdir()
+    (wt / ".rails" / "intent.md").write_text("# the worktree's intent\n", encoding="utf-8")
+    hw = intent.current_hash(wt)
+    dispatch(_evt("Stop", repo, transcript_path=_transcript(tmp_path, intent.marker(hw))), [_row("intent_shown", ["Stop"])])
+    other = store.find_repo(wt)
+    assert intent.get(other).get("shown_at"), "the worktree's intent was shown"
+    intent.update(other, shown_at=int(time.time()) - 60)
+    dispatch(_evt("UserPromptSubmit", repo, prompt="looks right"), [_row("prompt_words", ["UserPromptSubmit"])])
+    assert intent.acked(other, wt)
+
+
+
+# --- apex review round 3 ---------------------------------------------------------------
+
+
+def test_p2_a_ship_that_declines_holds_the_pr(repo, git, commit, monkeypatch):
+    import io
+
+    from rails import githooks
+    from rails.dispatch import GateRow
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    sha = commit(repo, "src/app.py", "x = 1\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    rows = {"ship_review": GateRow(name="ship_review", module="cli", events=["rails:ship"], mode="shadow")}
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    out = io.StringIO()
+    ship.ship(repo, title="t", body="b", base="main", closes=[], out=out)
+    assert calls["merge"] == [] and githooks.pr_holds(rid)["7"]["sha"] == sha
+    assert "NOT armed: no review covers this tree" in out.getvalue()
+
+
+def test_p2_ship_judges_the_review_against_the_remote_base(repo, git, commit, monkeypatch):
+    """A local `main` behind origin/main must not count other PRs' code as this one's."""
+    import io
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    sha = commit(repo, "docs/notes.md", "# notes\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    out = io.StringIO()
+    ship.ship(repo, title="t", body="b", base="main", closes=[], out=out)
+    assert calls["merge"], out.getvalue()
+
+
+def test_p3d_a_claim_made_by_jarvis_s_claim_py_keeps_its_line(repo):
+    """jarvis's claim.py writes {branch, items, at} only, and moves `at` on every add."""
+    rid = store.find_repo(repo)
+    claims._write(rid.main, {rid.leaf: {"branch": "work", "items": ["#1"], "at": "2026-01-01T00:00:00Z"}})
+    line = work.line_of_work(rid)
+    claims._write(rid.main, {rid.leaf: {"branch": "work", "items": ["#1", "#2"], "at": "2026-01-02T00:00:00Z"}})
+    assert work.line_of_work(rid) == line
+
+
+def test_p2_a_pr_that_left_open_releases_its_hold(repo, monkeypatch):
+    from rails import cli, githooks, gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN", "armed": False})
+    githooks.hold_pr(rid, 7, "x", "test")
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "MERGED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
+    assert "7" not in githooks.pr_holds(rid)

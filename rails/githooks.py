@@ -188,12 +188,79 @@ def pre_push(
         )
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
-    if not refuse:
-        # The push lands: if it lands on an armed PR with a tree no review covers, auto-merge
-        # would merge it unreviewed - whether `ship_review` only logged it (shadow) or the
-        # operator pushed with RAILS_OPERATOR=1. Disarming refuses nothing.
-        disarm_unreviewed(repo, pushes, messages)
     return (1 if refuse else 0), messages
+
+
+def disarm_after_push(argv: list[str], ref_lines: list[str], repo: store.RepoId) -> list[str]:
+    """`prepush_disarm`, run by `main` only once the push will land: rails passed it AND the
+    repo's own chained pre-push hook did. A push to a remote other than ``origin`` (a backup)
+    leaves the PR alone. Whether `ship_review` only logged the push (shadow) or the operator
+    pushed with RAILS_OPERATOR=1, an armed PR must not merge a tree no review covers."""
+    if not argv or argv[0] != "origin":
+        return []
+    pushes = []
+    for line in ref_lines:
+        parts = line.split()
+        if len(parts) == 4 and parts[1] != _ZERO and parts[2].startswith("refs/heads/"):
+            pushes.append((parts[2].removeprefix("refs/heads/"), parts[1]))
+    messages: list[str] = []
+    disarm_unreviewed(repo, pushes, messages)
+    return messages
+
+
+def _pr_number(repo: store.RepoId) -> int | None:
+    pr = store.read_json(repo.leaf_dir / "pr.json", None)
+    try:
+        return int(pr["number"]) if isinstance(pr, dict) and pr.get("number") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def hold_pr(repo: store.RepoId, number: int | str, sha: str, why: str, branch: str = "") -> None:
+    """Hold PR ``number`` off auto-merge until a review covers its branch's tree (p2). Kept per
+    PR number in the repo's shared state, so an arm from any folder sees it. Not the operator's
+    `hold` word (`held`), which holds pushes."""
+    with store.updating(repo.dir / "state.json", {}) as state:
+        state.setdefault("held_prs", {})[str(number)] = {
+            "sha": sha,
+            "leaf": repo.leaf,
+            "branch": branch,
+            "why": why,
+            "at": int(time.time()),
+        }
+
+
+def _open_pr_number(repo: store.RepoId, branch: str) -> int | None:
+    """The open PR ``branch`` heads: this worktree's pr.json when it names that branch, else
+    GitHub. None when there is none, or it cannot be told."""
+    pr = store.read_json(repo.leaf_dir / "pr.json", None)
+    if isinstance(pr, dict) and pr.get("number") and pr.get("branch") == branch:
+        return int(pr["number"]) if str(pr.get("state", "OPEN")).upper() == "OPEN" else None
+    if not shutil.which("gh") or not branch:
+        return None
+    try:
+        done = subprocess.run(
+            ["gh", "pr", "view", branch, "--json", "number,state"],
+            cwd=str(repo.top), capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15,
+        )
+        info = json.loads(done.stdout) if done.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return int(info["number"]) if info.get("state") == "OPEN" and info.get("number") else None
+
+
+def release_pr_hold(repo: store.RepoId, number: int | str | None) -> None:
+    if number is None:
+        return
+    with store.updating(repo.dir / "state.json", {}) as state:
+        (state.get("held_prs") or {}).pop(str(number), None)
+
+
+def pr_holds(repo: store.RepoId) -> dict[str, dict]:
+    state = store.read_json(repo.dir / "state.json", {}) or {}
+    held = state.get("held_prs") if isinstance(state, dict) else None
+    return dict(held) if isinstance(held, dict) else {}
 
 
 def armed_pr(repo: store.RepoId, branch: str) -> int | None:
@@ -207,6 +274,8 @@ def armed_pr(repo: store.RepoId, branch: str) -> int | None:
             cwd=str(repo.top),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
         info = json.loads(done.stdout) if done.returncode == 0 else {}
@@ -231,20 +300,23 @@ def disarm(repo: store.RepoId, number: int, note: str) -> bool:
     if off.returncode != 0:
         return False
     try:
+        # gh speaks UTF-8; the locale's code page would read an em dash as mojibake and
+        # write that back into the body the operator judges the PR by.
         view = subprocess.run(
             ["gh", "pr", "view", str(number), "--json", "body"],
-            cwd=str(repo.top), capture_output=True, text=True, timeout=15,
+            cwd=str(repo.top), capture_output=True, text=True, encoding="utf-8", errors="strict",
+            timeout=15,
         )
         body = json.loads(view.stdout).get("body") if view.returncode == 0 else None
         if isinstance(body, str) and body.strip():
             path = repo.leaf_dir / f"disarm-{number}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body.rstrip() + "\n\n" + note + "\n", encoding="utf-8")
+            path.write_text(body.rstrip() + "\n\n" + note + "\n", encoding="utf-8", newline="")
             subprocess.run(
                 ["gh", "pr", "edit", str(number), "--body-file", str(path)],
                 cwd=str(repo.top), capture_output=True, text=True, timeout=30,
             )
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):  # UnicodeDecodeError too
         pass
     return True
 
@@ -258,22 +330,38 @@ def disarm_unreviewed(
     from rails import review, ship
 
     for branch, sha in pushes:
+        number = armed_pr(repo, branch)
+        armed = number is not None
+        if number is None:
+            # Not armed: nothing to turn off, but an open PR is still held, so a hand
+            # `gh pr merge N --auto` cannot arm this push's tree while `arm_review` only logs.
+            number = _open_pr_number(repo, branch)
+            if number is None:
+                continue
         try:
             if not ship.needs_review(repo.top, None, rev=sha):
                 continue
-            problem = review.arming_problem(review.covering(repo, repo.top, sha))
+            # Judged for the PR that would be disarmed, not whatever pr.json names.
+            problem = review.arming_problem(review.covering(repo, repo.top, sha), repo, number)
         except Exception as exc:  # noqa: BLE001 - unknown is uncovered
             problem = f"the review receipt could not be checked ({type(exc).__name__})"
         if not problem:
             continue
-        number = armed_pr(repo, branch)
-        if number is None:
+        if not armed:
+            hold_pr(repo, number, sha, "a push no review covers landed on it", branch)
+            messages.append(
+                f"rails: PR #{number} is held off auto-merge - {sha[:12]} has no review covering its "
+                "tree. Run both reviewers, `rails review record`, then `rails ship` (it arms)."
+            )
             continue
         stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         note = (
             f"**Disarmed** {stamp}: push {sha[:12]} landed with no review covering its tree, "
             "so auto-merge was turned off (`prepush_disarm`)."
         )
+        # Held first, in its own write: a disarm that fails (gh timed out) still leaves the
+        # PR held, so the hand re-arm its remedy invites is refused (`rearm_disarmed`).
+        hold_pr(repo, number, sha, "a push no review covers landed on it", branch)
         if disarm(repo, number, note):
             _log(repo, "prepush_disarm", "disarmed")
             pr = store.read_json(repo.leaf_dir / "pr.json", None)
@@ -308,7 +396,7 @@ def review_refusal(repo: store.RepoId, sha: str, refusal) -> None:
     try:
         if not ship.needs_review(repo.top, None, rev=sha):
             return
-        problem = review.arming_problem(review.covering(repo, repo.top, sha))
+        problem = review.arming_problem(review.covering(repo, repo.top, sha), repo, _pr_number(repo))
     except Exception as exc:  # noqa: BLE001 - fail closed
         refusal("ship_review", f"rails: refused - the review receipt could not be checked ({type(exc).__name__})")
         return
@@ -442,4 +530,11 @@ def main(argv: list[str]) -> int:
             print(message, file=sys.stderr)
         if code != 0:
             return code
-    return run_chained(name, args, stdin_text, repo.top if repo else top)
+    chained = run_chained(name, args, stdin_text, repo.top if repo else top)
+    if repo is not None and name == "pre-push" and chained == 0:
+        try:
+            for message in disarm_after_push(args, stdin_text.splitlines(), repo):
+                print(message, file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - the disarm never blocks a push
+            print(f"RAILS: the disarm crashed ({type(exc).__name__}); check auto-merge by hand", file=sys.stderr)
+    return chained

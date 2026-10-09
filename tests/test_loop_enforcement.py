@@ -562,11 +562,38 @@ def test_p2a_an_unreviewed_push_to_an_armed_pr_disarms_it(repo, commit, monkeypa
     disarmed = _armed(monkeypatch)
     sha = commit(repo, "src/a.py", "x = 1\n")
     receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
-    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
-    assert code == 0, msgs
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push(["origin", "u"], lines, rid)
+    assert code == 0 and disarmed == [], "nothing is disarmed before the chained hook passed"
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
     assert [n for n, _ in disarmed] == [12]
     assert sha[:12] in disarmed[0][1]
+    assert githooks.pr_holds(rid)["12"]["sha"] == sha, "a disarm holds the PR for every folder"
     assert any("disarmed PR #12" in m and "rails ship" in m for m in msgs), msgs
+
+
+def test_p2_a_push_to_another_remote_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    assert githooks.disarm_after_push(["backup", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid) == []
+    assert disarmed == []
+
+
+def test_p2_a_push_the_chained_hook_refuses_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    called: list[object] = []
+    monkeypatch.setattr(githooks, "pre_push", lambda *a: (0, []))
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 1)
+    monkeypatch.setattr(githooks, "disarm_after_push", lambda *a: called.append(a) or [])
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(githooks.sys, "stdin", io.StringIO(""))
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 1
+    assert called == []
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 0)
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 0
+    assert len(called) == 1
+    assert rid
 
 
 def test_p2a_the_operator_s_own_push_disarms_too(repo, commit, monkeypatch):
@@ -575,8 +602,11 @@ def test_p2a_the_operator_s_own_push_disarms_too(repo, commit, monkeypatch):
     monkeypatch.setenv("RAILS_OPERATOR", "1")
     monkeypatch.setattr(githooks, "operator", lambda: True)
     sha = commit(repo, "src/a.py", "x = 1\n")
-    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
-    assert code == 0 and [n for n, _ in disarmed] == [12], msgs
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push(["origin", "u"], lines, rid)
+    assert code == 0, msgs
+    githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert [n for n, _ in disarmed] == [12]
 
 
 def test_p2_a_refused_push_lands_nothing_and_disarms_nothing(repo, commit, monkeypatch):
@@ -601,8 +631,11 @@ def test_p2b_a_prose_only_push_after_the_review_stays_armed(
     review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
     prose = commit(repo, "docs/notes.md", "# notes\n")
     receipts.write_marker(rid, prose, "t", ["checks"], quick=False)
-    code, msgs = githooks.pre_push([], [f"refs/heads/work {prose} refs/heads/work {ZERO}"], rid)
-    assert code == 0 and disarmed == [], msgs
+    lines = [f"refs/heads/work {prose} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push([], lines, rid)
+    assert code == 0, msgs
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert disarmed == [], msgs
     assert sha  # the reviewed code commit is the one the receipt covers
 
 
@@ -611,8 +644,11 @@ def test_p2_a_pr_that_is_not_armed_is_left_alone(repo, commit, monkeypatch):
     disarmed = _armed(monkeypatch, number=None)
     sha = commit(repo, "src/a.py", "x = 1\n")
     receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
-    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
-    assert code == 0 and disarmed == [] and not any("disarmed" in m for m in msgs)
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push([], lines, rid)
+    assert code == 0, msgs
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert disarmed == [] and not any("disarmed" in m for m in msgs)
 
 
 def test_p2_disarm_never_blanks_a_body_it_could_not_read(repo, monkeypatch):
@@ -782,6 +818,7 @@ def test_arm_review_counts_origin_branch_as_pushed_and_fails_closed(repo, commit
     _pushed(git, repo)
     git(repo, "remote", "add", "origin", "https://example.invalid/app.git")
     git(repo, "branch", "--set-upstream-to=origin/main")  # cut from master: @{u} is not the PR head
+    store.write_json(store.find_repo(repo).leaf_dir / "pr.json", {"number": 12})  # this worktree's PR (p3f)
     arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
     assert arm_review.check(arm) is None  # origin/work holds HEAD; a prose diff needs no review
 
@@ -1037,3 +1074,628 @@ def test_a_main_checkout_claim_does_not_fence_an_issue_off(repo, git, tmp_path):
 
 def test_a_nested_must_fix_list_is_not_the_report():
     assert review.must_fix_count('{"must_fix": [], "notes": {"must_fix": [1, 2]}}') == 0
+
+
+# --- p3g: pr.json follows the PR after it merges -------------------------------------
+
+
+def test_p3g_a_merged_pr_stops_reading_open_on_the_next_command(repo, monkeypatch):
+    from rails import gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN", "armed": True})
+    answers = {"state": "OPEN"}
+    asked: list[tuple[str, ...]] = []
+
+    def fake_gh(cwd, *args, check=True, timeout=60):
+        asked.append(args)
+        return json.dumps(answers)
+
+    monkeypatch.setattr(gitutil, "gh", fake_gh)
+    assert cli.refresh_pr_state(repo, now=1000.0) is None  # still open: recorded, unchanged
+    assert store.read_json(rid.leaf_dir / "pr.json", {})["state"] == "OPEN"
+    answers["state"] = "MERGED"
+    assert cli.refresh_pr_state(repo, now=1030.0) is None  # within the minute: not asked again
+    assert len(asked) == 1
+    assert cli.refresh_pr_state(repo, now=1100.0) == "MERGED"
+    record = store.read_json(rid.leaf_dir / "pr.json", {})
+    assert record["state"] == "MERGED" and record["armed"] is False
+    assert cli.refresh_pr_state(repo, now=2000.0) is None  # not OPEN: never asked again
+    assert len(asked) == 2
+
+
+def test_p3g_an_unanswerable_gh_leaves_the_record_alone(repo, monkeypatch):
+    from rails import gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN"})
+
+    def broken(cwd, *args, check=True, timeout=60):
+        raise gitutil.GitError("gh failed to run")
+
+    monkeypatch.setattr(gitutil, "gh", broken)
+    assert cli.refresh_pr_state(repo, now=1000.0) is None
+    record = store.read_json(rid.leaf_dir / "pr.json", {})
+    assert record["state"] == "OPEN" and record["state_checked_at"] == 1000.0
+    asked: list[object] = []
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: asked.append(a) or "{}")
+    assert cli.refresh_pr_state(repo, now=1030.0) is None
+    assert asked == [], "a failure is remembered for the minute too"
+
+
+# --- p3h: a GraphQL read is judged by a body it can read --------------------------------
+
+
+def test_p3h_a_graphql_read_whose_input_file_exists_is_not_refused(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    (repo / "q.json").write_text('{"query": "query { viewer { login } }"}', encoding="utf-8")
+    (repo / "sub").mkdir()
+    (repo / "sub" / "q2.json").write_text('{"query": "query { viewer { id } }"}', encoding="utf-8")
+    cwd = str(repo)
+    assert arm_review.check(_evt("Bash", {"command": "gh api graphql --input q.json"}, cwd=cwd)) is None
+    assert arm_review.check(_evt("Bash", {"command": "cat q.json | gh api graphql --input -"}, cwd=cwd)) is None
+    assert arm_review.check(_evt("Bash", {"command": "cd sub && gh api graphql --input q2.json"}, cwd=cwd)) is None
+    rid = store.find_repo(repo)
+    assert store.read_json(rid.leaf_dir / "pr.json", None) is None  # a read never stamps a PR armed
+
+
+def test_p3h_a_body_it_cannot_read_is_refused_naming_the_path(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    cwd = str(repo)
+    for command, path in (
+        ("gh api graphql --input missing.json", "missing.json"),
+        ("Get-Content gone.json | gh api graphql --input -", "gone.json"),
+        ("gh api graphql --input=nowhere/q.json", "nowhere/q.json"),
+    ):
+        deny = arm_review.check(_evt("Bash", {"command": command}, cwd=cwd))
+        assert deny is not None and path in deny.reason and "cannot be read" in deny.reason, command
+
+
+# --- p3j: a close sent from a script file ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "script", "command"),
+    [
+        pytest.param(
+            "close.py",
+            "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones/75', '-X', 'PATCH', '-f', 'state=closed'])\n",
+            "python close.py",
+            id="python",
+        ),
+        pytest.param(
+            "close.sh",
+            "#!/bin/sh\ngh api repos/a/b/milestones/75 -X PATCH -f state=closed\n",
+            "bash close.sh",
+            id="sh",
+        ),
+        pytest.param(
+            "close.ps1",
+            "gh api repos/a/b/milestones/75 --method PATCH -f 'state=closed'\n",
+            "pwsh -File close.ps1",
+            id="ps1",
+        ),
+    ],
+)
+def test_p3j_a_close_from_a_script_file_is_refused(tmp_path, name, script, command):
+    (tmp_path / name).write_text(script, encoding="utf-8")
+    deny = milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path)))
+    assert deny is not None and name in deny.reason, command
+    shell = "PowerShell" if name.endswith(".ps1") else "Bash"
+    deny = milestone_close.check(_evt(shell, {"command": f"./{name}"}, cwd=str(tmp_path)))
+    assert deny is not None, f"./{name}"
+
+
+def test_p3j_a_script_that_reads_closed_milestones_is_allowed(tmp_path):
+    (tmp_path / "list.py").write_text(
+        "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones?state=closed'])\n",
+        encoding="utf-8",
+    )
+    assert milestone_close.check(_evt("Bash", {"command": "python list.py"}, cwd=str(tmp_path))) is None
+    assert milestone_close.check(_evt("Bash", {"command": "uv run python missing.py"}, cwd=str(tmp_path))) is None
+
+
+# --- p3f: a PR number from another worktree ----------------------------------------------
+
+
+def _reviewed(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    return store.find_repo(repo)
+
+
+def test_p3f_a_pr_headed_by_another_worktree_s_branch_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "other-line"}))
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge 34 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "PR #34 heads other-line" in deny.reason
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False  # nothing stamped
+    # its own PR, by pr.json or by GitHub naming this branch, arms
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))) is None
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "work"}))
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 56 --auto"}, cwd=str(repo))) is None
+
+
+def test_p3f_a_pr_whose_head_cannot_be_read_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    from rails import gitutil
+
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+
+    def broken(cwd, *a, **k):
+        raise gitutil.GitError("gh failed to run")
+
+    monkeypatch.setattr(gitutil, "gh", broken)
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge 34 --auto"}, cwd=str(repo)))
+    assert deny is not None and "could not be read" in deny.reason
+
+
+# --- p3b: an agent's --accept arms only after the operator names the PR -----------------
+
+
+def _operator_says(repo, text):
+    from rails.dispatch import dispatch
+
+    row = GateRow(name="prompt_words", module="prompt_words", events=["UserPromptSubmit"], mode="enforce")
+    evt = Event(name="UserPromptSubmit", payload={"hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+                                                  "session_id": "s", "prompt": text})
+    return dispatch(evt, [row])
+
+
+def test_p3b_an_agent_accept_does_not_arm_until_the_operator_names_the_pr(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "drops a blank date", "reproducer": "feed one"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="the blank date is refused upstream")
+    monkeypatch.delenv("CLAUDECODE")
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    deny = arm_review.check(arm)
+    assert deny is not None and "accept #12" in deny.reason
+    tree12 = git(repo, "rev-parse", "HEAD^{tree}")[:12]
+    _operator_says(repo, f"accept #34 {tree12}")  # another PR's word lifts nothing here
+    assert arm_review.check(arm) is not None
+    _operator_says(repo, "accept #12 0000000")  # another tree's word lifts nothing either
+    assert arm_review.check(arm) is not None
+    _operator_says(repo, f"accept #12 {tree12}")
+    assert arm_review.check(arm) is None
+
+
+def test_p3b_the_operator_s_own_accept_arms_as_before(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    store.write_json(store.find_repo(repo).leaf_dir / "pr.json", {"number": 12})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "x", "reproducer": "y"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="checked by hand")
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto"}, cwd=str(repo))) is None
+
+
+
+# --- apex review round 1 ---------------------------------------------------------------
+
+
+def test_p2_check_post_disarms_a_push_that_skipped_the_hook(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    receipts.write(rid, "lane", sha=sha, lane="checks", exit=0, secs=1)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check_mod, "gh_api", lambda *a, **k: {}, raising=False)
+    out = io.StringIO()
+    check_mod.post(repo, out=out, rerun=False)
+    assert [n for n, _ in disarmed] == [12], out.getvalue()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("gh pr merge https://github.com/o/r/pull/34 --auto --squash", id="url"),
+        pytest.param("gh pr merge '#34' --auto", id="hash"),
+    ],
+)
+def test_p3f_a_pr_url_selector_is_judged_as_its_number(repo, commit, git, tmp_path, monkeypatch, command):
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "other-line"}))
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "PR #34 heads other-line" in deny.reason
+
+
+def test_p3b_an_arm_with_no_selector_is_judged_for_this_worktrees_pr(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "x", "reproducer": "y"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="checked")
+    monkeypatch.delenv("CLAUDECODE")
+    tree12 = git(repo, "rev-parse", "HEAD^{tree}")[:12]
+    _operator_says(repo, f"accept #12 {tree12}")
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge --auto --squash"}, cwd=str(repo))) is None
+
+
+def test_p3e_an_alias_reaches_arm_review(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    config = tmp_path / "ghconf"
+    config.mkdir()
+    (config / "config.yml").write_text("aliases:\n    am: pr merge --auto --squash\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    deny = arm_review.check(_evt("Bash", {"command": "gh am 12"}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason
+
+
+def test_p3e_an_alias_substitutes_its_arguments(tmp_path, monkeypatch):
+    from rails.gates.destructive import commands
+
+    config = tmp_path / "ghconf"
+    config.mkdir()
+    (config / "config.yml").write_text("aliases:\n    pm: pr merge $1 --auto --squash\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    found = [t for _, t in commands("gh pm 42", "bash")]
+    assert ["gh", "pr", "merge", "42", "--auto", "--squash"] in found, found
+
+
+def test_p3e_launchers_nested_too_deep_are_refused():
+    import shlex
+
+    from rails.gates import destructive
+
+    command = "ls"
+    for _ in range(10):
+        command = "bash -c " + shlex.quote(command)
+    deny = destructive.check(_evt("Bash", {"command": command}))
+    assert deny is not None and "nested too deep" in deny.reason
+
+
+def test_p3e_a_script_s_dash_c_argument_is_not_a_command():
+    from rails.gates.destructive import commands
+
+    found = [t for _, t in commands("bash deploy.sh -c 'rm -rf /'", "bash")]
+    assert ["rm", "-rf", "/"] not in found, found
+
+
+def test_p3h_a_heredoc_or_echo_body_is_read_from_the_command(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    for command in (
+        "gh api graphql --input - <<'EOF'\n{\"query\": \"query { viewer { login } }\"}\nEOF",
+        "echo '{\"query\": \"query { viewer { login } }\"}' | gh api graphql --input -",
+    ):
+        assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "command"),
+    [
+        pytest.param(
+            "test_planted.py",
+            "x = 'milestones/75 -X PATCH -f state=closed'\n",
+            "python -m pytest test_planted.py",
+            id="pytest-s-test-file",
+        ),
+        pytest.param(
+            "tests/test_planted.py",
+            "x = 'milestones/75 -X PATCH -f state=closed'\n",
+            "python tests/test_planted.py",
+            id="a-test-file-run-directly",
+        ),
+        pytest.param(
+            "report.py",
+            "import requests\nr = requests.get(API + '/milestones', params={'state': 'closed'})\ndata = r.json()\n",
+            "python report.py",
+            id="a-read-with-a-data-assignment",
+        ),
+    ],
+)
+def test_p3j_a_read_or_a_test_file_is_not_a_close(tmp_path, name, text, command):
+    (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / name).write_text(text, encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path))) is None
+
+
+
+# --- apex review round 2 ---------------------------------------------------------------
+
+
+def test_p2_a_hand_rearm_of_a_disarmed_pr_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    """The planted defect for `rearm_disarmed`: arm_review only logs this week, and a hand
+    `gh pr merge N --auto` undid the disarm."""
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "state": "OPEN", "armed": False})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "PR #12" in deny.reason
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge --auto --squash"}, cwd=str(repo))) is not None
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --squash"}, cwd=str(repo))) is not None
+    githooks.release_pr_hold(rid, 12)
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))) is None
+
+
+def test_p2_a_reviewed_rearm_of_a_disarmed_pr_is_allowed(repo, commit, git, tmp_path, monkeypatch):
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "state": "OPEN", "armed": False, "disarmed_by": "abc"})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    assert rearm_disarmed.check(arm) is None
+    assert arm_review.check(arm) is None
+    pr = store.read_json(rid.leaf_dir / "pr.json")
+    assert pr["armed"] is True and "disarmed_by" not in pr, "an arm past every check clears the mark"
+    assert "12" not in githooks.pr_holds(rid)
+
+
+def test_p2_check_post_judges_the_pushed_head_only(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write(rid, "lane", sha=sha, lane="checks", exit=0, secs=1)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check_mod, "gh_api", lambda *a, **k: {}, raising=False)
+    check_mod.post(repo, out=io.StringIO(), rerun=False)
+    assert disarmed == [], "an unpushed HEAD is not what the armed PR merges"
+
+
+def test_p2_check_post_disarms_with_no_lane_receipts(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    assert check_mod.post(repo, out=io.StringIO(), rerun=False) == 1
+    assert [n for n, _ in disarmed] == [12]
+
+
+def _worktree_with_unreviewed_push(repo, git, tmp_path):
+    wt = tmp_path / "feat"
+    git(repo, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "src").mkdir(exist_ok=True)
+    (wt / "src" / "b.py").write_text("y = 2\n", encoding="utf-8")
+    git(wt, "add", "-A")
+    git(wt, "commit", "-q", "-m", "code")
+    git(wt, "update-ref", "refs/remotes/origin/feat", "HEAD")
+    return wt
+
+
+@pytest.mark.parametrize("spelling", ["native", "git-bash"])
+def test_p3f_an_arm_after_cd_judges_the_worktree_it_moved_to(repo, git, tmp_path, spelling):
+    import os
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)  # the folder the session started in is clean and pushed: nothing to judge there
+    target = str(wt).replace("\\", "/")
+    if spelling == "git-bash":
+        if os.name != "nt":
+            pytest.skip("a Git Bash drive path is a Windows spelling")
+        target = "/" + target[0].lower() + target[2:].replace("\\", "/")
+    deny = arm_review.check(_evt("Bash", {"command": f"cd {target} && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+def test_p3f_a_branch_selector_for_another_branch_is_refused(repo, git, tmp_path):
+    _worktree_with_unreviewed_push(repo, git, tmp_path)
+    git(repo, "update-ref", "refs/remotes/origin/work", "HEAD")
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge feat --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "another branch" in deny.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('echo "arming"; gh api graphql --input - < q.json', id="an-echo-elsewhere"),
+        pytest.param("git commit -q --allow-empty -F - <<EOF\nmsg\nEOF\ngh api graphql --input - < q.json", id="a-heredoc-elsewhere"),
+    ],
+)
+def test_p3h_a_file_fed_to_input_is_read_beside_an_inline_body(repo, commit, git, command):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    (repo / "q.json").write_text('{"query": "mutation { enablePullRequestAutoMerge(input: {}) { clientMutationId } }"}', encoding="utf-8")
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason, command
+
+
+_CLOSE = "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones/75', '-X', 'PATCH', '-f', 'state=closed'])\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["uv run python close.py", "uv run close.py", "uv run python3 close.py", "uv run --with requests python close.py"],
+)
+def test_p3j_uv_runs_a_close_script(tmp_path, command):
+    (tmp_path / "close.py").write_text(_CLOSE, encoding="utf-8")
+    deny = milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path)))
+    assert deny is not None and "close.py" in deny.reason, command
+
+
+def test_p3j_a_script_handed_to_a_module_is_its_argument(tmp_path):
+    (tmp_path / "close.py").write_text(_CLOSE, encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": "python -m mytool close.py"}, cwd=str(tmp_path))) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('bash -lc "git push --force origin master"', id="bash-lc"),
+        pytest.param('sh -ec "git push --force origin master"', id="sh-ec"),
+        pytest.param('bash -o pipefail -c "git push --force origin master"', id="bash-o-pipefail"),
+        pytest.param(
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command "git push --force origin master"',
+            id="powershell-with-options",
+        ),
+    ],
+)
+def test_p3e_shell_options_before_the_command_are_skipped(command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt("Bash", {"command": command})) is not None, command
+
+
+
+# --- apex review round 3 ---------------------------------------------------------------
+
+
+def test_p2_a_held_pr_cannot_be_armed_from_a_folder_that_does_not_hold_it(repo, commit, git, tmp_path, monkeypatch):
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["held_prs"] = {"12": {"sha": "abc", "leaf": "another-worktree", "why": "a push disarmed it"}}
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "does not hold its branch" in deny.reason
+
+
+def test_p2_a_held_pr_is_judged_on_its_pushed_head(repo, commit, git, tmp_path, monkeypatch):
+    """A review of an unpushed fix does not cover the head GitHub would merge."""
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    commit(repo, "src/b.py", "y = 2\n")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "Push, then arm" in deny.reason
+
+
+def test_p2_disable_auto_is_never_a_merge():
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("Bash", {"command": "gh pr merge 12 --disable-auto"})) is None
+    assert merge_by_effect.check(_evt("Bash", {"command": "gh pr merge 12 --admin --disable-auto"})) is not None
+
+
+def test_p2_the_disarm_reads_the_body_as_utf8(repo, monkeypatch):
+    rid = store.find_repo(repo)
+    seen: list[dict] = []
+
+    def fake_run(argv, **kw):
+        seen.append({"argv": argv[:3], **kw})
+        return subprocess.CompletedProcess(argv, 0, stdout='{"body": "Purser fix — stage 2"}', stderr="")
+
+    monkeypatch.setattr(githooks.subprocess, "run", fake_run)
+    assert githooks.disarm(rid, 12, "note") is True
+    view = next(s for s in seen if s["argv"] == ["gh", "pr", "view"])
+    assert view.get("encoding") == "utf-8"
+    written = (rid.leaf_dir / "disarm-12.md").read_bytes()
+    assert "—".encode("utf-8") in written and b"\r\n" not in written
+
+
+
+# --- apex review round 4 ---------------------------------------------------------------
+
+
+def test_p2_a_hold_is_judged_on_the_held_pr_s_branch(repo, commit, git, tmp_path, monkeypatch):
+    """A worktree that switched branch cannot arm its old PR's unreviewed head."""
+    from rails import gitutil
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    githooks.hold_pr(rid, 12, git(repo, "rev-parse", "HEAD"), "a push no review covers landed on it", "work")
+    git(repo, "checkout", "-q", "-b", "next")
+    commit(repo, "src/b.py", "y = 2\n")
+    git(repo, "update-ref", "refs/remotes/origin/next", "HEAD")
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+
+    def offline(*a, **k):
+        raise gitutil.GitError("offline")
+
+    monkeypatch.setattr(gitutil, "gh", offline)
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    assert arm_review.check(arm) is not None, "pr.json names #12 for work, and this is next"
+    deny = rearm_disarmed.check(arm)
+    assert deny is not None and "Check out work" in deny.reason
+
+
+def test_p2_an_unreviewed_push_to_an_unarmed_pr_holds_it(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch, number=None)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN", "armed": False})
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    msgs = githooks.disarm_after_push(["origin", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert disarmed == [] and githooks.pr_holds(rid)["12"]["branch"] == "work"
+    assert any("held off auto-merge" in m for m in msgs), msgs
+
+
+def test_p2_a_disarm_that_fails_still_holds(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    monkeypatch.setattr(githooks, "armed_pr", lambda repo, branch: 12)
+    monkeypatch.setattr(githooks, "disarm", lambda repo, n, note: False)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    msgs = githooks.disarm_after_push(["origin", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert "12" in githooks.pr_holds(rid)
+    assert any("could not be turned off" in m for m in msgs), msgs
+
+
+@pytest.mark.parametrize(
+    ("shell", "template", "expect"),
+    [
+        pytest.param("Bash", 'WT={wt}; cd "$WT" && gh pr merge --auto --squash', "cannot follow", id="cd-to-a-variable"),
+        pytest.param("PowerShell", "Push-Location {wt}; gh pr merge --auto --squash", "PR #12", id="push-location"),
+        pytest.param("PowerShell", "Set-Location -Path {wt}; gh pr merge --auto --squash", "PR #12", id="set-location-path"),
+        pytest.param("Bash", "gh pr merge feat --squash", "does not hold its branch", id="a-branch-selector"),
+        pytest.param("Bash", "cd {wt} && gh pr merge --squash", "PR #12", id="a-direct-merge-after-cd"),
+    ],
+)
+def test_p2_a_held_pr_is_found_however_the_command_reaches_it(repo, git, tmp_path, shell, template, expect):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = template.format(wt=str(wt).replace("\\", "/"))
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(repo)))
+    assert deny is not None and expect in deny.reason, command
+
+
+def test_p2_a_push_rails_refuses_disarms_nothing(repo, commit, monkeypatch):
+    """Drives `main`: a push rails refused never reaches the disarm."""
+    _pushable(monkeypatch, repo, commit, shadow_review=True)
+    called: list[object] = []
+    monkeypatch.setattr(githooks, "pre_push", lambda *a: (1, ["refused"]))
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 0)
+    monkeypatch.setattr(githooks, "disarm_after_push", lambda *a: called.append(a) or [])
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(githooks.sys, "stdin", io.StringIO(""))
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 1
+    assert called == []

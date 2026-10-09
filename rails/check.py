@@ -295,6 +295,25 @@ def post(cwd: Path, *, out=sys.stdout, rerun: bool = True) -> int:
         return 2
     sha = head(top)
     tree_sha = tree(top)
+    # A push that skipped the hook (`--no-verify`, `core.hooksPath=`) skipped the disarm too;
+    # posting is the step every merge needs from here, so it disarms as well (p2). It judges
+    # the pushed head only: an unpushed HEAD is not what the armed PR would merge.
+    from rails.githooks import disarm_unreviewed
+    from rails.gitutil import git as _git
+
+    branch = _git(top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+    pushed = (
+        _git(top, "rev-parse", "--verify", "-q", f"origin/{branch}", check=False).strip()
+        if branch and branch != "HEAD"
+        else ""
+    )
+    notes: list[str] = []
+    try:
+        disarm_unreviewed(repo, [(branch, sha)] if pushed == sha else [], notes)
+    except Exception as exc:  # noqa: BLE001 - posting never fails over the disarm
+        notes.append(f"  could not check auto-merge ({type(exc).__name__}); check it by hand")
+    for note in notes:
+        print(note, file=out)
     rows = [r for r in receipts.read(repo, "lane", sha=sha) if receipts.valid(r)]
     if not rows:
         print(

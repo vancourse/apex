@@ -49,7 +49,7 @@ _MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|mergeBranch)\b")
 _HTTP_CLIENTS = frozenset(
     {"curl", "wget", "http", "invoke-restmethod", "irm", "invoke-webrequest", "iwr"}
 )
-_ALLOWED_MERGE_FLAGS = frozenset({"--auto", "--squash", "--delete-branch", "-d", "-s"})
+_ALLOWED_MERGE_FLAGS = frozenset({"--auto", "--squash", "--delete-branch", "-d", "-s", "--disable-auto"})
 _PR_REF = re.compile(r"^(?:#?\d+|https?://\S+/pull/\d+/?)$")
 _API_BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 
@@ -102,6 +102,8 @@ def _gh_pr_merge(args: list[str]) -> str | None:
             refs += 1
             continue
         return f"`gh pr merge` with `{tok}`"
+    if "--disable-auto" in args:
+        return None  # turns auto-merge off: the disarm's own remedy, never a merge
     if "--auto" not in args:
         return "`gh pr merge` without `--auto` merges now instead of arming"
     return None
