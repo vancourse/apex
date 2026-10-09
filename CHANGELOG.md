@@ -4,6 +4,45 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.4.0] — 2026-10-09
+
+### Added
+- **A lane can wait its turn on the machine.** `lock = "<name>"` on a `[[lane]]` makes
+  `rails check` take a machine-wide lock of that name before it runs the lane. Every worktree and
+  repo on the box whose lane names the same lock then runs that lane one at a time. In jarvis, four
+  or five sessions ran their own full suite at once against one Postgres. A suite that takes about
+  23 minutes alone took 63 to 76, timed out at its 60-minute limit, and ran Windows out of local
+  ports. Across the receipts, 22 of 38 `suite` runs failed.
+  - While it waits, `rails check` prints `wait <lane> lock '<name>' held by <worktree> (<lane> at
+    <sha>) since HH:MM` on the first try and every minute after.
+  - The wait is taken before the lane's clock starts, so it counts against neither `timeout_min`
+    nor the lane's recorded seconds. The lane receipt carries `lock` and `waited`.
+  - The OS holds the lock (`msvcrt.locking` on Windows, `flock` elsewhere), so a holder that crashes
+    or is killed frees the lock. Its holder record (`locks/<name>.holder.json`, display only) can
+    stay behind; the next holder overwrites it. A rails version without this ignores the key and
+    runs the lane unlocked, as it did before.
+  - **A worktree that moves while waiting is not certified.** After the wait, `rails check`
+    re-checks the lane's prerequisites. It then re-reads HEAD and the tracked-file state. A run
+    that started dirty with `--allow-dirty` certifies nothing, so it is held to HEAD alone. A clean
+    start writes a marker even with that flag, so it is held to staying clean.
+    - Because the comparison is against the start of the check, a lane run before a locked lane
+      that rewrites a tracked file also fails the check. The failure names the files.
+    - If the worktree moved, the whole check fails, even when the lane is advisory. The lane gets
+      exit 125 with the reason, later lanes print `skip` and do not run, and no marker is written.
+      Before this, the old commit could be certified for content it never ran.
+    - A prerequisite that went missing during the wait fails that lane only, as before the wait.
+  - Only lock contention counts as waiting. Any other lock error (a filesystem without locks) is
+    raised, so a run does not wait forever for a holder that does not exist. Names are plain words,
+    must be strings, and may not be Windows device names (`nul`, `con`, `com1`).
+  - **Known limits.** The lock covers the lane's run.
+    - **Orphans:** a lane's processes that outlive it still load the box after the lock is released.
+      That covers what 1.3.1's timeout kill cannot find, and the whole lane if rails alone is
+      killed (`Stop-Process` on its pid, `kill -9`).
+    - **No queue:** waiters poll once a second, so the order in which they win is not
+      first-come-first-served.
+    - **One root:** the lock lives under the rails store (`RAILS_DATA`, normally
+      `~/.claude/rails`), so sessions with different roots do not see each other's locks.
+
 ## [1.3.1] — 2026-10-09
 
 ### Fixed

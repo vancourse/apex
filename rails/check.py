@@ -18,6 +18,7 @@ written only when every selected lane passed at this exact commit.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
 import signal
@@ -216,6 +217,63 @@ def _kill_tree(proc: subprocess.Popen) -> str:
     return note
 
 
+def _lane_lock(
+    lane: lanes_mod.Lane, repo: store.RepoId, sha: str, out
+) -> contextlib.AbstractContextManager[float]:
+    """The lane's machine-wide lock, or nothing when it names none.
+
+    Every `rails check` on the box whose lane names the same lock runs that lane one at
+    a time: concurrent full suites against one database slowed each other past their
+    timeouts and ran the box out of ports. The wait is taken here, before `run_lane`
+    starts its clock, so it counts against neither the timeout nor the lane's seconds.
+    """
+    if not lane.lock:
+        return contextlib.nullcontext(0.0)
+
+    def note(holder: object, waited: float) -> None:
+        who = "another check"
+        if isinstance(holder, dict):
+            since = "?"
+            stamp = holder.get("since")
+            if isinstance(stamp, (int, float)):
+                with contextlib.suppress(OSError, ValueError, OverflowError):
+                    since = time.strftime("%H:%M", time.localtime(stamp))
+            who = (
+                f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
+                f"{str(holder.get('sha', ''))[:12]}) since {since}"
+            )
+        print(
+            f"  wait  {lane.name:<14} lock {lane.lock!r} held by {who}; "
+            f"waited {waited / 60:.0f} min",
+            file=out,
+            flush=True,
+        )
+
+    holder = {"repo": str(repo.main), "leaf": repo.leaf, "lane": lane.name, "sha": sha}
+    return store.machine_lock(lane.lock, holder, on_wait=note)
+
+
+def _moved_since_start(
+    top: Path, sha: str, tree_sha: str, dirty: list[str], allow_dirty: bool
+) -> str | None:
+    """Why the worktree no longer is the snapshot this check certifies, if it is not.
+
+    A marker certifies the commit read at the start, and a lock wait can last an hour,
+    long enough for its author to commit or edit. Only a run that was already dirty
+    with ``--allow-dirty`` certifies nothing (no marker, `post` skips it), so only that
+    one is held to HEAD and the tree alone; a clean start is held to staying clean.
+    """
+    if head(top) != sha or tree(top) != tree_sha:
+        return "HEAD moved since the check started"
+    if not (allow_dirty and dirty):
+        now = dirty_tracked(top)
+        if sorted(now) != sorted(dirty):
+            changed = sorted(set(now) ^ set(dirty))
+            shown = ", ".join(changed[:3]) + (" ..." if len(changed) > 3 else "")
+            return f"tracked files changed since the check started ({shown})"
+    return None
+
+
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -336,7 +394,7 @@ def check(
     if not selected:
         print("  nothing selected", file=out)
     log_dir = repo.leaf_dir / "logs" / sha[:12]
-    for lane in selected:
+    for index, lane in enumerate(selected):
         why = missing_prerequisite(lane)
         if why:
             print(f"  FAIL  {lane.name:<14} prerequisite: {why}", file=out)
@@ -349,12 +407,60 @@ def check(
                 exit=125,
                 secs=0,
                 why=why,
+                dirty=bool(dirty),
             )
             (advisory_failed if lane.advisory() else failed).append(lane.name)
             continue
-        print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
         log_path = log_dir / f"{lane.name}.log"
-        code, secs = run_lane(lane, top, log_path)
+        lock_fields: dict[str, object] = {}
+        moved = prerequisite = None
+        with _lane_lock(lane, repo, sha, out) as waited:
+            if lane.lock:
+                lock_fields = {"lock": lane.lock, "waited": round(waited, 1)}
+                # The slow probe first, the git re-read last: the window between the
+                # re-read and the lane's start stays as short as it can be.
+                prerequisite = missing_prerequisite(lane)
+                moved = _moved_since_start(top, sha, tree_sha, dirty, allow_dirty)
+            if moved is None and prerequisite is None:
+                print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
+                code, secs = run_lane(lane, top, log_path)
+        if moved is not None:
+            # The whole check stops describing `sha`, so it fails whatever the lane's
+            # advisory date, and no later lane runs on the moved tree under `sha`.
+            why = f"{moved}, checked after lock {lane.lock!r} (waited {waited:.0f}s)"
+            print(f"  FAIL  {lane.name:<14} {why}", file=out)
+            receipts.write(
+                repo,
+                "lane",
+                lane=lane.name,
+                sha=sha,
+                tree=tree_sha,
+                exit=125,
+                secs=0,
+                why=why,
+                dirty=bool(dirty),
+                **lock_fields,
+            )
+            failed.append(lane.name)
+            for rest in selected[index + 1 :]:
+                print(f"  skip  {rest.name:<14} not run: the worktree moved", file=out)
+            break
+        if prerequisite is not None:
+            print(f"  FAIL  {lane.name:<14} prerequisite: {prerequisite}", file=out)
+            receipts.write(
+                repo,
+                "lane",
+                lane=lane.name,
+                sha=sha,
+                tree=tree_sha,
+                exit=125,
+                secs=0,
+                why=prerequisite,
+                dirty=bool(dirty),
+                **lock_fields,
+            )
+            (advisory_failed if lane.advisory() else failed).append(lane.name)
+            continue
         receipts.write(
             repo,
             "lane",
@@ -365,6 +471,7 @@ def check(
             secs=round(secs, 1),
             cmd=" ".join(lane.command),
             dirty=bool(dirty),
+            **lock_fields,
         )
         if code == 0:
             print(f"  PASS  {lane.name:<14} {secs:6.0f}s", file=out, flush=True)
@@ -523,7 +630,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--allow-dirty",
         action="store_true",
-        help="run lanes over uncommitted edits (no marker)",
+        help="run lanes over uncommitted edits (no marker when the tree is dirty)",
     )
     args = ap.parse_args(argv)
     try:

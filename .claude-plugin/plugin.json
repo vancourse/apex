@@ -1,6 +1,6 @@
 {
   "name": "rails",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "The rails: one hook dispatcher, local-first CI (lanes on the laptop, CI verifies statuses), push without ceremony, a leak check keyed on destination, the session loop, and a starter kit whose walls are tests.",
   "author": {
     "name": "shadowhunter99",
