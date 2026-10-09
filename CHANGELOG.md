@@ -11,11 +11,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   `subprocess.run(timeout=...)`, which on a timeout kills the direct child only. A lane's direct
   child is a launcher (`uv run`, `pnpm`), so in jarvis's `suite` lane, pytest and its xdist workers
   ran about 9 minutes past the 60-minute timeout (14 processes), alongside another session's suite.
-  A timeout now kills the lane's whole tree: `taskkill /T /F` on Windows. On POSIX the lane runs in
-  its own session and its process group is killed. The exit code (124) and the log line are
-  unchanged. Because the POSIX lane no longer shares the terminal's process group, Ctrl+C, SIGTERM
-  and SIGHUP sent to `rails check` while a lane runs now kill the lane's tree too. A signal that was
-  already ignored, as under `nohup`, stays ignored.
+  A timeout now kills the lane's whole tree, found by parent pid: `taskkill /T /F` on Windows, and on
+  POSIX a `ps` walk with SIGKILL, parents first. The exit code (124) and the `lane timed out` line are
+  unchanged. A second log line says what was killed, or that taskkill or `ps` failed and only the
+  lane's own process was stopped. The lane stays in rails's process group, so Ctrl+C, a hangup or a
+  kill aimed at the group still reach it as before.
+- Known limits: the kill is forced, so on a timeout a lane's own `finally` teardown does not run. In
+  jarvis that is `boot`'s smoke compose projects and `purser-e2e`'s planted database. A lane that
+  holds outside resources should clear stale ones when it starts. A process whose parent had already
+  exited is not found.
 
 ## [1.3.0] — 2026-10-08
 

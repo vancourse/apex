@@ -18,14 +18,12 @@ written only when every selected lane passed at this exact commit.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import os
 import shutil
 import signal
 import socket
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -100,68 +98,80 @@ def _resolve(argv: list[str]) -> list[str]:
     return [found, *argv[1:]] if found else argv
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill the lane and everything it started, then reap it."""
+def _descendants(pid: int) -> list[int] | None:
+    """POSIX: every process below `pid` by parent pid, parents before children.
+
+    None when the process table could not be read."""
+    try:
+        listed = subprocess.run(
+            ["ps", "-A", "-o", "pid=", "-o", "ppid="],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listed.returncode != 0:
+        return None
+    children: dict[int, list[int]] = {}
+    for line in listed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found: list[int] = []
+    queue = [pid]
+    while queue:
+        for child in children.get(queue.pop(0), []):
+            found.append(child)
+            queue.append(child)
+    return found
+
+
+def _kill_tree(proc: subprocess.Popen) -> str:
+    """Kill a timed-out lane and every process under it, reap it, and say what happened.
+
+    `subprocess.run(timeout=...)` killed only the direct child, a launcher (`uv run`,
+    `pnpm`); pytest and its xdist workers ran ~9 minutes past a 60-minute timeout,
+    beside another session's suite (2026-10-09). The tree is found by parent pid, as
+    `taskkill /T` does on Windows; the lane stays in rails's process group, so Ctrl+C,
+    a hangup or a kill aimed at the group still reach it as before. A process whose
+    parent had already exited is not found."""
     if os.name == "nt":
         # By full path: a bare name is looked up in the current directory first.
         root = os.environ.get("SystemRoot", r"C:\Windows")
         taskkill = os.path.join(root, "System32", "taskkill.exe")
         try:
-            subprocess.run(
+            done = subprocess.run(
                 [taskkill, "/T", "/F", "/PID", str(proc.pid)],
                 capture_output=True,
+                text=True,
+                errors="replace",
                 timeout=60,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+            said = " ".join((done.stdout + done.stderr).split())
+            note = f"taskkill /T /F exit {done.returncode}" + (
+                "" if done.returncode == 0 else f": {said[-300:]}"
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            note = f"taskkill could not run ({exc}); stopped only the lane's own process"
     else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    proc.kill()  # the direct child, if taskkill could not run; a no-op once it is gone
-    proc.wait()
-
-
-@contextlib.contextmanager
-def _hangup_exits():
-    """POSIX: the lane leads its own session, so a terminal hangup or a SIGTERM sent to
-    the caller's process group reaches rails alone. While the lane runs, either one
-    becomes an exit (128 + signal) that stops the lane first. A signal already ignored
-    (`nohup`) or handled stays as it was."""
-    if os.name != "posix" or threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    def _exit(signum, _frame):
-        raise SystemExit(128 + signum)
-
-    previous = {}
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        if signal.getsignal(sig) == signal.SIG_DFL:
-            previous[sig] = signal.signal(sig, _exit)
+        below = _descendants(proc.pid)
+        if below is None:
+            note = "could not read the process table (`ps`); stopped only the lane's own process"
+        else:
+            # Parents first, so none is left alive to start a replacement.
+            for pid in [proc.pid, *below]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            note = f"killed the lane and {len(below)} process(es) under it"
     try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
-def _run_tree(argv: list[str], timeout: float, **popen) -> int:
-    """`subprocess.run(argv, timeout=...)`, except that stopping the lane stops its tree.
-
-    `subprocess.run` kills only the direct child on a timeout. A lane's direct child is
-    a launcher (`uv run`, `pnpm`), so pytest and its xdist workers kept running ~9 minutes
-    past a 60-minute timeout, beside another session's suite (2026-10-09). On POSIX the
-    lane leads its own session and its process group is killed; on Windows
-    `taskkill /T` kills the tree. A timeout, Ctrl+C or hangup all take this path."""
-    proc = subprocess.Popen(argv, start_new_session=os.name == "posix", **popen)
-    with _hangup_exits():
-        try:
-            return proc.wait(timeout=timeout)
-        except BaseException:
-            _kill_tree(proc)
-            raise
+        proc.kill()  # a no-op once it is gone
+    except OSError:
+        pass
+    proc.wait()
+    return note
 
 
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
@@ -174,20 +184,30 @@ def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, floa
         log.write(f"$ {' '.join(lane.command)}\n")
         log.flush()
         try:
-            code = _run_tree(
+            proc = subprocess.Popen(
                 _resolve(lane.command),
-                lane.timeout_min * 60,
                 cwd=str(top),
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-        except subprocess.TimeoutExpired:
-            log.write(f"\nRAILS: lane timed out after {lane.timeout_min} min\n")
-            code = 124
         except OSError as exc:
             log.write(f"\nRAILS: could not start: {exc}\n")
-            code = 127
+            return 127, time.monotonic() - started
+        try:
+            code = proc.wait(timeout=lane.timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            stopped = _kill_tree(proc)
+            log.write(f"\nRAILS: lane timed out after {lane.timeout_min} min\n")
+            log.write(f"RAILS: {stopped}\n")
+            code = 124
+        except BaseException:
+            # Ctrl+C reached the lane's own processes too (same process group, same
+            # console), so they run their own teardown; as subprocess.run did, stop
+            # the direct child and go.
+            proc.kill()
+            proc.wait()
+            raise
     return code, time.monotonic() - started
 
 

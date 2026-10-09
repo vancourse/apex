@@ -185,12 +185,17 @@ def test_missing_prerequisite_fails_the_lane_with_its_reason(monkeypatch):
 # --- a stopped lane stops everything it started --------------------------------
 
 
+def _system32(exe: str) -> str:
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", exe)
+
+
 def _alive(pid: int) -> bool:
     if os.name == "nt":
         listed = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+            [_system32("tasklist.exe"), "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
             capture_output=True,
             text=True,
+            errors="replace",
         ).stdout
         return f'"{pid}"' in listed
     try:
@@ -220,129 +225,61 @@ def _reap(pid: int) -> None:
     if not _alive(pid):
         return
     if os.name == "nt":
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        subprocess.run([_system32("taskkill.exe"), "/F", "/PID", str(pid)], capture_output=True)
     else:
         os.kill(pid, signal.SIGKILL)
 
 
 def _planted_tree(tmp_path: Path, py: str, timeout_s: float):
-    """A lane whose child starts a grandchild that sleeps 60 s, the way `uv run` starts pytest."""
+    """A lane whose child starts a grandchild that sleeps 60 s, the way `uv run` starts pytest.
+
+    On POSIX the grandchild leads its own session (as Playwright starts a browser), so a
+    process-group kill would miss it; Windows ignores the flag. The pid lands by rename,
+    so a reader never sees an empty file."""
     pid_file = tmp_path / "grandchild.pid"
     child = (
-        "import subprocess, sys, time; "
-        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        f"open({str(pid_file)!r}, 'w').write(str(p.pid)); "
+        "import os, subprocess, sys, time; "
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+        "start_new_session=True); "
+        f"open({str(pid_file)!r} + '.tmp', 'w').write(str(p.pid)); "
+        f"os.replace({str(pid_file)!r} + '.tmp', {str(pid_file)!r}); "
         "time.sleep(60)"
     )
     lane = lanes.Lane(name="slow", command=[py, "-c", child], timeout_min=timeout_s / 60)
     return lane, pid_file
 
 
-def _interrupt_first_wait(monkeypatch, pid_file: Path, raise_it) -> None:
-    """The lane's first `wait` is interrupted once the grandchild exists; every other wait is real."""
-    real_wait = subprocess.Popen.wait
-    fired: list[int] = []
-
-    def wait(self, timeout=None):
-        if fired or timeout is None:
-            return real_wait(self, timeout)
-        fired.append(self.pid)
-        deadline = time.monotonic() + 15
-        while not pid_file.is_file() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        raise_it()
-
-    monkeypatch.setattr(subprocess.Popen, "wait", wait)
-
-
 def test_a_timed_out_lane_stops_every_process_it_started(tmp_path, py):
     """The lane's child is a launcher (`uv run`). Killing only it left pytest and its workers
     running ~9 minutes past a 60-minute timeout, beside another session's suite (2026-10-09)."""
-    lane, pid_file = _planted_tree(tmp_path, py, timeout_s=4)
+    assert _alive(os.getpid()), "the liveness probe cannot see a live process here"
+    lane, pid_file = _planted_tree(tmp_path, py, timeout_s=6)
     log_path = tmp_path / "logs" / "slow.log"
     code, _ = check.run_lane(lane, tmp_path, log_path)
-    assert code == 124
-    assert "RAILS: lane timed out after" in log_path.read_text(encoding="utf-8")
     assert pid_file.is_file(), "the planted child never started its grandchild"
     pid = int(pid_file.read_text())
     try:
-        assert _gone_within(pid, 10), f"grandchild {pid} outlived the lane's timeout"
+        assert _gone_within(pid, 3), f"grandchild {pid} outlived the lane's timeout"
     finally:
         _reap(pid)
+    log = log_path.read_text(encoding="utf-8")
+    assert code == 124
+    assert "RAILS: lane timed out after" in log
+    assert ("taskkill /T /F exit 0" if os.name == "nt" else "killed the lane and") in log, log
 
 
-def test_an_interrupted_lane_stops_every_process_it_started(tmp_path, py, monkeypatch):
-    """On POSIX the lane leads its own session, so the terminal's Ctrl+C reaches rails alone."""
-    lane, pid_file = _planted_tree(tmp_path, py, timeout_s=60)
-
-    def ctrl_c():
-        raise KeyboardInterrupt
-
-    _interrupt_first_wait(monkeypatch, pid_file, ctrl_c)
-    with pytest.raises(KeyboardInterrupt):
-        check.run_lane(lane, tmp_path, tmp_path / "slow.log")
-    pid = int(pid_file.read_text())
-    try:
-        assert _gone_within(pid, 10), f"grandchild {pid} outlived the interrupt"
-    finally:
-        _reap(pid)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX signals")
-@pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP"])
-def test_a_hangup_or_sigterm_stops_the_lane_and_exits(tmp_path, py, monkeypatch, signame):
-    """A group SIGTERM or a terminal hangup no longer reaches the lane's own session."""
-    signum = getattr(signal, signame)
-    lane, pid_file = _planted_tree(tmp_path, py, timeout_s=60)
-
-    def deliver():
-        # Call the handler run_lane installed, as the kernel would; with none
-        # installed this fails here instead of killing the test runner.
-        handler = signal.getsignal(signum)
-        assert callable(handler), f"no {signame} handler while the lane runs"
-        handler(signum, None)
-
-    _interrupt_first_wait(monkeypatch, pid_file, deliver)
-    before = signal.signal(signum, signal.SIG_DFL)  # as under a terminal, not `nohup`
-    try:
-        with pytest.raises(SystemExit) as exited:
-            check.run_lane(lane, tmp_path, tmp_path / "slow.log")
-        assert exited.value.code == 128 + signum
-        assert signal.getsignal(signum) == signal.SIG_DFL
-    finally:
-        signal.signal(signum, before)
-    pid = int(pid_file.read_text())
-    try:
-        assert _gone_within(pid, 10), f"grandchild {pid} outlived {signame}"
-    finally:
-        _reap(pid)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX signals")
-def test_an_ignored_hangup_stays_ignored(tmp_path, py):
-    """Under `nohup` SIGHUP is ignored; rails must not turn it back into an exit."""
-    before = signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    seen = []
-    try:
-        lane = lanes.Lane(
-            name="quick",
-            command=[py, "-c", "print('ok')"],
-            timeout_min=1,
-        )
-        real_wait = subprocess.Popen.wait
-
-        def wait(self, timeout=None):
-            seen.append(signal.getsignal(signal.SIGHUP))
-            return real_wait(self, timeout)
-
-        subprocess.Popen.wait = wait
-        try:
-            assert check.run_lane(lane, tmp_path, tmp_path / "quick.log")[0] == 0
-        finally:
-            subprocess.Popen.wait = real_wait
-        assert seen and all(h == signal.SIG_IGN for h in seen)
-    finally:
-        signal.signal(signal.SIGHUP, before)
+@pytest.mark.skipif(os.name != "posix", reason="process groups")
+def test_a_lane_stays_in_rails_process_group(tmp_path, py):
+    """Ctrl+C, a hangup and a kill aimed at the caller's group must still reach the lane
+    itself; a lane in its own session is stopped only if rails lives to stop it."""
+    out = tmp_path / "pgid"
+    lane = lanes.Lane(
+        name="pgid",
+        command=[py, "-c", f"import os; open({str(out)!r}, 'w').write(str(os.getpgid(0)))"],
+        timeout_min=1,
+    )
+    assert check.run_lane(lane, tmp_path, tmp_path / "pgid.log")[0] == 0
+    assert int(out.read_text()) == os.getpgid(0)
 
 
 # --- verifier arithmetic (CI side) --------------------------------------------
