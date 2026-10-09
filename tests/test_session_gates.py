@@ -754,6 +754,21 @@ def test_p3i_a_worktree_intent_is_shown_and_acked_from_the_main_folder(repo, git
 # --- p1c: rails state prints every worktree's line of work ------------------------------
 
 
+def test_p1c_state_lists_every_worktree_s_line_of_work(repo, git, tmp_path):
+    from rails.gates.state import lines_of_work
+
+    wt = tmp_path / "wt2"
+    git(repo, "worktree", "add", "-q", "-b", "other-line", str(wt))
+    rid, other = store.find_repo(repo), store.find_repo(wt)
+    assert claims.add(rid, "work", ["#12"])[0]
+    assert claims.add(other, "other-line", ["#34"])[0]
+    store.write_json(other.leaf_dir / "pr.json", {"number": 56, "state": "OPEN", "armed": True})
+    rows = lines_of_work(rid)
+    assert len(rows) == 2, rows
+    assert any("work" in r and "#12" in r and "no claim" not in r for r in rows), rows
+    assert any("other-line" in r and "#34" in r and "PR #56 OPEN armed" in r for r in rows), rows
+
+
 
 # --- apex review round 1 ---------------------------------------------------------------
 
@@ -882,6 +897,16 @@ def test_p2_a_pr_that_left_open_forgets_its_disarm(repo, monkeypatch):
     assert "disarmed_by" not in store.read_json(rid.leaf_dir / "pr.json")
 
 
+def test_p1c_state_survives_a_deleted_worktree(repo, git, tmp_path):
+    import shutil
+
+    gone = tmp_path / "gone"
+    git(repo, "worktree", "add", "-q", "-b", "gone", str(gone))
+    shutil.rmtree(gone)
+    lines = state_gate.lines_of_work(store.find_repo(repo))
+    assert any("(folder gone)" in line for line in lines), lines
+
+
 def test_p3i_a_main_folder_with_its_own_intent_still_acks_the_worktree_s(repo, git, tmp_path):
     (repo / ".rails").mkdir()
     (repo / ".rails" / "intent.md").write_text("# the main folder's old intent\n", encoding="utf-8")
@@ -942,6 +967,14 @@ def test_p3d_a_claim_made_by_jarvis_s_claim_py_keeps_its_line(repo):
     line = work.line_of_work(rid)
     claims._write(rid.main, {rid.leaf: {"branch": "work", "items": ["#1", "#2"], "at": "2026-01-02T00:00:00Z"}})
     assert work.line_of_work(rid) == line
+
+
+def test_p1c_state_treats_a_half_removed_worktree_as_gone(repo, git, tmp_path):
+    half = tmp_path / "half"
+    git(repo, "worktree", "add", "-q", "-b", "half", str(half))
+    (half / ".git").unlink()
+    lines = state_gate.lines_of_work(store.find_repo(repo))
+    assert any("(folder gone)" in line and "half" in line for line in lines), lines
 
 
 def test_p2_a_pr_that_left_open_releases_its_hold(repo, monkeypatch):

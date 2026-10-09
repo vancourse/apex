@@ -614,9 +614,14 @@ def main(argv: list[str]) -> int:
     if cmd == "whereis":
         return cmd_whereis(rest)
     if cmd == "state":
-        from rails.gates.state import render
+        from rails.gates.state import lines_of_work, render
 
-        print(render(_repo_or_die()))
+        repo = _repo_or_die()
+        print(render(repo))
+        print()
+        print("lines of work (every worktree):")
+        for line in lines_of_work(repo):
+            print(f"  {line}")
         return 0
     if cmd == "new":
         from rails import new

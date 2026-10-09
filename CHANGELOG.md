@@ -29,6 +29,9 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   OPEN, releases it. `arm_review` only logs until 2026-10-15, and a hand re-arm undid the disarm.
   `arm_review` trusts `pr.json`'s PR number only on the branch it was opened from.
   (morphyxAI/jarvis#2621)
+- **`rails state` lists every worktree's line of work (p1c):** one line each, with its branch, its
+  claim, its PR and its open items, read from the local store. A worktree whose folder is gone, or
+  half removed, is listed as gone. (morphyxAI/jarvis#2620)
 
 ### Fixed (the holes the 1.3.0 review left open, morphyxAI/jarvis#2622)
 - **An agent's `--accept` no longer arms (p3b).** A review receipt whose open must-fixes an agent
