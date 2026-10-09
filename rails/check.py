@@ -119,12 +119,36 @@ def _descendants(pid: int) -> list[int] | None:
         if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
             children.setdefault(int(fields[1]), []).append(int(fields[0]))
     found: list[int] = []
+    seen = {pid}
     queue = [pid]
     while queue:
         for child in children.get(queue.pop(0), []):
-            found.append(child)
-            queue.append(child)
+            if child not in seen:
+                seen.add(child)
+                found.append(child)
+                queue.append(child)
     return found
+
+
+def _freeze_tree(pid: int) -> list[int] | None:
+    """POSIX: SIGSTOP `pid` and every process under it, parents first, walking again until
+    a walk finds nothing new: a stopped process cannot start another, so nothing is born
+    between the listing and the kill. None when the process table could not be read."""
+    frozen: list[int] = []
+    for _ in range(20):
+        below = _descendants(pid)
+        if below is None:
+            return frozen or None
+        new = [p for p in [pid, *below] if p not in frozen]
+        if not new:
+            break
+        for p in new:
+            frozen.append(p)
+            try:
+                os.kill(p, signal.SIGSTOP)
+            except OSError:
+                pass
+    return frozen
 
 
 def _kill_tree(proc: subprocess.Popen) -> str:
@@ -135,7 +159,8 @@ def _kill_tree(proc: subprocess.Popen) -> str:
     beside another session's suite (2026-10-09). The tree is found by parent pid, as
     `taskkill /T` does on Windows; the lane stays in rails's process group, so Ctrl+C,
     a hangup or a kill aimed at the group still reach it as before. A process whose
-    parent had already exited is not found."""
+    parent had already exited is not found, nor, on Windows, one started while
+    taskkill works (POSIX freezes the tree first)."""
     if os.name == "nt":
         # By full path: a bare name is looked up in the current directory first.
         root = os.environ.get("SystemRoot", r"C:\Windows")
@@ -155,17 +180,22 @@ def _kill_tree(proc: subprocess.Popen) -> str:
         except (OSError, subprocess.TimeoutExpired) as exc:
             note = f"taskkill could not run ({exc}); stopped only the lane's own process"
     else:
-        below = _descendants(proc.pid)
-        if below is None:
+        tree = _freeze_tree(proc.pid)
+        if tree is None:
             note = "could not read the process table (`ps`); stopped only the lane's own process"
         else:
-            # Parents first, so none is left alive to start a replacement.
-            for pid in [proc.pid, *below]:
+            killed, missed = 0, []
+            for pid in tree:
                 try:
                     os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-            note = f"killed the lane and {len(below)} process(es) under it"
+                    killed += 1
+                except ProcessLookupError:
+                    pass  # it exited between the listing and the kill
+                except OSError as exc:
+                    missed.append(f"{pid} ({exc.strerror})")
+            note = f"killed {killed} of the lane's {len(tree)} process(es)"
+            if missed:
+                note += f"; could not kill {', '.join(missed)}"
     try:
         proc.kill()  # a no-op once it is gone
     except OSError:

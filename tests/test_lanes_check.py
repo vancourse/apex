@@ -265,7 +265,60 @@ def test_a_timed_out_lane_stops_every_process_it_started(tmp_path, py):
     log = log_path.read_text(encoding="utf-8")
     assert code == 124
     assert "RAILS: lane timed out after" in log
-    assert ("taskkill /T /F exit 0" if os.name == "nt" else "killed the lane and") in log, log
+    assert ("taskkill /T /F exit" if os.name == "nt" else "of the lane's") in log, log
+
+
+def test_a_tree_kill_that_fails_says_so_and_still_stops_the_lane(tmp_path, py, monkeypatch):
+    """When taskkill or `ps` cannot do its part, the log says the tree may have survived."""
+    if os.name == "nt":
+        real_run = subprocess.run
+
+        def taskkill_fails(argv, *args, **kwargs):
+            if str(argv[0]).lower().endswith("taskkill.exe"):
+                return subprocess.CompletedProcess(argv, 128, "ERROR: refused", "")
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(check.subprocess, "run", taskkill_fails)
+        expected = "taskkill /T /F exit 128: ERROR: refused"
+    else:
+        monkeypatch.setattr(check, "_descendants", lambda pid: None)
+        expected = "could not read the process table (`ps`); stopped only the lane's own process"
+    lane = lanes.Lane(
+        name="slow", command=[py, "-c", "import time; time.sleep(60)"], timeout_min=2 / 60
+    )
+    log_path = tmp_path / "slow.log"
+    assert check.run_lane(lane, tmp_path, log_path)[0] == 124
+    log = log_path.read_text(encoding="utf-8")
+    assert expected in log, log
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX freezes the tree before the kill")
+def test_a_lane_still_forking_at_the_timeout_leaves_nothing_behind(tmp_path, py):
+    """A child started between the listing and the kill would be re-parented to init
+    when its parent dies, and no parent-pid walk could find it again."""
+    pids = tmp_path / "children"
+    spawner = (
+        "import subprocess, time\n"
+        f"out = open({str(pids)!r}, 'a')\n"
+        "while True:\n"
+        "    out.write(f'{subprocess.Popen([\"sleep\", \"60\"]).pid}\\n'); out.flush()\n"
+        "    time.sleep(0.005)\n"
+    )
+    lane = lanes.Lane(name="forks", command=[py, "-c", spawner], timeout_min=1.5 / 60)
+    assert check.run_lane(lane, tmp_path, tmp_path / "forks.log")[0] == 124
+    # Complete lines only: a pid cut short by the kill would name some other process.
+    started = [int(line) for line in pids.read_text().split("\n")[:-1]]
+    assert started, "the planted lane never started a child"
+    try:
+        deadline = time.monotonic() + 5  # SIGKILL lands asynchronously
+        left = started
+        while left and time.monotonic() < deadline:
+            left = [pid for pid in left if _alive(pid)]
+            time.sleep(0.2)
+        assert not left, f"{len(left)} of {len(started)} children outlived the lane"
+    finally:
+        for pid in started:
+            _reap(pid)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups")
