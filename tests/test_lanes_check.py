@@ -342,11 +342,13 @@ def test_ctrl_c_during_the_freeze_leaves_nothing_stopped(tmp_path, py, monkeypat
         check.run_lane(lane, tmp_path, tmp_path / "slow.log")
     assert len(walks) == 2 and pid_file.is_file()
     pid = int(pid_file.read_text())
+    root = int((tmp_path / "child.pid").read_text())
     try:
         assert _gone_within(pid, 3), f"grandchild {pid} left frozen by an interrupted kill"
+        assert _gone_within(root, 3), f"lane root {root} left frozen by an interrupted kill"
     finally:
         _reap(pid)
-        _reap(int((tmp_path / "child.pid").read_text()))  # a frozen root is not reaped
+        _reap(root)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups")

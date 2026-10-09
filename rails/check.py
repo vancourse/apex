@@ -135,8 +135,8 @@ def _freeze_tree(pid: int, frozen: list[int]) -> bool:
     walking again until a walk finds nothing new: a stopped process cannot start
     another, so nothing is born between the listing and the kill. `frozen` stays empty
     when the process table could not be read. The caller owns the list, so what was
-    stopped is killed even when the walk is cut short. False when the last walk was
-    not a clean one (a later `ps` failed, or 20 walks kept finding more)."""
+    stopped is killed even when the walk is cut short. False when the walk did not
+    finish (a later `ps` failed, or 20 walks kept finding more)."""
     seen: set[int] = set()
     for _ in range(20):
         below = _descendants(pid)
@@ -207,7 +207,7 @@ def _kill_tree(proc: subprocess.Popen) -> str:
             if missed:
                 note += f"; could not kill {', '.join(missed)}"
             if not complete:
-                note += "; the last walk of the process table failed, so the list may be short"
+                note += "; the walk of the process table did not finish, so the list may be short"
     try:
         proc.kill()  # a no-op once it is gone
     except OSError:

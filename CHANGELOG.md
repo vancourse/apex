@@ -21,7 +21,9 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   jarvis that is `boot`'s smoke compose projects and `purser-e2e`'s planted database. A lane that
   holds outside resources should clear stale ones when it starts. A process whose parent had already
   exited is not found. On Windows, taskkill lists the tree once, so a process started while it works
-  is not found either.
+  is not found either. If rails itself is killed outright during the brief POSIX freeze, what it
+  had already stopped stays stopped until something sends SIGCONT. A terminal's kernel does this when
+  rails exits. A harness that starts rails from another session does not.
 
 ## [1.3.0] — 2026-10-08
 
