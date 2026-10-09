@@ -21,10 +21,13 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     or is killed frees the lock. Its holder record (`locks/<name>.holder.json`, display only) can
     stay behind; the next holder overwrites it. A rails version without this ignores the key and
     runs the lane unlocked, as it did before.
-  - **A worktree that moves while waiting is not certified.** After the wait, `rails check` re-reads
-    HEAD, the tree and the tracked-file state, and re-checks the lane's prerequisites. If any of
-    them changed, the lane fails (exit 125, with the reason) and no marker is written, instead of
-    certifying the old commit for content it never ran.
+  - **A worktree that moves while waiting is not certified.** After the wait, `rails check`
+    re-checks the lane's prerequisites. It then re-reads HEAD, the tree and the tracked-file state;
+    with `--allow-dirty`, which certifies nothing, only HEAD and the tree.
+    - If the worktree moved, the whole check fails, even when the lane is advisory. The lane gets
+      exit 125 with the reason, later lanes print `skip` and do not run, and no marker is written.
+      Before this, the old commit could be certified for content it never ran.
+    - A prerequisite that went missing during the wait fails that lane only, as before the wait.
   - Only lock contention counts as waiting. Any other lock error (a filesystem without locks) is
     raised, so a run does not wait forever for a holder that does not exist. Names are plain words,
     must be strings, and may not be Windows device names (`nul`, `con`, `com1`).

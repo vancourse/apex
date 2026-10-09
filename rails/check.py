@@ -233,12 +233,11 @@ def _lane_lock(
     def note(holder: object, waited: float) -> None:
         who = "another check"
         if isinstance(holder, dict):
+            since = "?"
             stamp = holder.get("since")
-            since = (
-                time.strftime("%H:%M", time.localtime(stamp))
-                if isinstance(stamp, (int, float))
-                else "?"
-            )
+            if isinstance(stamp, (int, float)):
+                with contextlib.suppress(OSError, ValueError, OverflowError):
+                    since = time.strftime("%H:%M", time.localtime(stamp))
             who = (
                 f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
                 f"{str(holder.get('sha', ''))[:12]}) since {since}"
@@ -254,21 +253,20 @@ def _lane_lock(
     return store.machine_lock(lane.lock, holder, on_wait=note)
 
 
-def _stale_after_wait(
-    lane: lanes_mod.Lane, top: Path, sha: str, tree_sha: str, dirty: list[str]
+def _moved_since_start(
+    top: Path, sha: str, tree_sha: str, dirty: list[str], allow_dirty: bool
 ) -> str | None:
-    """Why the snapshot taken before a lock wait no longer describes the worktree, if so.
+    """Why the worktree no longer is the snapshot this check certifies, if it is not.
 
-    A marker certifies the commit read at the start, and a wait can last an hour, long
-    enough for its author to commit or edit. The lane must not run on one tree and be
-    recorded against another; and a prerequisite that held then may not hold now.
+    A marker certifies the commit read at the start, and a lock wait can last an hour,
+    long enough for its author to commit or edit. A run that dirties nothing it may
+    (``--allow-dirty`` certifies nothing anyway) is held to HEAD and the tree only.
     """
     if head(top) != sha or tree(top) != tree_sha:
-        return f"HEAD moved while waiting for lock {lane.lock!r}; check the new commit"
-    if sorted(dirty_tracked(top)) != sorted(dirty):
-        return f"tracked files changed while waiting for lock {lane.lock!r}"
-    why = missing_prerequisite(lane)
-    return f"prerequisite: {why}" if why else None
+        return "HEAD moved since the check started"
+    if not allow_dirty and sorted(dirty_tracked(top)) != sorted(dirty):
+        return "tracked files changed since the check started"
+    return None
 
 
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
@@ -391,7 +389,7 @@ def check(
     if not selected:
         print("  nothing selected", file=out)
     log_dir = repo.leaf_dir / "logs" / sha[:12]
-    for lane in selected:
+    for index, lane in enumerate(selected):
         why = missing_prerequisite(lane)
         if why:
             print(f"  FAIL  {lane.name:<14} prerequisite: {why}", file=out)
@@ -409,16 +407,22 @@ def check(
             continue
         log_path = log_dir / f"{lane.name}.log"
         lock_fields: dict[str, object] = {}
-        stale = None
+        moved = prerequisite = None
         with _lane_lock(lane, repo, sha, out) as waited:
             if lane.lock:
                 lock_fields = {"lock": lane.lock, "waited": round(waited, 1)}
-                stale = _stale_after_wait(lane, top, sha, tree_sha, dirty)
-            if stale is None:
+                # The slow probe first, the git re-read last: the window between the
+                # re-read and the lane's start stays as short as it can be.
+                prerequisite = missing_prerequisite(lane)
+                moved = _moved_since_start(top, sha, tree_sha, dirty, allow_dirty)
+            if moved is None and prerequisite is None:
                 print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
                 code, secs = run_lane(lane, top, log_path)
-        if stale is not None:
-            print(f"  FAIL  {lane.name:<14} {stale}", file=out)
+        if moved is not None:
+            # The whole check stops describing `sha`, so it fails whatever the lane's
+            # advisory date, and no later lane runs on the moved tree under `sha`.
+            why = f"{moved} (waited {waited:.0f}s for lock {lane.lock!r}); check the commit you mean"
+            print(f"  FAIL  {lane.name:<14} {why}", file=out)
             receipts.write(
                 repo,
                 "lane",
@@ -427,7 +431,25 @@ def check(
                 tree=tree_sha,
                 exit=125,
                 secs=0,
-                why=stale,
+                why=why,
+                dirty=bool(dirty),
+                **lock_fields,
+            )
+            failed.append(lane.name)
+            for rest in selected[index + 1 :]:
+                print(f"  skip  {rest.name:<14} not run: the worktree moved", file=out)
+            break
+        if prerequisite is not None:
+            print(f"  FAIL  {lane.name:<14} prerequisite: {prerequisite}", file=out)
+            receipts.write(
+                repo,
+                "lane",
+                lane=lane.name,
+                sha=sha,
+                tree=tree_sha,
+                exit=125,
+                secs=0,
+                why=prerequisite,
                 **lock_fields,
             )
             (advisory_failed if lane.advisory() else failed).append(lane.name)

@@ -5,10 +5,11 @@ not certified."""
 from __future__ import annotations
 
 import errno
+import importlib
 import io
+import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -36,15 +37,31 @@ with store.machine_lock("t", {"leaf": "other-tree", "lane": "suite", "sha": "abc
 """
 
 
-def _hold(tmp_path: Path, mode: str = "hold"):
-    held, release = tmp_path / "held", tmp_path / "release"
-    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, str(held), str(release), mode, ROOT])
-    deadline = time.monotonic() + 20
-    while not held.exists():
-        assert proc.poll() is None or mode == "die", "holder exited before taking the lock"
-        assert time.monotonic() < deadline, "holder never took the lock"
-        time.sleep(0.02)
-    return proc, release
+@pytest.fixture
+def hold(tmp_path):
+    """Start a holder of lock "t"; whatever the test does, it is released at teardown."""
+    started: list[tuple[subprocess.Popen, Path]] = []
+
+    def start(mode: str = "hold") -> tuple[subprocess.Popen, Path]:
+        held, release = tmp_path / "held", tmp_path / "release"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _HOLDER, str(held), str(release), mode, ROOT]
+        )
+        started.append((proc, release))
+        deadline = time.monotonic() + 20
+        while not held.exists():
+            assert proc.poll() is None or mode == "die", "holder exited before taking the lock"
+            assert time.monotonic() < deadline, "holder never took the lock"
+            time.sleep(0.02)
+        return proc, release
+
+    yield start
+    for proc, release in started:
+        release.write_text("go")
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def _when_waiting(out: io.StringIO, lane: str, then) -> threading.Thread:
@@ -82,27 +99,29 @@ def test_a_lock_that_is_not_a_string_is_refused(value):
         lanes.loads(f'[[lane]]\nname = "suite"\nlock = {value}\n')
 
 
-def test_only_contention_counts_as_held_when_strict():
+def test_only_contention_counts_as_held_when_strict(tmp_path, monkeypatch):
     """A lock error that is not contention must raise, or a waiter waits for nobody."""
-    with tempfile.TemporaryFile() as handle:
-        fd = handle.fileno()
+    module_name, call = ("msvcrt", "locking") if os.name == "nt" else ("fcntl", "flock")
+    module = importlib.import_module(module_name)
+    contended = errno.EACCES if os.name == "nt" else errno.EWOULDBLOCK
 
-    class Closed:
-        def seek(self, _offset: int) -> None:
-            pass
+    def failing(code: int):
+        def raiser(*_args, **_kwargs):
+            raise OSError(code, "planted")
 
-        def fileno(self) -> int:
-            return fd
+        return raiser
 
-    assert store._try_lock(Closed()) is False
-    with pytest.raises(OSError) as raised:
-        store._try_lock(Closed(), strict=True)
-    assert raised.value.errno not in store._CONTENDED
-    assert errno.EACCES in store._CONTENDED
+    with open(tmp_path / "x.lock", "a+b") as handle:
+        monkeypatch.setattr(module, call, failing(errno.EBADF))
+        assert store._try_lock(handle) is False
+        with pytest.raises(OSError):
+            store._try_lock(handle, strict=True)
+        monkeypatch.setattr(module, call, failing(contended))
+        assert store._try_lock(handle, strict=True) is False
 
 
-def test_a_second_holder_waits_for_the_first_and_learns_who_it_is(tmp_path):
-    proc, release = _hold(tmp_path)
+def test_a_second_holder_waits_for_the_first_and_learns_who_it_is(hold):
+    proc, release = hold()
     notes: list[object] = []
 
     def on_wait(holder, waited):
@@ -118,8 +137,8 @@ def test_a_second_holder_waits_for_the_first_and_learns_who_it_is(tmp_path):
     assert not (store.data_root() / "locks" / "t.holder.json").exists()
 
 
-def test_a_holder_that_dies_without_releasing_frees_the_lock(tmp_path):
-    proc, _ = _hold(tmp_path, mode="die")
+def test_a_holder_that_dies_without_releasing_frees_the_lock(hold):
+    proc, _ = hold(mode="die")
     assert proc.wait(timeout=20) == 0
     notes: list[object] = []
     with store.machine_lock("t", {"leaf": "mine"}, poll=0.02, on_wait=lambda h, w: notes.append(h)) as waited:
@@ -127,7 +146,7 @@ def test_a_holder_that_dies_without_releasing_frees_the_lock(tmp_path):
     assert notes == [] and waited < 1.0
 
 
-def test_an_unwritable_holder_record_does_not_cost_the_lock(tmp_path, monkeypatch):
+def test_an_unwritable_holder_record_does_not_cost_the_lock(monkeypatch):
     def refuse(*_args, **_kwargs):
         raise PermissionError(errno.EACCES, "held open by a waiter")
 
@@ -136,25 +155,25 @@ def test_an_unwritable_holder_record_does_not_cost_the_lock(tmp_path, monkeypatc
         assert waited < 1.0
 
 
-def _lanes_with_lock(top: Path, py: str, lock: str, code: str = "print('ok')") -> None:
-    lock_line = f'lock = "{lock}"\n' if lock else ""
+def _write_lanes(top: Path, *blocks: str) -> None:
     (top / "lanes.toml").write_text(
-        f"""
-[settings]
-base = "origin/main"
-[[lane]]
-name = "backend"
-always = true
-command = ["{py}", "-c", "{code}"]
-{lock_line}""",
-        encoding="utf-8",
+        '\n[settings]\nbase = "origin/main"\n' + "".join(blocks), encoding="utf-8"
     )
 
 
-def test_check_waits_for_the_lane_lock_outside_the_lane_time(repo, commit, py, tmp_path):
-    _lanes_with_lock(repo, py, "t")
+def _lane(name: str, py: str, *, lock: str = "", code: str = "print('ok')", extra: str = "") -> str:
+    lock_line = f'lock = "{lock}"\n' if lock else ""
+    return f'[[lane]]\nname = "{name}"\nalways = true\ncommand = ["{py}", "-c", "{code}"]\n{lock_line}{extra}'
+
+
+#: Exit 0 only on the edited content: certifying the commit for it would be a lie.
+_GATE = "import pathlib, sys; sys.exit(0 if 'x = 2' in pathlib.Path('src/a.py').read_text() else 1)"
+
+
+def test_check_waits_for_the_lane_lock_outside_the_lane_time(repo, commit, py, hold):
+    _write_lanes(repo, _lane("backend", py, lock="t"))
     sha = commit(repo, "src/a.py", "x = 1\n")
-    proc, release = _hold(tmp_path)
+    proc, release = hold()
     out = io.StringIO()
 
     def let_go() -> None:
@@ -174,12 +193,10 @@ def test_check_waits_for_the_lane_lock_outside_the_lane_time(repo, commit, py, t
     assert receipts.valid(row)
 
 
-def test_an_edit_made_while_waiting_fails_the_lane_and_leaves_no_marker(repo, commit, py, tmp_path):
-    # The lane passes only on the edited content: certifying the old commit would be a lie.
-    gate = "import pathlib, sys; sys.exit(0 if 'x = 2' in pathlib.Path('src/a.py').read_text() else 1)"
-    _lanes_with_lock(repo, py, "t", code=gate)
+def test_an_edit_made_while_waiting_fails_the_check_and_leaves_no_marker(repo, commit, py, hold):
+    _write_lanes(repo, _lane("backend", py, lock="t", code=_GATE))
     sha = commit(repo, "src/a.py", "x = 1\n")
-    proc, release = _hold(tmp_path)
+    proc, release = hold()
     out = io.StringIO()
 
     def edit_then_let_go() -> None:
@@ -190,7 +207,7 @@ def test_an_edit_made_while_waiting_fails_the_lane_and_leaves_no_marker(repo, co
     assert check.check(repo, out=out) == 1, out.getvalue()
     watcher.join(timeout=20)
     proc.wait(timeout=20)
-    assert "tracked files changed while waiting for lock 't'" in out.getvalue()
+    assert "tracked files changed since the check started" in out.getvalue()
     assert "run   backend" not in out.getvalue()
     rid = store.find_repo(repo)
     assert not receipts.has_marker(rid, sha, full=True)
@@ -198,10 +215,38 @@ def test_an_edit_made_while_waiting_fails_the_lane_and_leaves_no_marker(repo, co
     assert row["exit"] == 125 and row["lock"] == "t", row
 
 
-def test_a_commit_made_while_waiting_fails_the_lane(repo, commit, py, tmp_path):
-    _lanes_with_lock(repo, py, "t")
+def test_a_moved_worktree_fails_even_an_advisory_lane_and_runs_nothing_after(
+    repo, commit, py, hold
+):
+    """Advisory or not, the check no longer describes its commit: no marker, no later lane."""
+    _write_lanes(
+        repo,
+        _lane("slow", py, lock="t", extra='advisory_until = "2099-01-01"\n'),
+        _lane("backend", py, code=_GATE),
+    )
     sha = commit(repo, "src/a.py", "x = 1\n")
-    proc, release = _hold(tmp_path)
+    proc, release = hold()
+    out = io.StringIO()
+
+    def edit_then_let_go() -> None:
+        (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+        release.write_text("go")
+
+    watcher = _when_waiting(out, "slow", edit_then_let_go)
+    assert check.check(repo, out=out) == 1, out.getvalue()
+    watcher.join(timeout=20)
+    proc.wait(timeout=20)
+    text = out.getvalue()
+    assert "run   backend" not in text and "skip  backend" in text, text
+    rid = store.find_repo(repo)
+    assert not receipts.has_marker(rid, sha, full=True)
+    assert {r["lane"] for r in receipts.read(rid, "lane", sha=sha)} == {"slow"}
+
+
+def test_a_commit_made_while_waiting_fails_the_check(repo, commit, py, hold):
+    _write_lanes(repo, _lane("backend", py, lock="t"))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    proc, release = hold()
     out = io.StringIO()
 
     def commit_then_let_go() -> None:
@@ -212,12 +257,12 @@ def test_a_commit_made_while_waiting_fails_the_lane(repo, commit, py, tmp_path):
     assert check.check(repo, out=out) == 1, out.getvalue()
     watcher.join(timeout=20)
     proc.wait(timeout=20)
-    assert "HEAD moved while waiting for lock 't'" in out.getvalue()
+    assert "HEAD moved since the check started" in out.getvalue()
     assert not receipts.has_marker(store.find_repo(repo), sha, full=True)
 
 
 def test_a_lane_without_a_lock_takes_none(repo, commit, py):
-    _lanes_with_lock(repo, py, "")
+    _write_lanes(repo, _lane("backend", py))
     sha = commit(repo, "src/a.py", "x = 1\n")
     assert check.check(repo, out=io.StringIO()) == 0
     assert not (store.data_root() / "locks").exists()
