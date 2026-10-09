@@ -18,10 +18,24 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - The wait is taken before the lane's clock starts, so it counts against neither `timeout_min`
     nor the lane's recorded seconds. The lane receipt carries `lock` and `waited`.
   - The OS holds the lock (`msvcrt.locking` on Windows, `flock` elsewhere), so a holder that crashes
-    or is killed frees it with nothing stale left behind. A rails version without this ignores the
-    key and runs the lane unlocked, as it did before.
-  - Known limit: the lock covers the lane's run. A lane's processes that outlive it (what 1.3.1's
-    timeout kill cannot find) still load the box after the lock is released.
+    or is killed frees the lock. Its holder record (`locks/<name>.holder.json`, display only) can
+    stay behind; the next holder overwrites it. A rails version without this ignores the key and
+    runs the lane unlocked, as it did before.
+  - **A worktree that moves while waiting is not certified.** After the wait, `rails check` re-reads
+    HEAD, the tree and the tracked-file state, and re-checks the lane's prerequisites. If any of
+    them changed, the lane fails (exit 125, with the reason) and no marker is written, instead of
+    certifying the old commit for content it never ran.
+  - Only lock contention counts as waiting. Any other lock error (a filesystem without locks) is
+    raised, so a run does not wait forever for a holder that does not exist. Names are plain words,
+    must be strings, and may not be Windows device names (`nul`, `con`, `com1`).
+  - **Known limits.** The lock covers the lane's run.
+    - **Orphans:** a lane's processes that outlive it still load the box after the lock is released.
+      That covers what 1.3.1's timeout kill cannot find, and the whole lane if rails alone is
+      killed (`Stop-Process` on its pid, `kill -9`).
+    - **No queue:** waiters poll once a second, so the order in which they win is not
+      first-come-first-served.
+    - **One root:** the lock lives under the rails store (`RAILS_DATA`, normally
+      `~/.claude/rails`), so sessions with different roots do not see each other's locks.
 
 ## [1.3.1] — 2026-10-09
 

@@ -23,6 +23,7 @@ The repo key and leaf are found by walking up for ``.git`` in pure Python: a
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import re
@@ -108,8 +109,27 @@ def find_repo(start: Path) -> RepoId | None:
 # --- locking and atomic files ---------------------------------------------------
 
 
-def _try_lock(handle: Any) -> bool:
-    """One non-blocking try at an exclusive lock on byte 0 of an open file."""
+#: The errors a non-blocking lock attempt raises when another process holds the lock:
+#: msvcrt reports EACCES (or EDEADLOCK), flock EWOULDBLOCK/EAGAIN.
+_CONTENDED = frozenset(
+    code
+    for code in (
+        errno.EACCES,
+        errno.EAGAIN,
+        errno.EWOULDBLOCK,
+        errno.EDEADLK,
+        getattr(errno, "EDEADLOCK", None),
+    )
+    if code is not None
+)
+
+
+def _try_lock(handle: Any, *, strict: bool = False) -> bool:
+    """One non-blocking try at an exclusive lock on byte 0 of an open file.
+
+    ``strict`` raises any error that is not contention (a filesystem without locks,
+    a device file), so a waiter does not wait forever on a lock nobody holds.
+    """
     try:
         if os.name == "nt":
             import msvcrt
@@ -121,7 +141,9 @@ def _try_lock(handle: Any) -> bool:
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
-    except OSError:
+    except OSError as exc:
+        if strict and exc.errno not in _CONTENDED:
+            raise
         return False
 
 
@@ -186,9 +208,9 @@ def machine_lock(
     ``on_wait`` gets that record and the seconds waited on the first failed try and
     every ``notify_every`` seconds after.
     """
-    from rails.lanes import LOCK_NAME
+    from rails.lanes import valid_lock_name
 
-    if not LOCK_NAME.fullmatch(name):
+    if not valid_lock_name(name):
         raise ValueError(f"lock name {name!r} must be a plain word")
     directory = data_root() / "locks"
     directory.mkdir(parents=True, exist_ok=True)
@@ -197,14 +219,19 @@ def machine_lock(
     started = time.monotonic()
     next_note = started
     try:
-        while not _try_lock(handle):
+        while not _try_lock(handle, strict=True):
             now = time.monotonic()
             if on_wait is not None and now >= next_note:
                 on_wait(read_json(holder_path, None), now - started)
                 next_note = now + notify_every
             time.sleep(poll)
         waited = time.monotonic() - started
-        write_json(holder_path, {**holder, "pid": os.getpid(), "since": int(time.time())})
+        # Display only: a waiter reading the old record holds it open, and on Windows
+        # that refuses the replace. The lock is held either way.
+        with contextlib.suppress(OSError):
+            write_json(
+                holder_path, {**holder, "pid": os.getpid(), "since": int(time.time())}
+            )
         try:
             yield waited
         finally:

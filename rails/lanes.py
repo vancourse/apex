@@ -47,6 +47,16 @@ from typing import Any, Iterable
 
 #: A lane lock's name: it becomes a file name in the rails store, so a plain word only.
 LOCK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+#: Windows resolves these to devices whatever their extension, so `nul.lock` locks nothing.
+_DOS_DEVICES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{n}" for n in range(1, 10)}
+    | {f"LPT{n}" for n in range(1, 10)}
+)
+
+
+def valid_lock_name(name: str) -> bool:
+    return bool(LOCK_NAME.fullmatch(name)) and name.split(".")[0].upper() not in _DOS_DEVICES
 
 
 @dataclass
@@ -140,11 +150,13 @@ def parse(data: dict[str, Any]) -> LaneConfig:
             raise ValueError(
                 f"lane {name!r}: command must be an argv list, not a shell string"
             )
-        lock = str(raw.get("lock", ""))
-        if lock and not LOCK_NAME.fullmatch(lock):
+        lock = raw.get("lock", "")
+        if not isinstance(lock, str):
+            raise ValueError(f"lane {name!r}: lock must be a string, not {lock!r}")
+        if lock and not valid_lock_name(lock):
             raise ValueError(
                 f"lane {name!r}: lock {lock!r} must be a plain word "
-                "(letters, digits, '.', '_' or '-', at most 64)"
+                "(letters, digits, '.', '_' or '-', at most 64, not a Windows device name)"
             )
         lanes.append(
             Lane(

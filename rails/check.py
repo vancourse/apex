@@ -230,10 +230,15 @@ def _lane_lock(
     if not lane.lock:
         return contextlib.nullcontext(0.0)
 
-    def note(holder: dict | None, waited: float) -> None:
+    def note(holder: object, waited: float) -> None:
         who = "another check"
-        if holder:
-            since = time.strftime("%H:%M", time.localtime(holder.get("since", 0)))
+        if isinstance(holder, dict):
+            stamp = holder.get("since")
+            since = (
+                time.strftime("%H:%M", time.localtime(stamp))
+                if isinstance(stamp, (int, float))
+                else "?"
+            )
             who = (
                 f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
                 f"{str(holder.get('sha', ''))[:12]}) since {since}"
@@ -247,6 +252,23 @@ def _lane_lock(
 
     holder = {"repo": str(repo.main), "leaf": repo.leaf, "lane": lane.name, "sha": sha}
     return store.machine_lock(lane.lock, holder, on_wait=note)
+
+
+def _stale_after_wait(
+    lane: lanes_mod.Lane, top: Path, sha: str, tree_sha: str, dirty: list[str]
+) -> str | None:
+    """Why the snapshot taken before a lock wait no longer describes the worktree, if so.
+
+    A marker certifies the commit read at the start, and a wait can last an hour, long
+    enough for its author to commit or edit. The lane must not run on one tree and be
+    recorded against another; and a prerequisite that held then may not hold now.
+    """
+    if head(top) != sha or tree(top) != tree_sha:
+        return f"HEAD moved while waiting for lock {lane.lock!r}; check the new commit"
+    if sorted(dirty_tracked(top)) != sorted(dirty):
+        return f"tracked files changed while waiting for lock {lane.lock!r}"
+    why = missing_prerequisite(lane)
+    return f"prerequisite: {why}" if why else None
 
 
 def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, float]:
@@ -386,9 +408,30 @@ def check(
             (advisory_failed if lane.advisory() else failed).append(lane.name)
             continue
         log_path = log_dir / f"{lane.name}.log"
+        lock_fields: dict[str, object] = {}
+        stale = None
         with _lane_lock(lane, repo, sha, out) as waited:
-            print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
-            code, secs = run_lane(lane, top, log_path)
+            if lane.lock:
+                lock_fields = {"lock": lane.lock, "waited": round(waited, 1)}
+                stale = _stale_after_wait(lane, top, sha, tree_sha, dirty)
+            if stale is None:
+                print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
+                code, secs = run_lane(lane, top, log_path)
+        if stale is not None:
+            print(f"  FAIL  {lane.name:<14} {stale}", file=out)
+            receipts.write(
+                repo,
+                "lane",
+                lane=lane.name,
+                sha=sha,
+                tree=tree_sha,
+                exit=125,
+                secs=0,
+                why=stale,
+                **lock_fields,
+            )
+            (advisory_failed if lane.advisory() else failed).append(lane.name)
+            continue
         receipts.write(
             repo,
             "lane",
@@ -399,7 +442,7 @@ def check(
             secs=round(secs, 1),
             cmd=" ".join(lane.command),
             dirty=bool(dirty),
-            **({"lock": lane.lock, "waited": round(waited, 1)} if lane.lock else {}),
+            **lock_fields,
         )
         if code == 0:
             print(f"  PASS  {lane.name:<14} {secs:6.0f}s", file=out, flush=True)
