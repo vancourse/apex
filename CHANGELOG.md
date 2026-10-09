@@ -4,6 +4,16 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [Unreleased]
+
+### Added
+- **The disarm (`prepush_disarm`, R3):** a push that lands on a PR armed for auto-squash, with a tree
+  no review receipt covers, turns auto-merge off on that PR, appends a line naming the push to the PR
+  body, and prints how to re-arm (the two reviewers, `rails review record`, then `rails ship`). It
+  acts whether `ship_review` only logged the push (shadow) or the operator pushed with
+  `RAILS_OPERATOR=1`; a prose-only push the receipt still covers leaves the PR armed. A body it could
+  not read is never rewritten. (morphyxAI/jarvis#2621)
+
 ## [1.3.0] — 2026-10-08
 
 The loop enforces itself, and there is one template set. From the 2026-10-08 audit of the design

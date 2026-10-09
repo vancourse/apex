@@ -525,6 +525,111 @@ def test_a_push_to_an_open_pr_needs_a_review_of_the_pushed_tree(repo, commit, mo
     assert githooks.pre_push([], line2, rid) == (0, [])  # before a PR exists, no review is asked
 
 
+def _pushable(monkeypatch, repo, commit, *, shadow_review: bool):
+    """A leak snapshot, a full marker and an open PR for one pushed commit."""
+    names = ("prepush_hold", "prepush_marker", "prepush_retired", "prepush_leak", "ship_review")
+    rows = {
+        n: GateRow(
+            name=n,
+            module="prepush",
+            events=["git:pre-push"],
+            mode="shadow" if (shadow_review and n == "ship_review") else "enforce",
+        )
+        for n in names
+    }
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: True)
+    rid = store.find_repo(repo)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    return rid
+
+
+def _armed(monkeypatch, number: int | None = 12) -> list[tuple[int, str]]:
+    disarmed: list[tuple[int, str]] = []
+    monkeypatch.setattr(githooks, "armed_pr", lambda repo, branch: number)
+    monkeypatch.setattr(
+        githooks, "disarm", lambda repo, n, note: disarmed.append((n, note)) or True
+    )
+    return disarmed
+
+
+def test_p2a_an_unreviewed_push_to_an_armed_pr_disarms_it(repo, commit, monkeypatch):
+    """The planted defect for `prepush_disarm`: `ship_review` in shadow lets the push through,
+    and GitHub's auto-merge would merge the unreviewed tree."""
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 0, msgs
+    assert [n for n, _ in disarmed] == [12]
+    assert sha[:12] in disarmed[0][1]
+    assert any("disarmed PR #12" in m and "rails ship" in m for m in msgs), msgs
+
+
+def test_p2a_the_operator_s_own_push_disarms_too(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=False)
+    disarmed = _armed(monkeypatch)
+    monkeypatch.setenv("RAILS_OPERATOR", "1")
+    monkeypatch.setattr(githooks, "operator", lambda: True)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 0 and [n for n, _ in disarmed] == [12], msgs
+
+
+def test_p2_a_refused_push_lands_nothing_and_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=False)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    code, _ = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 1 and disarmed == []
+
+
+def test_p2b_a_prose_only_push_after_the_review_stays_armed(
+    repo, commit, monkeypatch, tmp_path
+):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    prose = commit(repo, "docs/notes.md", "# notes\n")
+    receipts.write_marker(rid, prose, "t", ["checks"], quick=False)
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {prose} refs/heads/work {ZERO}"], rid)
+    assert code == 0 and disarmed == [], msgs
+    assert sha  # the reviewed code commit is the one the receipt covers
+
+
+def test_p2_a_pr_that_is_not_armed_is_left_alone(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch, number=None)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    code, msgs = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 0 and disarmed == [] and not any("disarmed" in m for m in msgs)
+
+
+def test_p2_disarm_never_blanks_a_body_it_could_not_read(repo, monkeypatch):
+    """`gh pr view` failing must not lead to `gh pr edit` with an empty body."""
+    rid = store.find_repo(repo)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **_):
+        calls.append(argv)
+        ok = argv[:3] == ["gh", "pr", "merge"]
+        return subprocess.CompletedProcess(argv, 0 if ok else 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(githooks.subprocess, "run", fake_run)
+    assert githooks.disarm(rid, 12, "note") is True
+    assert [c[:3] for c in calls] == [["gh", "pr", "merge"], ["gh", "pr", "view"]]
+
+
 def test_a_ticked_box_is_still_owed_and_comments_are_not():
     body = (
         "## Acceptance criteria\n- [x] `step: a1` the invite opens on her phone\n- [ ] she sees only her items\n"

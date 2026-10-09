@@ -188,7 +188,111 @@ def pre_push(
         )
         if result.code != leak.EXIT_CLEAN:
             refusal("prepush_leak", "rails: refused - " + result.report())
+    if not refuse:
+        # The push lands: if it lands on an armed PR with a tree no review covers, auto-merge
+        # would merge it unreviewed - whether `ship_review` only logged it (shadow) or the
+        # operator pushed with RAILS_OPERATOR=1. Disarming refuses nothing.
+        disarm_unreviewed(repo, pushes, messages)
     return (1 if refuse else 0), messages
+
+
+def armed_pr(repo: store.RepoId, branch: str) -> int | None:
+    """The number of ``branch``'s open PR when auto-merge is on; None when it is not, or when
+    it cannot be read (no gh, an error: the push is not held up by an unanswerable question)."""
+    if not shutil.which("gh") or not branch:
+        return None
+    try:
+        done = subprocess.run(
+            ["gh", "pr", "view", branch, "--json", "number,state,autoMergeRequest"],
+            cwd=str(repo.top),
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        info = json.loads(done.stdout) if done.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if info.get("state") == "OPEN" and info.get("autoMergeRequest") and info.get("number"):
+        return int(info["number"])
+    return None
+
+
+def disarm(repo: store.RepoId, number: int, note: str) -> bool:
+    """Turn auto-merge off on PR ``number`` and append ``note`` to its body. True when the
+    merge was disarmed; the body line is best effort and never rewrites a body it could not
+    read (a failed read must not leave the PR with an empty body)."""
+    try:
+        off = subprocess.run(
+            ["gh", "pr", "merge", str(number), "--disable-auto"],
+            cwd=str(repo.top), capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if off.returncode != 0:
+        return False
+    try:
+        view = subprocess.run(
+            ["gh", "pr", "view", str(number), "--json", "body"],
+            cwd=str(repo.top), capture_output=True, text=True, timeout=15,
+        )
+        body = json.loads(view.stdout).get("body") if view.returncode == 0 else None
+        if isinstance(body, str) and body.strip():
+            path = repo.leaf_dir / f"disarm-{number}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body.rstrip() + "\n\n" + note + "\n", encoding="utf-8")
+            subprocess.run(
+                ["gh", "pr", "edit", str(number), "--body-file", str(path)],
+                cwd=str(repo.top), capture_output=True, text=True, timeout=30,
+            )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return True
+
+
+def disarm_unreviewed(
+    repo: store.RepoId, pushes: list[tuple[str, str]], messages: list[str]
+) -> None:
+    """`prepush_disarm` (design R3, section 5 row 7): a push that lands on an armed PR with a
+    tree no review receipt covers takes that PR off auto-merge, and says how to re-arm. A
+    prose-only push (`review.covering` accepts the earlier tree) leaves it armed."""
+    from rails import review, ship
+
+    for branch, sha in pushes:
+        try:
+            if not ship.needs_review(repo.top, None, rev=sha):
+                continue
+            problem = review.arming_problem(review.covering(repo, repo.top, sha))
+        except Exception as exc:  # noqa: BLE001 - unknown is uncovered
+            problem = f"the review receipt could not be checked ({type(exc).__name__})"
+        if not problem:
+            continue
+        number = armed_pr(repo, branch)
+        if number is None:
+            continue
+        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        note = (
+            f"**Disarmed** {stamp}: push {sha[:12]} landed with no review covering its tree, "
+            "so auto-merge was turned off (`prepush_disarm`)."
+        )
+        if disarm(repo, number, note):
+            _log(repo, "prepush_disarm", "disarmed")
+            pr = store.read_json(repo.leaf_dir / "pr.json", None)
+            if isinstance(pr, dict) and pr.get("number") == number:
+                pr["armed"] = False
+                pr["disarmed_by"] = sha
+                store.write_json(repo.leaf_dir / "pr.json", pr)
+            messages.append(
+                f"rails: disarmed PR #{number} - {sha[:12]} landed on it with no review covering "
+                f"its tree, so it will not merge on its own.\n"
+                "  re-arm: run rails:reviewer-coop and rails:reviewer-adversary on this commit, "
+                "`rails review record --coop F --adversary F`, then `rails ship` (it arms again)."
+            )
+        else:
+            _log(repo, "prepush_disarm", "disarm-failed")
+            messages.append(
+                f"rails: PR #{number} is armed and {sha[:12]} has no review covering it, and "
+                f"auto-merge could not be turned off. Do it now: gh pr merge {number} --disable-auto"
+            )
 
 
 def review_refusal(repo: store.RepoId, sha: str, refusal) -> None:
