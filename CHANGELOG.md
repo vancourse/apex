@@ -21,29 +21,36 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     - **Passes:** a flake (it fails in the full run and passes alone), recorded and never
       reverted.
     - **Fails again:** it is rerun at the last verdict's commit. Failing there too means it was
-      already broken (an environment change, a renamed lane or test), so it is reported and not
+      already broken (an environment change, a renamed lane), so it is reported and not
       attributed. Passing there, it is bisected over the first-parent commits between, rerunning
       only those ids; the first commit where it fails is its culprit. Two culprits in one pass are
-      both found.
-    - **The rerun cannot answer** (pytest ran nothing, crashed, or named other ids): the tip stays
-      red and the id is reported, never attributed.
+      both found, and an id the bisect cannot locate is reported.
+    - **Not there at the last verdict** (a new test, or one a merge moved or renamed): if a known
+      failure has the same test name, or the same name under another file fails there (or gives
+      no answer), it is the old test and is reported. Otherwise it is bisected.
+    - **The rerun cannot answer** (pytest ran nothing, crashed, skipped an asked id, named other
+      ids, or the lane's prerequisite went away mid-probe): the tip stays red and the id is
+      reported, never attributed.
     - **pytest refuses a whole run for one id it cannot find,** so a group with no answer is asked
-      one id at a time. An id that runs nothing alone does not exist at that commit (a
-      parametrize case added later). A rootdir-relative id (`tests/t.py::x` for
-      `pkg/tests/t.py::x`) matches the id that was asked.
-    - **Parsing:** ids are read from pytest's short summary, including parametrize ids that hold
-      spaces. A lane that counts more failures in its closing tally than it names is an error, not
-      a verdict.
-  - **`trunk_revert`** (`[settings]`, default `propose`; read at the last verdict's commit, so a
-    culprit that edits the lanes file cannot switch off its own revert) decides what happens to a
-    culprit's PR:
+      one id at a time, at most 20. An id that pytest says it cannot find alone ("not found" or
+      "no tests ran") does not exist at that commit (a parametrize case added later); an exit 4
+      for any other reason (a conftest or usage error) is no answer. A rootdir-relative id
+      (`tests/t.py::x` for `pkg/tests/t.py::x`) matches the id that was asked.
+    - **Parsing:** ids are read from pytest's short summary only (captured log records that start
+      with `ERROR` are not ids), including parametrize ids that hold spaces. A lane whose closing
+      tally counts more failures than its summary lists is an error, not a verdict. A failure plus
+      a teardown error on one test is two of each.
+  - **`trunk_revert`** (`[settings]`, default `propose`) decides what happens to a culprit's PR.
+    It is read at the last verdict's commit, so a culprit that edits, moves or adds a lanes file
+    cannot switch off its own revert; no lanes file there gives the default. The options:
     - `auto` opens a revert PR through GitHub's `revertPullRequest`, runs `rails check` and
       `rails post` on its head, and arms auto-squash when both pass. A check that raises counts as
       red.
     - `propose` opens it unarmed, and `off` only comments.
     - A revert is written to the runner's state the moment it opens, before its check, so a
-      runner killed mid-check never opens a second one. A PR already reverted is skipped, and a
-      revert the runner opened is never reverted again.
+      runner killed mid-check never opens a second one. The next pass that names the same culprit
+      finishes what the killed one did not reach (the check, the arm, the comment). A revert the
+      runner opened is never reverted again.
     - A lane without `trunk_rerun` cannot tell a flake, so its culprits are reported and never
       reverted.
     - Test ids go into comments only through the repository's leak check, when it has one (as
@@ -52,17 +59,17 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     red, is a baseline.
   - **A pass with no verdict posts `error` and is retried.** This covers a missing prerequisite, a
     lane that fails without naming every failure, or a crash. `rails trunk run` retries at once;
-    `watch` retries after 30 minutes and at most 3 times per tip. The last verdict stays the bisect
+    `watch` retries after 30 minutes, up to 3 attempts per tip in all. The last verdict stays the bisect
     base. A tip with no trunk lane is recorded and left alone.
   - **`rails trunk watch`** asks the remote for the tip every 2 minutes and runs a pass when it
     moves (or an error is due a retry). It exits after 90 minutes with no pass and no kick.
     **`rails ship` starts it** detached, with no console window, under the base interpreter and
-    without the session's `VIRTUAL_ENV`, when the lanes declare a trunk lane and no runner is
-    live. It kicks a live one, so that runner waits for this merge.
+    without the session's `VIRTUAL_ENV` (or its directory on `PATH`), when the lanes declare a
+    trunk lane and no runner is live. It kicks a live one, so that runner waits for this merge.
   - **One runner per repository** holds the machine lock `trunk-<repo>`. The trunk lane does not
     take the pre-merge lane's `lock`.
   - **`rails trunk status`** prints the last pass, the failing ids, the flakes and reverts, and
-    whether a runner is live. Only the last 20 tips' logs are kept.
+    whether a runner is live. Only the last 20 tips' logs and 20 revert-check logs are kept.
 - **`machine_lock(..., wait=False)`** raises `LockBusy` with the holder's record instead of
   waiting.
 

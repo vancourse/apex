@@ -47,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -68,6 +69,13 @@ REVERT_MARK = "(rails trunk)"
 _NOTHING_RAN = (4, 5)
 #: pytest's short summary prefixes, and its closing tally (`2 failed, 1 error in 3s`).
 _PREFIXES = ("FAILED ", "ERROR ")
+_SUMMARY_BANNER = "short test summary info"
+_NOT_FOUND = re.compile(r"ERROR: (?:not found|file or directory not found)|no tests ran|collected 0 items")
+_PASSED = re.compile(r"(\d+) passed\b")
+#: A group that gets no answer is re-asked one id at a time, at most this many.
+_MAX_ALONE = 20
+#: The same test name looked for under other files at the last verdict, at most this many.
+_MAX_TWINS = 10
 _TALLY_LINE = re.compile(
     r"^=*\s*\d+ (?:failed|passed|errors?|skipped|deselected|xfailed|xpassed|warnings?)\b.* in [\d.]+s"
 )
@@ -208,26 +216,55 @@ def _node_id(rest: str) -> str:
     return rest if dash == -1 else rest[:dash]
 
 
-def failed_ids(log_text: str) -> list[str]:
-    """Test ids from pytest's short summary, in order, each once."""
-    seen: dict[str, None] = {}
-    for line in log_text.splitlines():
+def _summary_entries(log_text: str) -> list[str]:
+    """Every FAILED/ERROR node id in pytest's short summary, repeats kept: a test that
+    fails and then errors in teardown is listed twice, and the tally counts it twice.
+    When the log has the summary banner only what follows it is read, because captured
+    log records (`ERROR    app:x.py:9 msg`) start with the same word; without one, a line
+    whose id would start with whitespace is such a record and is skipped."""
+    lines = log_text.splitlines()
+    for index, line in enumerate(lines):
+        if _SUMMARY_BANNER in line:
+            lines = lines[index + 1 :]
+            break
+    out: list[str] = []
+    for line in lines:
         line = line.strip()
         for prefix in _PREFIXES:
             if line.startswith(prefix):
-                node = _node_id(line[len(prefix) :])
-                if node:
-                    seen.setdefault(node)
-    return list(seen)
+                rest = line[len(prefix) :]
+                if rest and not rest[0].isspace():
+                    node = _node_id(rest)
+                    if node:
+                        out.append(node)
+    return out
+
+
+def failed_ids(log_text: str) -> list[str]:
+    """Test ids from pytest's short summary, in order, each once."""
+    return list(dict.fromkeys(_summary_entries(log_text)))
+
+
+def _tally_line(log_text: str) -> str | None:
+    for line in reversed(log_text.splitlines()):
+        line = line.strip()
+        if _TALLY_LINE.match(line):
+            return line
+    return None
 
 
 def failure_tally(log_text: str) -> int | None:
     """`failed + errors` from pytest's closing tally line, or None when there is none."""
-    for line in reversed(log_text.splitlines()):
-        line = line.strip()
-        if _TALLY_LINE.match(line):
-            return sum(int(n) for n, _ in _TALLY.findall(line))
-    return None
+    line = _tally_line(log_text)
+    return None if line is None else sum(int(n) for n, _ in _TALLY.findall(line))
+
+
+def _passed_tally(log_text: str) -> int | None:
+    line = _tally_line(log_text)
+    if line is None:
+        return None
+    found = _PASSED.search(line)
+    return int(found.group(1)) if found else 0
 
 
 def _match(asked: list[str], named: list[str]) -> set[str]:
@@ -242,6 +279,11 @@ def _match(asked: list[str], named: list[str]) -> set[str]:
         if len(fits) == 1:
             out.add(fits[0])
     return out
+
+
+def _leaf(test_id: str) -> str:
+    """A test's own name, without its file, class or parameters."""
+    return test_id.rsplit("::", 1)[-1].split("[", 1)[0]
 
 
 # --- the worktree a pass runs in -----------------------------------------------------
@@ -282,11 +324,22 @@ def _present(tree: Path, test_id: str) -> bool:
         return False
     if not rest:
         return True
-    name = rest.split("[")[0].split("::")[-1]
     try:
-        return name in target.read_text(encoding="utf-8", errors="replace")
+        return _leaf(test_id) in target.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
+
+
+def _twins(top: Path, sha: str, test_id: str) -> list[str]:
+    """The same test under another file at `sha` (a moved or renamed test file): every
+    other `.py` that defines the test's name, with the rest of the id kept."""
+    file, _, rest = test_id.partition("::")
+    if not rest:
+        return []
+    pattern = rf"def {re.escape(_leaf(test_id))}\b"
+    out = git(top, "grep", "-l", "-E", pattern, sha, "--", "*.py", check=False)
+    paths = [line.split(":", 1)[1] for line in out.splitlines() if ":" in line]
+    return [f"{path}::{rest}" for path in paths if path != file][:_MAX_TWINS]
 
 
 @dataclass
@@ -303,7 +356,9 @@ class Answer:
 
 
 def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple[Answer, bool]:
-    """The rerun's answer, and whether it ran nothing at all (pytest exit 4 or 5)."""
+    """The rerun's answer, and whether pytest said it found nothing to run (exit 4 or 5
+    with "not found" / "no tests ran": the ids do not exist here). A conftest or usage
+    error also exits 4, says neither, and is no answer."""
     from rails.check import run_lane
 
     rerun = lanes_mod.Lane(
@@ -314,23 +369,34 @@ def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tup
     )
     code, _ = run_lane(rerun, tree, log)
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    passed = _passed_tally(text)
     if code == 0:
+        if passed is not None and passed < len(ids):
+            return Answer(), False  # some asked ids did not run (skipped, deselected)
         return Answer(passed=set(ids)), False
-    named = _match(ids, failed_ids(text))
-    if named and failure_tally(text) in (None, len(named)):
+    entries = _summary_entries(text)
+    named = _match(ids, entries)
+    tally = failure_tally(text)
+    if named and (tally is None or tally <= len(entries)):
+        if passed is not None and passed + len(named) < len(ids):
+            return Answer(failed=named), False  # some asked ids did not run
         return Answer(failed=named, passed=set(ids) - named), False
     if named:
         return Answer(failed=named), False  # more failed than it named: the rest are unknown
     # Nothing ran, a crash, or ids in a form we cannot match: no answer.
-    return Answer(), code in _NOTHING_RAN
+    return Answer(), code in _NOTHING_RAN and bool(_NOT_FOUND.search(text))
 
 
 def _ask(
     top: Path, tree: Path, sha: str, lane: lanes_mod.Lane, ids: list[str], log: Path, result: "Pass"
 ) -> Answer:
     """Rerun `ids` at `sha`. pytest refuses a whole run for one id it cannot find, so a
-    group that gets no answer is asked again one id at a time; one id that runs nothing
-    alone does not exist at this commit (a parametrize case added later) and is absent."""
+    group that gets no answer is asked again one id at a time (at most `_MAX_ALONE` of
+    them); one id that pytest finds nothing for alone does not exist at this commit (a
+    parametrize case added later) and is absent. A probe that failed while the lane's
+    prerequisite went away (Postgres stopped mid-pass) is no answer at all."""
+    from rails.check import missing_prerequisite
+
     _checkout(top, tree, sha)
     present = [i for i in ids if _present(tree, i)]
     answer = Answer(absent=set(ids) - set(present))
@@ -342,13 +408,15 @@ def _ask(
         if nothing:
             answer.absent.update(present)
     elif got.unknown(present):
-        for index, one in enumerate(sorted(got.unknown(present))):
+        for index, one in enumerate(sorted(got.unknown(present))[:_MAX_ALONE]):
             alone, nothing = _run_ids(lane, tree, [one], log.with_name(f"{log.stem}.{index}{log.suffix}"))
             result.reruns += 1
             got.failed |= alone.failed
             got.passed |= alone.passed
             if nothing:
                 answer.absent.add(one)
+    if got.failed and missing_prerequisite(lane):
+        return Answer(absent=answer.absent)
     answer.failed, answer.passed = got.failed, got.passed
     return answer
 
@@ -407,16 +475,22 @@ def _skip(state: dict[str, Any], tip: str, *, force: bool, now: float) -> str | 
     return None
 
 
-def _policy(top: Path, rel: str | None, verdict_sha: str | None, fallback: str) -> str:
-    """`trunk_revert` as the last verdict's commit had it, so a culprit that edits the
-    lanes file cannot switch off its own revert."""
-    if not rel or not verdict_sha:
-        return fallback
-    try:
-        text = git(top, "show", f"{verdict_sha}:{rel}")
-        return lanes_mod.loads(text).trunk_revert
-    except (GitError, ValueError):
-        return fallback
+def _policy(top: Path, verdict_sha: str) -> str:
+    """`trunk_revert` as the last verdict's commit had it, so a culprit that edits, moves
+    or adds a lanes file cannot switch off its own revert. A lanes file that is not there
+    or does not parse at that commit gives the default, never the tip's value."""
+    from rails.check import LANES_FILES
+
+    for rel in LANES_FILES:
+        try:
+            text = git(top, "show", f"{verdict_sha}:{rel}")
+        except GitError:
+            continue
+        try:
+            return lanes_mod.loads(text).trunk_revert
+        except ValueError:
+            break
+    return lanes_mod.LaneConfig(lanes=[]).trunk_revert
 
 
 def run_pass(
@@ -478,7 +552,6 @@ def _run(
         print("rails trunk: the tip has no lanes file; nothing to run", file=out)
         return
     tip_config = lanes_mod.load(tip_lanes)
-    rel = tip_lanes.relative_to(tree_path).as_posix()
     trunk_lanes = [lane for lane in tip_config.lanes if lane.trunk]
     tree_sha = git(top, "rev-parse", f"{tip}^{{tree}}")
     if not trunk_lanes:
@@ -501,9 +574,12 @@ def _run(
         if code == 0:
             continue
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-        ids = failed_ids(text)
+        entries = _summary_entries(text)
+        ids = list(dict.fromkeys(entries))
         tally = failure_tally(text)
-        if not ids or (tally is not None and tally > len(ids)):
+        # The tally counts reports, as the summary lines do (a failure plus a teardown
+        # error is two of each, for one id).
+        if not ids or (tally is not None and tally > len(entries)):
             result.state = "error"
             result.note = (
                 f"{lane.name} exited {code} without naming a failed test"
@@ -536,6 +612,7 @@ def _run(
 
     base_sha = str(verdict["sha"])
     known = verdict.get("failed") or {}
+    known_leaves = {_leaf(i) for ids in known.values() for i in ids}
     by_name = {lane.name: lane for lane in trunk_lanes}
     carried: dict[str, list[str]] = {}
     new: dict[str, list[str]] = {}
@@ -575,10 +652,24 @@ def _run(
     for name, ids in reproduced.items():
         lane = by_name[name]
         at_base = _ask(top, tree_path, base_sha, lane, ids, log_dir / f"{name}.base.log", result)
-        # Failing at the last verdict too (an environment change, a renamed lane or test),
-        # or no answer there: not this range's to blame.
+        # Failing at the last verdict too (an environment change, a renamed lane), or no
+        # answer there: not this range's to blame.
         result.unattributed.extend(i for i in ids if i in at_base.failed or i in at_base.unknown(ids))
-        bisectable = [i for i in ids if i in at_base.passed or i in at_base.absent]
+        bisectable = [i for i in ids if i in at_base.passed]
+        for test_id in sorted(at_base.absent & set(ids)):
+            # Absent at the last verdict: a new test, or an old one a merge moved or renamed.
+            # A known failure of that name, or the same name under another file failing
+            # (or unanswerable) there, makes it the old one: reported, not blamed on the move.
+            if _leaf(test_id) in known_leaves:
+                result.unattributed.append(test_id)
+                continue
+            twins = _twins(top, base_sha, test_id)
+            if twins:
+                seen = _ask(top, tree_path, base_sha, lane, twins, log_dir / f"{name}.twins.log", result)
+                if seen.failed or seen.unknown(twins):
+                    result.unattributed.append(test_id)
+                    continue
+            bisectable.append(test_id)
         if not bisectable:
             continue
 
@@ -593,7 +684,7 @@ def _run(
     for sha in commits:
         if sha in found:
             result.culprits.append(Culprit(sha=sha, ids=found[sha], revertable=sha not in unrevertable))
-    mode = _policy(top, rel, base_sha, tip_config.trunk_revert)
+    mode = _policy(top, base_sha)
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
 
@@ -666,10 +757,14 @@ def _bisect(
             break
         here = failing(lo)
         if not here:
-            break
+            # `hi` was set by an id dropped since. Every id still left passed at each
+            # `lo = mid + 1` (decided on a superset of them) and at `lo`: search after it.
+            start = lo + 1
+            continue
         out.append((commits[lo], here))
         remaining -= here
         start = lo + 1
+    lost |= remaining  # never located: reported, not lost
     return out, lost
 
 
@@ -714,13 +809,17 @@ def _act(
         return
     culprit.pr = int(pr["number"])
     reverts = state.setdefault("reverts", [])
+    report = _report(culprit, tip, _ids_postable(repo, top, culprit.ids))
     for row in reverts:
         if isinstance(row, dict) and int(row.get("pr", -1)) == culprit.pr:
-            culprit.revert, culprit.note = row.get("revert"), "already reverted"
+            # Opened by an earlier pass: finish whatever that pass did not reach (it may
+            # have been killed during the check), and open nothing new.
+            culprit.revert = row.get("revert")
+            culprit.note = "already reverted"
             print(f"  culprit #{culprit.pr} was already reverted by #{row.get('revert')}", file=out)
+            _finish(repo, state, row, forge, culprit, report, revert_check, out)
             return
     ours = {int(r["revert"]) for r in reverts if isinstance(r, dict) and r.get("revert")}
-    report = _report(culprit, tip, _ids_postable(repo, top, culprit.ids))
     if culprit.pr in ours or str(pr.get("title", "")).endswith(REVERT_MARK):
         culprit.note = "a runner revert; not reverted again"
         forge.comment(culprit.pr, report + "\nThis PR is a rails trunk revert, so it is not reverted again.")
@@ -743,36 +842,62 @@ def _act(
         "culprit": culprit.sha,
         "pr": culprit.pr,
         "revert": culprit.revert,
+        "head_ref": str(made.get("head_ref", "")),
+        "head_sha": str(made.get("head_sha", "")),
+        "mode": mode,
         "ids": culprit.ids,
         "armed": False,
+        "checked": mode != "auto",
+        "commented": False,
         "at": int(time.time()),
     }
     reverts.append(row)
     del reverts[:-50]
     write_state(repo, state)  # recorded before anything that can fail or take an hour
-    if mode == "auto":
+    _finish(repo, state, row, forge, culprit, report, revert_check, out)
+
+
+def _finish(
+    repo: store.RepoId,
+    state: dict[str, Any],
+    row: dict[str, Any],
+    forge: Forge,
+    culprit: Culprit,
+    report: str,
+    revert_check: Callable[[dict[str, Any]], bool],
+    out,
+) -> None:
+    """The steps after a revert opens, each recorded as it completes: in auto mode the
+    check and the arm, then the comment on the culprit PR. A pass that dies part-way
+    leaves the rest to the next pass that names the same culprit."""
+    if not row.get("checked"):
+        made = {"number": row["revert"], "head_ref": row.get("head_ref", ""), "head_sha": row.get("head_sha", "")}
         try:
             ok = bool(revert_check(made))
         except Exception as exc:  # noqa: BLE001 - a check that cannot run is a red check
             ok = False
-            print(f"  revert #{culprit.revert}: its check could not run ({type(exc).__name__}: {exc})", file=out)
+            print(f"  revert #{row['revert']}: its check could not run ({type(exc).__name__}: {exc})", file=out)
         if ok:
-            culprit.armed = forge.arm(culprit.revert)
-            if not culprit.armed:
+            row["armed"] = forge.arm(int(row["revert"]))
+            if not row["armed"]:
                 culprit.note = "the revert could not be armed"
         else:
             culprit.note = "the revert's check is red; not armed"
-        row["armed"] = culprit.armed
+        row["checked"] = True
         write_state(repo, state)
-    forge.comment(
-        culprit.pr,
-        report
-        + f"\nReverted by #{culprit.revert}"
-        + (" (auto-squash armed)." if culprit.armed else " (not armed: a person merges it).")
-        + " Re-land with a fix.",
-    )
+    culprit.armed = bool(row.get("armed"))
+    if not row.get("commented"):
+        forge.comment(
+            int(row["pr"]),
+            report
+            + f"\nReverted by #{row['revert']}"
+            + (" (auto-squash armed)." if culprit.armed else " (not armed: a person merges it).")
+            + " Re-land with a fix.",
+        )
+        row["commented"] = True
+        write_state(repo, state)
     print(
-        f"  culprit #{culprit.pr} ({culprit.sha[:12]}): revert #{culprit.revert}"
+        f"  culprit #{row['pr']} ({str(row.get('culprit', ''))[:12]}): revert #{row['revert']}"
         + (" armed" if culprit.armed else " NOT armed"),
         file=out,
     )
@@ -790,17 +915,24 @@ def _post(
 def _remember_flakes(state: dict[str, Any], tip: str, ids: list[str]) -> None:
     rows = state.setdefault("flaky", [])
     now = int(time.time())
-    rows.extend({"sha": tip, "id": i, "at": now} for i in ids)
+    seen = {(r.get("sha"), r.get("id")) for r in rows if isinstance(r, dict)}
+    rows.extend({"sha": tip, "id": i, "at": now} for i in ids if (tip, i) not in seen)
     del rows[:-50]
 
 
 def _prune_logs(logs: Path) -> None:
+    """Keep the newest `_KEEP_LOG_DIRS` tips' log directories and as many revert logs."""
     try:
-        dirs = sorted((p for p in logs.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime)
+        entries = list(logs.iterdir())
     except OSError:
         return
-    for old in dirs[:-_KEEP_LOG_DIRS]:
-        shutil.rmtree(old, ignore_errors=True)
+    for kind in (True, False):
+        group = sorted((p for p in entries if p.is_dir() is kind), key=lambda p: p.stat().st_mtime)
+        for old in group[:-_KEEP_LOG_DIRS]:
+            if kind:
+                shutil.rmtree(old, ignore_errors=True)
+            else:
+                old.unlink(missing_ok=True)
 
 
 def _record(
@@ -940,7 +1072,7 @@ def _kick(repo: store.RepoId) -> None:
     """Tell a live watcher a merge is coming: it restarts its idle clock."""
     path = _kick_path(repo)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(time.time_ns()), encoding="utf-8")
+    path.write_text(uuid.uuid4().hex, encoding="utf-8")  # unique, whatever the clock's resolution
 
 
 def _read_kick(repo: store.RepoId) -> str:
@@ -1000,6 +1132,13 @@ def watch(
         return 0
 
 
+def _within(path: str, root: str) -> bool:
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def runner_live(repo: store.RepoId) -> bool:
     try:
         with store.machine_lock(lock_name(repo), {}, wait=False):
@@ -1029,6 +1168,11 @@ def start_background(top: Path, out=sys.stdout) -> bool:
     argv = [_python(), str(rails_bin), "trunk", "watch"]
     # The session's virtualenv is not the runner's: each lane resolves its own.
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        # `uv run` put the session venv's scripts first on PATH; a lane must not find them.
+        keep = [d for d in env.get("PATH", "").split(os.pathsep) if not _within(d, venv)]
+        env["PATH"] = os.pathsep.join(keep)
     with open(log, "ab") as handle:
         kwargs: dict[str, Any] = {
             "cwd": str(repo.main),

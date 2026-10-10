@@ -35,8 +35,9 @@ def boom(name):
     return src.exists() and "boom" in src.read_text()
 if boom("b"):
     fails.append("tests/test_x.py::test_b - boom")
+c_file = "tests/test_y.py" if (root / "tests" / "test_y.py").exists() else "tests/test_x.py"
 if boom("c") or pathlib.Path(sys.argv[3]).exists():
-    fails.append("tests/test_x.py::test_c - boom")
+    fails.append(c_file + "::test_c - boom")
 if boom("p"):
     fails.append("tests/test_x.py::test_p[b] - boom")
 flag = pathlib.Path(sys.argv[2])
@@ -45,6 +46,12 @@ if flag.exists():
     fails.append("tests/test_x.py::test_flaky - flaky")
 for line in fails:
     print("FAILED " + line)
+# The teardown switch: each failing test also errors in teardown, as pytest reports it
+# (a second summary line for the same id), and the closing tally counts both.
+if fails and pathlib.Path(sys.argv[4]).exists():
+    for line in fails:
+        print("ERROR " + line.split(" - ")[0] + " - RuntimeError: teardown")
+    print(f"==== {len(fails)} failed, {len(fails)} error in 0.10s ====")
 sys.exit(1 if fails else 0)
 """
 
@@ -135,6 +142,7 @@ def site(tmp_path):
     (scripts / "rerun.py").write_text(RERUN, encoding="utf-8")
     runs, reruns = tmp_path / "runs.txt", tmp_path / "reruns.txt"
     flaky, env_broken = tmp_path / "flaky.on", tmp_path / "env.broken"
+    teardown = tmp_path / "teardown.on"
     s = lambda p: str(p).replace("\\", "/")  # noqa: E731
 
     def lanes(revert: str = "auto", rerun: str | None = "default", needs: str = "") -> str:
@@ -151,7 +159,7 @@ trunk_revert = "{revert}"
 name = "suite"
 always = true
 command = ["{PY}", "-c", "print('pre-merge')"]
-trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}", "{s(env_broken)}"]
+trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}", "{s(env_broken)}", "{s(teardown)}"]
 {rerun_line}
 {needs}
 """
@@ -181,6 +189,17 @@ trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}",
         forge.prs[sha] = {"number": n, "node_id": f"PR_{n}", "head_ref": f"feature-{n}", "title": title or f"PR {n}"}
         return sha
 
+    def move(src: str, dst: str) -> str:
+        """A merged PR that only moves a file."""
+        _git(app, "mv", src, dst)
+        n = numbers["next"]
+        numbers["next"] += 1
+        _git(app, "commit", "-q", "-m", f"PR {n}: move {src}")
+        _git(app, "push", "-q", "origin", "main")
+        sha = _git(app, "rev-parse", "HEAD")
+        forge.prs[sha] = {"number": n, "node_id": f"PR_{n}", "head_ref": f"feature-{n}", "title": f"PR {n}"}
+        return sha
+
     def count(path: Path) -> int:
         return int(path.read_text()) if path.exists() else 0
 
@@ -188,8 +207,8 @@ trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}",
         pass
 
     site = Site()
-    site.app, site.forge, site.merge, site.lanes = app, forge, merge, lanes
-    site.flaky, site.env_broken = flaky, env_broken
+    site.app, site.forge, site.merge, site.lanes, site.move = app, forge, merge, lanes, move
+    site.flaky, site.env_broken, site.teardown = flaky, env_broken, teardown
     site.runs = lambda: count(runs)  # type: ignore[attr-defined]
     site.reruns = lambda: count(reruns)  # type: ignore[attr-defined]
     site.checked = []  # type: ignore[attr-defined]
@@ -356,9 +375,14 @@ def test_a_runner_killed_during_the_revert_check_leaves_the_revert_on_record(sit
 
     with pytest.raises(SystemExit):
         _pass(site, check=killed)
-    assert [r["pr"] for r in trunk.read_state(site.repo)["reverts"]] == [site.forge.reverts[0]["pr"]]
+    pr = site.forge.reverts[0]["pr"]
+    assert [r["pr"] for r in trunk.read_state(site.repo)["reverts"]] == [pr]
+    assert site.forge.armed == [] and site.forge.comments == []
     _pass(site)  # the tip was never recorded, so this pass attributes the same PR again
     assert len(site.forge.reverts) == 1
+    # ...and finishes what the killed pass did not reach: the check, the arm, the comment.
+    assert site.checked == [900 + pr, 900 + pr] and site.forge.armed == [900 + pr]
+    assert [n for n, _ in site.forge.comments] == [pr]
 
 
 def test_two_culprits_are_found_in_one_pass(site):
@@ -400,6 +424,47 @@ def test_a_failure_already_red_at_the_last_verdict_is_not_blamed(site):
     assert site.forge.reverts == []
     status = site.forge.last()
     assert status["state"] == "failure" and "unattributed" in status["description"]
+
+
+def test_a_known_failure_whose_file_a_merge_moved_is_not_blamed_on_the_move(site):
+    """test_c is red at the last verdict (an outside cause). A merge moves its file, so it
+    fails under a new id that does not exist at the last verdict: the same test name is
+    known, so it is reported, not blamed on the move (review of cb61211)."""
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_c"]}
+    site.move("tests/test_x.py", "tests/test_y.py")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
+    assert "unattributed" in site.forge.last()["description"]
+
+
+def test_a_moved_known_failure_is_reported_even_when_its_old_file_cannot_be_found(site, monkeypatch):
+    """The known name alone is enough: a twin search that finds nothing (a class-based id,
+    a test renamed with its file) does not turn a known failure into the move's culprit."""
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)
+    site.move("tests/test_x.py", "tests/test_y.py")
+    monkeypatch.setattr(trunk, "_twins", lambda *a, **k: [])
+    code, _ = _pass(site)
+    assert code == 1 and site.forge.reverts == []
+
+
+def test_a_test_moved_in_the_same_range_it_broke_in_is_asked_under_its_old_file(site):
+    """Green at the last verdict; then an outside cause breaks test_c and a merge moves its
+    file in the same range. At the last verdict the new id does not exist, but the same
+    test under its old file fails there too, so the move is not blamed (review of cb61211)."""
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    site.move("tests/test_x.py", "tests/test_y.py")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
 
 
 def test_a_rerun_that_cannot_answer_is_red_not_a_flake(site):
@@ -564,6 +629,30 @@ def test_bisect_finds_each_ids_first_failing_commit():
     assert len(probes) <= 5
 
 
+@pytest.mark.parametrize(
+    ("breaks", "unsure_at", "located", "lost"),
+    [
+        # coop, round 2: t2's drop at c1 had set hi; t1 still breaks at c3.
+        ({"t1": 3, "t2": 2}, {"c1": "t2"}, [("c3", {"t1"})], {"t2"}),
+        # adversary, round 2: t1 dropped at c0; t2 breaks only at the tip.
+        ({"t1": 1, "t2": 4}, {"c0": "t1"}, [("c4", {"t2"})], {"t1"}),
+    ],
+)
+def test_bisect_keeps_searching_after_an_id_is_dropped(breaks, unsure_at, located, lost):
+    commits = ["c0", "c1", "c2", "c3", "c4"]
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        index = commits.index(sha)
+        failed = {t for t in wanted if index >= breaks[t]}
+        passed = set(wanted) - failed
+        if sha in unsure_at:
+            failed.discard(unsure_at[sha])
+            passed.discard(unsure_at[sha])
+        return trunk.Answer(failed=failed, passed=passed)
+
+    assert trunk._bisect(commits, ["t1", "t2"], probe) == (located, lost)
+
+
 def test_bisect_drops_an_id_a_probe_cannot_answer():
     commits = ["c0", "c1", "c2"]
 
@@ -614,6 +703,93 @@ def test_failed_ids_reads_pytest_short_summary_including_spaced_params():
     ]
     assert trunk.failure_tally(log) == 6
     assert trunk.failure_tally("FAILED x - 3 failed things in total\n") is None
+
+
+def test_captured_log_records_are_not_test_ids():
+    """pytest's default captured-log line starts with the level name padded to 8: an
+    ERROR record reads `ERROR    name:file.py:N msg` (review of cb61211)."""
+    with_banner = "\n".join(
+        [
+            "------ Captured log call ------",
+            "ERROR    root:test_x.py:4 boom",
+            "------ Captured stdout call ------",
+            "ERROR app.retry - giving up",  # a test's own print: id-shaped, before the banner
+            "=========== short test summary info ============",
+            "FAILED tests/test_x.py::test_flaky - assert False",
+            "1 failed, 3 passed in 0.05s",
+        ]
+    )
+    without_banner = "ERROR    app.net:net.py:9 timed out\nFAILED tests/t.py::test_a - x\n"
+    assert trunk.failed_ids(with_banner) == ["tests/test_x.py::test_flaky"]
+    assert trunk.failed_ids(without_banner) == ["tests/t.py::test_a"]
+
+
+def test_a_failure_and_its_teardown_error_are_one_id_and_two_reports(site, monkeypatch):
+    """A test that fails and then errors in teardown is listed twice and tallied twice:
+    that is a verdict, not an error pass (review of cb61211)."""
+    log = "FAILED tests/t.py::test_a - x\nERROR tests/t.py::test_a - teardown\n=== 1 failed, 1 error in 0.5s ===\n"
+    assert trunk.failed_ids(log) == ["tests/t.py::test_a"]
+    assert trunk.failure_tally(log) == len(trunk._summary_entries(log)) == 2
+    # The same through a pass: a culprit is found and reverted, the tip is not an error.
+    _pass(site)
+    site.teardown.write_text("on", encoding="utf-8")
+    site.merge("src/b.py", "boom = 1\n")
+    code, _ = _pass(site)
+    assert code == 1 and site.forge.last()["state"] == "failure"
+    assert len(site.forge.reverts) == 1
+
+
+def test_a_rerun_that_skips_an_asked_id_has_no_answer_for_it(tmp_path):
+    script = tmp_path / "skip.py"
+    script.write_text("print('=== 1 passed, 1 skipped in 0.1s ===')\n", encoding="utf-8")
+    lane = lanes_mod.Lane(name="s", command=["x"], trunk_command=["x"], trunk_rerun=[PY, str(script)])
+    answer, nothing = trunk._run_ids(lane, tmp_path, ["t.py::a", "t.py::b"], tmp_path / "r.log")
+    assert answer.unknown(["t.py::a", "t.py::b"]) == {"t.py::a", "t.py::b"} and not nothing
+
+
+def test_a_lone_id_is_absent_only_when_pytest_says_it_found_nothing(tmp_path):
+    usage = tmp_path / "usage.py"
+    usage.write_text("import sys; print('ImportError while loading conftest'); sys.exit(4)\n", encoding="utf-8")
+    missing = tmp_path / "missing.py"
+    missing.write_text("import sys; print('ERROR: not found: t.py::a'); sys.exit(4)\n", encoding="utf-8")
+    for script, absent in ((usage, False), (missing, True)):
+        lane = lanes_mod.Lane(name="s", command=["x"], trunk_command=["x"], trunk_rerun=[PY, str(script)])
+        _, nothing = trunk._run_ids(lane, tmp_path, ["t.py::a"], tmp_path / "r.log")
+        assert nothing is absent, script.name
+
+
+def test_a_probe_whose_prerequisite_died_has_no_answer(site, monkeypatch):
+    from rails import check
+
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    monkeypatch.setattr(check, "missing_prerequisite", lambda lane: None)
+    real_ask = trunk._ask
+    calls = {"n": 0}
+
+    def ask(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:  # the tip's flake check sees Postgres go away
+            monkeypatch.setattr(check, "missing_prerequisite", lambda lane: "Postgres is not reachable")
+        return real_ask(*args, **kwargs)
+
+    monkeypatch.setattr(trunk, "_ask", ask)
+    code, _ = _pass(site)
+    assert code == 1 and site.forge.reverts == []
+    assert "unattributed" in site.forge.last()["description"]
+
+
+def test_the_policy_is_the_default_when_the_verdict_has_no_lanes_file(site, tmp_path):
+    base = _git(site.app, "rev-parse", "HEAD")
+    assert trunk._policy(site.app, base) == "auto"
+    (site.app / "rails").mkdir()
+    _git(site.app, "mv", "lanes.toml", "rails/lanes.toml")
+    _git(site.app, "commit", "-q", "-m", "move lanes")
+    moved = _git(site.app, "rev-parse", "HEAD")
+    assert trunk._policy(site.app, moved) == "auto", "found under rails/lanes.toml"
+    _git(site.app, "rm", "-q", "rails/lanes.toml")
+    _git(site.app, "commit", "-q", "-m", "drop lanes")
+    assert trunk._policy(site.app, _git(site.app, "rev-parse", "HEAD")) == "propose"
 
 
 def test_a_rootdir_relative_id_matches_the_id_that_was_asked():
