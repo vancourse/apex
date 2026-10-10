@@ -95,11 +95,12 @@ class Lane:
         return bool(self.trunk_command)
 
     def on_trunk(self) -> "Lane":
-        """This lane as `rails trunk` runs it: its trunk argv and timeout, same env."""
+        """This lane as `rails trunk` runs it: its trunk argv and timeout, the same env,
+        and no colour (the runner parses pytest's summary lines)."""
         return Lane(
             name=self.name,
             command=list(self.trunk_command),
-            env=dict(self.env),
+            env={**self.env, "PY_COLORS": "0"},
             timeout_min=self.trunk_timeout_min or 2 * self.timeout_min,
             needs=list(self.needs),
         )

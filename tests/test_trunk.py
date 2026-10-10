@@ -40,6 +40,8 @@ if boom("c") or pathlib.Path(sys.argv[3]).exists():
     fails.append(c_file + "::test_c - boom")
 if boom("p"):
     fails.append("tests/test_x.py::test_p[b] - boom")
+if pathlib.Path(sys.argv[5]).exists():  # an outside cause breaks one case of test_p
+    fails.append("tests/test_x.py::test_p[a] - outside")
 flag = pathlib.Path(sys.argv[2])
 if flag.exists():
     flag.unlink()
@@ -55,7 +57,7 @@ if fails and pathlib.Path(sys.argv[4]).exists():
 sys.exit(1 if fails else 0)
 """
 
-# The rerun. argv: reruns-counter, environment-switch, then the ids. A `[b]` id that
+# The rerun. argv: reruns-counter, environment-switch, test_p[a]-switch, then the ids. A `[b]` id that
 # does not exist at this commit (no src/p.py) makes the whole run fail like pytest's
 # "not found": exit 4, nothing named. A flake passes.
 RERUN = """
@@ -63,7 +65,7 @@ import pathlib, sys
 count = pathlib.Path(sys.argv[1])
 count.write_text(str((int(count.read_text()) if count.exists() else 0) + 1))
 root = pathlib.Path.cwd()
-ids = sys.argv[3:]
+ids = sys.argv[4:]
 def boom(name):
     src = root / "src" / f"{name}.py"
     return src.exists() and "boom" in src.read_text()
@@ -75,6 +77,8 @@ for test_id in ids:
     if test_id.endswith("::test_b") and boom("b"):
         bad.append(test_id)
     if test_id.endswith("::test_c") and (boom("c") or pathlib.Path(sys.argv[2]).exists()):
+        bad.append(test_id)
+    if test_id.endswith("::test_p[a]") and pathlib.Path(sys.argv[3]).exists():
         bad.append(test_id)
     if test_id.endswith("::test_p[b]") and boom("p"):
         bad.append(test_id)
@@ -143,11 +147,12 @@ def site(tmp_path):
     runs, reruns = tmp_path / "runs.txt", tmp_path / "reruns.txt"
     flaky, env_broken = tmp_path / "flaky.on", tmp_path / "env.broken"
     teardown = tmp_path / "teardown.on"
+    pa_broken = tmp_path / "pa.broken"
     s = lambda p: str(p).replace("\\", "/")  # noqa: E731
 
     def lanes(revert: str = "auto", rerun: str | None = "default", needs: str = "") -> str:
         rerun_line = {
-            "default": f'trunk_rerun = ["{PY}", "{s(scripts / "rerun.py")}", "{s(reruns)}", "{s(env_broken)}"]',
+            "default": f'trunk_rerun = ["{PY}", "{s(scripts / "rerun.py")}", "{s(reruns)}", "{s(env_broken)}", "{s(pa_broken)}"]',
             "exit4": f'trunk_rerun = ["{PY}", "-c", "import sys; sys.exit(4)"]',
             None: "",
         }[rerun]
@@ -159,7 +164,7 @@ trunk_revert = "{revert}"
 name = "suite"
 always = true
 command = ["{PY}", "-c", "print('pre-merge')"]
-trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}", "{s(env_broken)}", "{s(teardown)}"]
+trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}", "{s(env_broken)}", "{s(teardown)}", "{s(pa_broken)}"]
 {rerun_line}
 {needs}
 """
@@ -209,6 +214,7 @@ trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}",
     site = Site()
     site.app, site.forge, site.merge, site.lanes, site.move = app, forge, merge, lanes, move
     site.flaky, site.env_broken, site.teardown = flaky, env_broken, teardown
+    site.pa_broken = pa_broken
     site.runs = lambda: count(runs)  # type: ignore[attr-defined]
     site.reruns = lambda: count(reruns)  # type: ignore[attr-defined]
     site.checked = []  # type: ignore[attr-defined]
@@ -442,6 +448,49 @@ def test_a_known_failure_whose_file_a_merge_moved_is_not_blamed_on_the_move(site
     assert "unattributed" in site.forge.last()["description"]
 
 
+def test_a_new_failing_case_of_a_known_failing_test_is_still_blamed(site):
+    """One case of a parametrized test stays red from an outside cause; a merge breaks a
+    second case. The known case still fails at the tip, so it cannot be the new case's
+    old copy: the merge is bisected and reverted (review of be89cc3)."""
+    _pass(site)
+    site.pa_broken.write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)
+    assert "tests/test_x.py::test_p[a]" in trunk.read_state(site.repo)["verdict"]["failed"]["suite"]
+    bad = site.merge("src/p.py", "boom = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+def test_twins_are_only_files_gone_at_the_tip(site):
+    """The same test name in a file still at the tip is not where a moved test came from."""
+    (site.app / "tests" / "test_z.py").write_text(TESTS, encoding="utf-8")
+    _git(site.app, "add", "-A")
+    _git(site.app, "commit", "-q", "-m", "a second file defines the same tests")
+    base = _git(site.app, "rev-parse", "HEAD")
+    _git(site.app, "mv", "tests/test_x.py", "tests/test_y.py")
+    _git(site.app, "commit", "-q", "-m", "move x to y")
+    tip = _git(site.app, "rev-parse", "HEAD")
+    assert trunk._twins(site.app, base, tip, "tests/test_y.py::test_c") == ["tests/test_x.py::test_c"]
+
+
+def test_only_a_known_failure_gone_from_the_tip_can_be_a_moved_tests_old_copy():
+    known = {"suite": ["apps/a/tests/test_h.py::test_healthz", "tests/old.py::test_c"]}
+    failing = {"suite": ["apps/a/tests/test_h.py::test_healthz", "tests/new.py::test_c"]}
+    # test_healthz still fails under its own id: a new test_healthz elsewhere is new.
+    assert trunk._moved_tails(known, failing) == {"test_c"}
+
+
+def test_a_param_holding_a_double_colon_keeps_its_test_name():
+    """jarvis parametrizes over IPv6 addresses (`[64:ff9b::a9fe:a9fe]`); the name comes
+    from before the brackets, as pytest reads it (review of be89cc3)."""
+    test_id = "runtime/x/tests/test_r.py::test_denied[64:ff9b::a9fe:a9fe]"
+    assert trunk._leaf(test_id) == "test_denied"
+    assert trunk._tail(test_id) == "test_denied[64:ff9b::a9fe:a9fe]"
+    assert trunk._leaf("t.py::TestA::test_b[::1]") == "test_b"
+
+
 def test_a_moved_known_failure_is_reported_even_when_its_old_file_cannot_be_found(site, monkeypatch):
     """The known name alone is enough: a twin search that finds nothing (a class-based id,
     a test renamed with its file) does not turn a known failure into the move's culprit."""
@@ -585,19 +634,43 @@ def test_ship_starts_a_runner_only_for_a_trunk_lane_and_kicks_a_live_one(site, m
         def __init__(self, argv, **_kwargs) -> None:
             started.append(argv)
 
-    monkeypatch.setattr(trunk.subprocess, "Popen", Popen)
+    monkeypatch.setattr(trunk, "_spawn", Popen)
     assert trunk.start_background(site.app, out=io.StringIO()) is True
     assert started and started[0][-2:] == ["trunk", "watch"]
     before = trunk._read_kick(site.repo)
     with store.machine_lock(trunk.lock_name(site.repo), {"leaf": "w"}):
         assert trunk.start_background(site.app, out=io.StringIO()) is False
     assert trunk._read_kick(site.repo) != before, "a live runner is told a merge is coming"
-    (site.app / "lanes.toml").write_text(
-        '[settings]\nbase = "origin/main"\n[[lane]]\nname = "suite"\ncommand = ["x"]\n',
-        encoding="utf-8",
-    )
+    no_trunk = '[settings]\nbase = "origin/main"\n[[lane]]\nname = "suite"\ncommand = ["x"]\n'
+    # A stale working tree (the main checkout, merges behind) does not hide the base's keys.
+    (site.app / "lanes.toml").write_text(no_trunk, encoding="utf-8")
+    assert trunk._declares_trunk(site.app), "origin/main still declares the trunk lane"
+    # Neither the worktree nor the base declares one: no runner.
+    _git(site.app, "commit", "-q", "-am", "no trunk lane")
+    _git(site.app, "push", "-q", "origin", "main")
     assert trunk.start_background(site.app, out=io.StringIO()) is False
     assert len(started) == 1
+
+
+def test_a_branch_that_adds_the_trunk_lane_starts_the_runner_from_its_own_lanes_file(site, monkeypatch):
+    """The PR that switches the runner on ships before the base has the keys."""
+    started: list[list[str]] = []
+
+    class Popen:
+        def __init__(self, argv, **_kwargs) -> None:
+            started.append(argv)
+
+    monkeypatch.setattr(trunk, "_spawn", Popen)
+    with_trunk = (site.app / "lanes.toml").read_text(encoding="utf-8")
+    (site.app / "lanes.toml").write_text(
+        '[settings]\nbase = "origin/main"\n[[lane]]\nname = "suite"\ncommand = ["x"]\n', encoding="utf-8"
+    )
+    _git(site.app, "commit", "-q", "-am", "base without a trunk lane")
+    _git(site.app, "push", "-q", "origin", "main")
+    _git(site.app, "checkout", "-q", "-b", "switch-on")
+    (site.app / "lanes.toml").write_text(with_trunk, encoding="utf-8")
+    _git(site.app, "commit", "-q", "-am", "the trunk lane")
+    assert trunk.start_background(site.app, out=io.StringIO()) is True and len(started) == 1
 
 
 def test_ids_that_fail_the_leak_check_are_not_posted(site, monkeypatch):
@@ -722,6 +795,18 @@ def test_captured_log_records_are_not_test_ids():
     without_banner = "ERROR    app.net:net.py:9 timed out\nFAILED tests/t.py::test_a - x\n"
     assert trunk.failed_ids(with_banner) == ["tests/test_x.py::test_flaky"]
     assert trunk.failed_ids(without_banner) == ["tests/t.py::test_a"]
+    # A failing test whose captured output holds a nested pytest run: the real summary is
+    # the LAST banner, printed after all captured output.
+    nested = "\n".join(
+        [
+            "------ Captured stdout call ------",
+            "=========== short test summary info ============",
+            "FAILED inner/test_fake.py::test_inner - planted",
+            "=========== short test summary info ============",
+            "FAILED tests/t.py::test_outer - x",
+        ]
+    )
+    assert trunk.failed_ids(nested) == ["tests/t.py::test_outer"]
 
 
 def test_a_failure_and_its_teardown_error_are_one_id_and_two_reports(site, monkeypatch):

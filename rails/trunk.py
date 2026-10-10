@@ -14,11 +14,14 @@ not already have is rerun alone at the tip (``trunk_rerun``):
 
 * it passes: a flake (it fails in the full run and passes alone), recorded, never reverted;
 * it fails again: it is rerun at the last verdict's commit. Failing there too, it was
-  already broken (an environment change, a renamed lane or test): reported, not
-  attributed. Passing there, it is bisected over the first-parent commits between,
-  rerunning only those ids, and the first commit where it fails is its culprit;
-* the rerun could not answer (pytest ran nothing, named other ids, crashed before any
-  verdict, or the id cannot be found): the tip stays red and the id is reported, never
+  already broken (an environment change, a renamed lane): reported, not attributed.
+  Passing there, it is bisected over the first-parent commits between, rerunning only
+  those ids, and the first commit where it fails is its culprit. Not there at all, it is
+  a new test or one a merge moved: a known failure with the same id after its file, gone
+  from the tip, or the same test failing at the last verdict in a file gone from the
+  tip, makes it the old one (reported); otherwise it is bisected;
+* the rerun could not answer (pytest ran nothing, skipped it, named other ids, crashed,
+  or the lane's prerequisite went away): the tip stays red and the id is reported, never
   attributed.
 
 ``trunk_revert`` (lanes file ``[settings]``, read at the last verdict's commit so a culprit
@@ -223,8 +226,10 @@ def _summary_entries(log_text: str) -> list[str]:
     log records (`ERROR    app:x.py:9 msg`) start with the same word; without one, a line
     whose id would start with whitespace is such a record and is skipped."""
     lines = log_text.splitlines()
-    for index, line in enumerate(lines):
-        if _SUMMARY_BANNER in line:
+    # The last banner: pytest prints the real summary after all captured output, which
+    # may hold a nested run's banner.
+    for index in range(len(lines) - 1, -1, -1):
+        if _SUMMARY_BANNER in lines[index]:
             lines = lines[index + 1 :]
             break
     out: list[str] = []
@@ -283,7 +288,13 @@ def _match(asked: list[str], named: list[str]) -> set[str]:
 
 def _leaf(test_id: str) -> str:
     """A test's own name, without its file, class or parameters."""
-    return test_id.rsplit("::", 1)[-1].split("[", 1)[0]
+    # Parameters first: they may hold "::" (`test_x[64:ff9b::a9fe:a9fe]`), as pytest does.
+    return test_id.split("[", 1)[0].rsplit("::", 1)[-1]
+
+
+def _tail(test_id: str) -> str:
+    """Everything after the file: class, name and parameters (`Class::test_x[a]`)."""
+    return test_id.partition("::")[2]
 
 
 # --- the worktree a pass runs in -----------------------------------------------------
@@ -330,16 +341,35 @@ def _present(tree: Path, test_id: str) -> bool:
         return False
 
 
-def _twins(top: Path, sha: str, test_id: str) -> list[str]:
-    """The same test under another file at `sha` (a moved or renamed test file): every
-    other `.py` that defines the test's name, with the rest of the id kept."""
+def _moved_tails(known: dict[str, list[str]], failing: dict[str, list[str]]) -> set[str]:
+    """The ids (after their file) of known failures gone from the tip: not failing there
+    under their own id. Only such a failure can be the old copy of a test a merge moved;
+    one still failing at the tip is another test with the same name (`test_healthz` in
+    two apps) and must not hide a new failure of it."""
+    failing_now = {i for ids in failing.values() for i in ids}
+    return {_tail(i) for ids in known.values() for i in ids if i not in failing_now}
+
+
+def _exists(top: Path, sha: str, path: str) -> bool:
+    done = subprocess.run(["git", "cat-file", "-e", f"{sha}:{path}"], cwd=str(top), capture_output=True)
+    return done.returncode == 0
+
+
+def _twins(top: Path, sha: str, tip: str, test_id: str) -> list[str] | None:
+    """The old copy of a moved test: the same name defined at `sha` in another `.py`
+    file that is gone at the tip (a file still at the tip is not where this test came
+    from), with the rest of the id kept. None when the search could not run."""
     file, _, rest = test_id.partition("::")
     if not rest:
         return []
     pattern = rf"def {re.escape(_leaf(test_id))}\b"
-    out = git(top, "grep", "-l", "-E", pattern, sha, "--", "*.py", check=False)
+    try:
+        out = git(top, "grep", "-l", "-E", pattern, sha, "--", "*.py", check=False)
+    except GitError:
+        return None
     paths = [line.split(":", 1)[1] for line in out.splitlines() if ":" in line]
-    return [f"{path}::{rest}" for path in paths if path != file][:_MAX_TWINS]
+    gone = [p for p in paths if p != file and not _exists(top, tip, p)]
+    return [f"{path}::{rest}" for path in gone][:_MAX_TWINS]
 
 
 @dataclass
@@ -364,7 +394,7 @@ def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tup
     rerun = lanes_mod.Lane(
         name=f"{lane.name}-rerun",
         command=[*lane.trunk_rerun, *ids],
-        env=dict(lane.env),
+        env={**lane.env, "PY_COLORS": "0"},  # a coloured summary line parses as nothing
         timeout_min=lane.timeout_min,
     )
     code, _ = run_lane(rerun, tree, log)
@@ -612,7 +642,7 @@ def _run(
 
     base_sha = str(verdict["sha"])
     known = verdict.get("failed") or {}
-    known_leaves = {_leaf(i) for ids in known.values() for i in ids}
+    moved_tails = _moved_tails(known, failing)
     by_name = {lane.name: lane for lane in trunk_lanes}
     carried: dict[str, list[str]] = {}
     new: dict[str, list[str]] = {}
@@ -656,16 +686,21 @@ def _run(
         # answer there: not this range's to blame.
         result.unattributed.extend(i for i in ids if i in at_base.failed or i in at_base.unknown(ids))
         bisectable = [i for i in ids if i in at_base.passed]
-        for test_id in sorted(at_base.absent & set(ids)):
-            # Absent at the last verdict: a new test, or an old one a merge moved or renamed.
-            # A known failure of that name, or the same name under another file failing
-            # (or unanswerable) there, makes it the old one: reported, not blamed on the move.
-            if _leaf(test_id) in known_leaves:
+        for index, test_id in enumerate(sorted(at_base.absent & set(ids))):
+            # Absent at the last verdict: a new test, or an old one a merge moved. A known
+            # failure with the same class, name and parameters that is gone from the tip,
+            # or the same test in a file gone from the tip failing (or unanswerable) at the
+            # last verdict, makes it the old one: reported, not blamed on the move.
+            if _tail(test_id) in moved_tails:
                 result.unattributed.append(test_id)
                 continue
-            twins = _twins(top, base_sha, test_id)
+            twins = _twins(top, base_sha, tip, test_id)
+            if twins is None:
+                result.unattributed.append(test_id)
+                continue
             if twins:
-                seen = _ask(top, tree_path, base_sha, lane, twins, log_dir / f"{name}.twins.log", result)
+                log = log_dir / f"{name}.twins-{index}.log"
+                seen = _ask(top, tree_path, base_sha, lane, twins, log, result)
                 if seen.failed or seen.unknown(twins):
                     result.unattributed.append(test_id)
                     continue
@@ -870,7 +905,7 @@ def _finish(
     """The steps after a revert opens, each recorded as it completes: in auto mode the
     check and the arm, then the comment on the culprit PR. A pass that dies part-way
     leaves the rest to the next pass that names the same culprit."""
-    if not row.get("checked"):
+    if not row.get("checked", True):  # a row with no flag is done (written before them)
         made = {"number": row["revert"], "head_ref": row.get("head_ref", ""), "head_sha": row.get("head_sha", "")}
         try:
             ok = bool(revert_check(made))
@@ -886,7 +921,7 @@ def _finish(
         row["checked"] = True
         write_state(repo, state)
     culprit.armed = bool(row.get("armed"))
-    if not row.get("commented"):
+    if not row.get("commented", True):
         forge.comment(
             int(row["pr"]),
             report
@@ -1147,16 +1182,45 @@ def runner_live(repo: store.RepoId) -> bool:
         return True
 
 
+def _spawn(argv: list[str], **kwargs: Any) -> None:
+    """Start the detached watcher (one seam, so a test can stand in for it)."""
+    subprocess.Popen(argv, **kwargs)
+
+
+def _declares_trunk(top: Path) -> bool:
+    """Whether this worktree's lanes file, or the base branch's committed one, declares a
+    trunk lane. Never the main checkout's working tree: it may be any number of merges
+    behind the base (review of the jarvis half, 4f47b9216)."""
+    from rails.check import LANES_FILES, find_lanes_file
+
+    configs: list[lanes_mod.LaneConfig] = []
+    found = find_lanes_file(top)
+    if found is not None:
+        try:
+            configs.append(lanes_mod.load(found))
+        except (OSError, ValueError):
+            pass
+    base = configs[0].base if configs else lanes_mod.LaneConfig(lanes=[]).base
+    for rel in LANES_FILES:
+        try:
+            text = git(top, "show", f"{base}:{rel}")
+        except GitError:
+            continue
+        try:
+            configs.append(lanes_mod.loads(text))
+        except ValueError:
+            pass
+        break
+    return any(lane.trunk for config in configs for lane in config.lanes)
+
+
 def start_background(top: Path, out=sys.stdout) -> bool:
     """Start `rails trunk watch` detached when the lanes declare a trunk lane and no runner
     is live; a live one is kicked so it waits for this merge. True when one was started."""
-    from rails.check import find_lanes_file
-
     repo = store.find_repo(top)
     if repo is None:
         return False
-    lanes_file = find_lanes_file(repo.main)
-    if lanes_file is None or not any(lane.trunk for lane in lanes_mod.load(lanes_file).lanes):
+    if not _declares_trunk(top):
         return False
     _kick(repo)
     if runner_live(repo):
@@ -1186,11 +1250,11 @@ def start_background(top: Path, out=sys.stdout) -> bool:
             # the caller's job object when the job allows it (a tool call's job may close).
             base = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
             try:
-                subprocess.Popen(argv, creationflags=base | 0x01000000, **kwargs)  # CREATE_BREAKAWAY_FROM_JOB
+                _spawn(argv, creationflags=base | 0x01000000, **kwargs)  # CREATE_BREAKAWAY_FROM_JOB
             except OSError:
-                subprocess.Popen(argv, creationflags=base, **kwargs)
+                _spawn(argv, creationflags=base, **kwargs)
         else:
-            subprocess.Popen(argv, start_new_session=True, **kwargs)
+            _spawn(argv, start_new_session=True, **kwargs)
     print(f"  trunk: runner started; it logs to {log}", file=out)
     return True
 

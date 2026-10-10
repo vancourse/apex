@@ -25,9 +25,11 @@ All notable changes to rails (formerly apex) are documented here. Format follows
       attributed. Passing there, it is bisected over the first-parent commits between, rerunning
       only those ids; the first commit where it fails is its culprit. Two culprits in one pass are
       both found, and an id the bisect cannot locate is reported.
-    - **Not there at the last verdict** (a new test, or one a merge moved or renamed): if a known
-      failure has the same test name, or the same name under another file fails there (or gives
-      no answer), it is the old test and is reported. Otherwise it is bisected.
+    - **Not there at the last verdict** (a new test, or one a merge moved): it is the old test,
+      and reported, if a known failure with the same id after its file (class, name, parameters)
+      is gone from the tip, or if the same test in a file gone from the tip fails there (or gives
+      no answer). Otherwise it is bisected: a new failing case of a still-failing parametrized
+      test is still blamed on the merge that broke it.
     - **The rerun cannot answer** (pytest ran nothing, crashed, skipped an asked id, named other
       ids, or the lane's prerequisite went away mid-probe): the tip stays red and the id is
       reported, never attributed.
@@ -64,8 +66,10 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **`rails trunk watch`** asks the remote for the tip every 2 minutes and runs a pass when it
     moves (or an error is due a retry). It exits after 90 minutes with no pass and no kick.
     **`rails ship` starts it** detached, with no console window, under the base interpreter and
-    without the session's `VIRTUAL_ENV` (or its directory on `PATH`), when the lanes declare a
-    trunk lane and no runner is live. It kicks a live one, so that runner waits for this merge.
+    without the session's `VIRTUAL_ENV` (or its directory on `PATH`), when the shipping
+    worktree's lanes file or the base branch's committed one declares a trunk lane (never the
+    main checkout's working tree, which may be behind) and no runner is live. Trunk runs and
+    reruns set `PY_COLORS=0`, so a coloured summary cannot hide a failure. It kicks a live one, so that runner waits for this merge.
   - **One runner per repository** holds the machine lock `trunk-<repo>`. The trunk lane does not
     take the pre-merge lane's `lock`.
   - **`rails trunk status`** prints the last pass, the failing ids, the flakes and reverts, and
