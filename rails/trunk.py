@@ -347,29 +347,47 @@ def _moved_tails(known: dict[str, list[str]], failing: dict[str, list[str]]) -> 
     one still failing at the tip is another test with the same name (`test_healthz` in
     two apps) and must not hide a new failure of it."""
     failing_now = {i for ids in failing.values() for i in ids}
-    return {_tail(i) for ids in known.values() for i in ids if i not in failing_now}
+    # A file-level id (a collection error) has an empty tail, which would match every
+    # other file-level id; it can only be matched by its own file, so it is left out.
+    return {_tail(i) for ids in known.values() for i in ids if "::" in i and i not in failing_now}
 
 
-def _exists(top: Path, sha: str, path: str) -> bool:
-    done = subprocess.run(["git", "cat-file", "-e", f"{sha}:{path}"], cwd=str(top), capture_output=True)
-    return done.returncode == 0
+def _grep(top: Path, sha: str, pattern: str, paths: list[str]) -> list[str] | None:
+    """The paths at `sha` whose text matches `pattern`. None when git could not answer:
+    exit 1 is "no match", anything above it (a bad revision) is not an answer."""
+    try:
+        done = subprocess.run(
+            ["git", "grep", "-l", "-E", pattern, sha, "--", *paths],
+            cwd=str(top), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode > 1:
+        return None
+    return [line.split(":", 1)[1] for line in done.stdout.splitlines() if ":" in line]
 
 
 def _twins(top: Path, sha: str, tip: str, test_id: str) -> list[str] | None:
     """The old copy of a moved test: the same name defined at `sha` in another `.py`
-    file that is gone at the tip (a file still at the tip is not where this test came
-    from), with the rest of the id kept. None when the search could not run."""
+    file that no longer defines it at the tip (moved with its file, or split out of a
+    file that stays), with the rest of the id kept. A file that still defines it at the
+    tip holds a test of its own (`test_healthz` in two apps). None when git could not
+    answer."""
     file, _, rest = test_id.partition("::")
     if not rest:
         return []
     pattern = rf"def {re.escape(_leaf(test_id))}\b"
-    try:
-        out = git(top, "grep", "-l", "-E", pattern, sha, "--", "*.py", check=False)
-    except GitError:
+    then = _grep(top, sha, pattern, ["*.py"])
+    if then is None:
         return None
-    paths = [line.split(":", 1)[1] for line in out.splitlines() if ":" in line]
-    gone = [p for p in paths if p != file and not _exists(top, tip, p)]
-    return [f"{path}::{rest}" for path in gone][:_MAX_TWINS]
+    candidates = [p for p in then if p != file]
+    if not candidates:
+        return []
+    still = _grep(top, tip, pattern, candidates)
+    if still is None:
+        return None
+    left = [p for p in candidates if p not in still]
+    return [f"{path}::{rest}" for path in left][:_MAX_TWINS]
 
 
 @dataclass
@@ -689,8 +707,9 @@ def _run(
         for index, test_id in enumerate(sorted(at_base.absent & set(ids))):
             # Absent at the last verdict: a new test, or an old one a merge moved. A known
             # failure with the same class, name and parameters that is gone from the tip,
-            # or the same test in a file gone from the tip failing (or unanswerable) at the
-            # last verdict, makes it the old one: reported, not blamed on the move.
+            # or the same test in a file that no longer defines it at the tip failing (or
+            # unanswerable) at the last verdict, makes it the old one: reported, not
+            # blamed on the move.
             if _tail(test_id) in moved_tails:
                 result.unattributed.append(test_id)
                 continue

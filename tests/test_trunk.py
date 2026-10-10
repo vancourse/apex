@@ -463,16 +463,41 @@ def test_a_new_failing_case_of_a_known_failing_test_is_still_blamed(site):
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
 
 
-def test_twins_are_only_files_gone_at_the_tip(site):
-    """The same test name in a file still at the tip is not where a moved test came from."""
+def test_twins_are_files_that_no_longer_define_the_test_at_the_tip(site):
+    """A file that still defines the name at the tip holds a test of its own; one gone at
+    the tip, or one the test was split out of, is where a moved test came from."""
     (site.app / "tests" / "test_z.py").write_text(TESTS, encoding="utf-8")
+    (site.app / "tests" / "test_w.py").write_text(TESTS, encoding="utf-8")
     _git(site.app, "add", "-A")
-    _git(site.app, "commit", "-q", "-m", "a second file defines the same tests")
+    _git(site.app, "commit", "-q", "-m", "more files define the same tests")
     base = _git(site.app, "rev-parse", "HEAD")
     _git(site.app, "mv", "tests/test_x.py", "tests/test_y.py")
-    _git(site.app, "commit", "-q", "-m", "move x to y")
+    (site.app / "tests" / "test_w.py").write_text("def test_b(): pass\n", encoding="utf-8")
+    _git(site.app, "add", "-A")
+    _git(site.app, "commit", "-q", "-m", "move x to y, split test_c out of w")
     tip = _git(site.app, "rev-parse", "HEAD")
-    assert trunk._twins(site.app, base, tip, "tests/test_y.py::test_c") == ["tests/test_x.py::test_c"]
+    twins = trunk._twins(site.app, base, tip, "tests/test_y.py::test_c")
+    assert sorted(twins) == ["tests/test_w.py::test_c", "tests/test_x.py::test_c"]
+
+
+def test_a_twin_search_git_cannot_answer_is_none(site):
+    """A bad revision (exit 128) is not "no twins": the id is left unattributed."""
+    tip = _git(site.app, "rev-parse", "HEAD")
+    assert trunk._twins(site.app, "f" * 40, tip, "tests/test_y.py::test_c") is None
+
+
+def test_a_test_split_out_of_a_file_that_stays_is_not_blamed_on_the_split(site):
+    """Green at the last verdict; an outside cause breaks test_c, and in the same range a
+    merge splits test_c out of tests/test_x.py, which stays. Its old copy fails at the
+    last verdict too, so the split is not reverted (review of e547ff9)."""
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    (site.app / "tests" / "test_x.py").write_text(TESTS.replace("def test_c(): pass\n", ""), encoding="utf-8")
+    site.merge("tests/test_y.py", "def test_c(): pass\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
+    assert "unattributed" in site.forge.last()["description"]
 
 
 def test_only_a_known_failure_gone_from_the_tip_can_be_a_moved_tests_old_copy():
@@ -480,6 +505,12 @@ def test_only_a_known_failure_gone_from_the_tip_can_be_a_moved_tests_old_copy():
     failing = {"suite": ["apps/a/tests/test_h.py::test_healthz", "tests/new.py::test_c"]}
     # test_healthz still fails under its own id: a new test_healthz elsewhere is new.
     assert trunk._moved_tails(known, failing) == {"test_c"}
+
+
+def test_a_known_collection_error_is_not_every_files_old_copy():
+    """pytest names a collection error by its file alone; its empty tail must not match
+    a new collection error in another file (review of e547ff9)."""
+    assert trunk._moved_tails({"suite": ["tests/test_old.py"]}, {"suite": ["tests/test_new.py"]}) == set()
 
 
 def test_a_param_holding_a_double_colon_keeps_its_test_name():

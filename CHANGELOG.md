@@ -27,9 +27,11 @@ All notable changes to rails (formerly apex) are documented here. Format follows
       both found, and an id the bisect cannot locate is reported.
     - **Not there at the last verdict** (a new test, or one a merge moved): it is the old test,
       and reported, if a known failure with the same id after its file (class, name, parameters)
-      is gone from the tip, or if the same test in a file gone from the tip fails there (or gives
-      no answer). Otherwise it is bisected: a new failing case of a still-failing parametrized
-      test is still blamed on the merge that broke it.
+      is gone from the tip, or if the same test in a file that no longer defines it at the tip
+      (moved with its file, or split out of one that stays) fails there or gives no answer. A
+      collection error, named by its file alone, matches only itself, and a twin search git cannot
+      answer leaves the id reported. Otherwise it is bisected: a new failing case of a
+      still-failing parametrized test is still blamed on the merge that broke it.
     - **The rerun cannot answer** (pytest ran nothing, crashed, skipped an asked id, named other
       ids, or the lane's prerequisite went away mid-probe): the tip stays red and the id is
       reported, never attributed.
