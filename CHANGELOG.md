@@ -12,20 +12,27 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   through the tip's rerun and was gone by the rerun at the last verdict made every bisect probe
   pass. The bisect then assumed the tip failed, named the newest merge, and in `auto` mode its
   revert's own check passed unloaded and the revert was armed.
-  - **A culprit takes two probes.** The commit a bisect names is probed again before it
-    counts, the tip included: the tip's own rerun is no longer enough to blame the newest merge.
-    One false failure (load, a database restarting mid-probe) cannot move the blame to an
-    innocent merge. An id the confirmation does not repeat is reported. A real culprit costs
-    one rerun more.
+  - **A culprit is confirmed before it is named.** The commit before it (the last verdict,
+    for the first merge) is probed again and must pass, then the culprit is probed again and
+    must fail. Parent first, so one load episode cannot cover both. The tip's own rerun is no
+    longer enough to blame the newest merge, and one false failure (load, a database
+    restarting mid-probe) cannot move the blame to an innocent merge. A test the culprit added
+    counts as passing before it. An id the confirmation does not bear out is reported, and the
+    search does not resume after it: that would blame the next merge for a real but
+    intermittent break. A real culprit costs two reruns more. Each probe keeps its own log.
+  - **A failure that passes when the tip is probed again is a flake.** It is recorded as one,
+    not as a known failure, which would hide its next real break.
   - **The reruns that decide take the lane's lock.** A trunk lane with `lock = "<name>"`
     (jarvis's suite lane has `lock = "suite"`) holds it from the tip's rerun to the end of the
     bisect, so a session's pre-merge suite cannot load them. The long full run does not take it,
-    or every session's suite would wait out the pass. The lock is released before a revert's own
-    `rails check`, which takes the same lock.
+    or every session's suite would wait out the pass. A pass with nothing to rerun (only known
+    failures) does not wait for it. The lock is released before a revert's own `rails check`,
+    which takes the same lock. Load from lanes that take no lock (jarvis `purser-e2e`) is not
+    excluded: morphyxAI/jarvis#2672.
   - **Postgres is up only when it takes a session.** The `postgres` prerequisite sends a startup
     packet, as `pg_isready` does, instead of only connecting. A server that answers "cannot
-    connect now" (SQLSTATE 57P03: starting up, shutting down, in recovery), or does not answer,
-    is not up. A probe then gets no answer instead of failures. This also applies to `rails check`
+    connect now" (SQLSTATE 57P03: starting up, shutting down, in recovery), answers with no
+    SQLSTATE (the postmaster's bare fork failure), or does not answer within 10 s, is not up. A probe then gets no answer instead of failures. This also applies to `rails check`
     before merge: a restarting Postgres stops the lane as "not a code failure" instead of failing
     its tests.
 

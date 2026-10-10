@@ -221,6 +221,15 @@ def test_a_postgres_that_is_starting_up_is_a_missing_prerequisite(monkeypatch):
     assert why and "Postgres" in why and "not a code failure" in why
 
 
+def test_an_error_without_a_sqlstate_is_no_answer(monkeypatch):
+    """The postmaster's fork failure is a bare v2 message, no SQLSTATE: pg_isready reads it
+    as no response, and so does this (coop, review of 5437359)."""
+    server, port = _fake_postgres(b"Ecould not fork new process for connection: Resource busy\n\0")
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
+
+
 def test_a_listener_that_closes_without_answering_is_not_postgres(monkeypatch):
     server, port = _fake_postgres(b"")
     with server:

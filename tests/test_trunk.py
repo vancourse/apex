@@ -288,7 +288,8 @@ def test_two_merges_take_one_run_and_an_unchanged_tip_takes_none(site):
 
 def test_the_middle_merge_is_bisected_reverted_and_armed(site):
     """a2: one full run; reruns are the tip's flake check, one at the last verdict, at
-    most two bisect probes, and one probe confirming the culprit (#2668)."""
+    most two bisect probes, and two confirming the culprit: the merge before it passes,
+    then it fails (#2668)."""
     _pass(site)
     site.merge("src/a.py", "a = 1\n")
     bad = site.merge("src/b.py", "boom = 1\n")
@@ -296,7 +297,7 @@ def test_the_middle_merge_is_bisected_reverted_and_armed(site):
     code, text = _pass(site)
     assert code == 1, text
     assert site.runs() == 2
-    assert site.reruns() <= 5, f"{site.reruns()} reruns"
+    assert site.reruns() <= 6, f"{site.reruns()} reruns"
     pr = site.forge.prs[bad]["number"]
     assert [r["pr"] for r in site.forge.reverts] == [pr]
     assert "(rails trunk)" in site.forge.reverts[0]["title"]
@@ -310,16 +311,46 @@ def test_the_middle_merge_is_bisected_reverted_and_armed(site):
 def test_load_that_lasts_through_the_tip_rerun_blames_no_merge(site):
     """#2668: load from a concurrent suite fails test_c in the full run and in the tip's
     rerun, and is gone by the rerun at the last verdict. Every bisect probe then passes;
-    the tip is probed again instead of assumed red, so the newest merge is not blamed and
-    nothing is reverted."""
+    the tip is probed again before it is blamed, so the newest merge is not blamed, and
+    test_c, passing there, is a flake, not a known failure. Its next real break (once the
+    load is gone) is still found and blamed (adversary, review of 5437359)."""
     _pass(site)
     site.merge("src/a.py", "a = 1\n")
     site.merge("src/d.py", "d = 1\n")
     first = site.reruns() + 1
     (site.tmp / "load.txt").write_text(str(first), encoding="utf-8")
     code, text = _pass(site)
+    assert code == 0, text
+    assert site.forge.reverts == [] and site.forge.comments == []
+    state = trunk.read_state(site.repo)
+    assert state["verdict"]["failed"] == {}
+    assert "tests/test_x.py::test_c" in [row["id"] for row in state["flaky"]], state["flaky"]
+    (site.tmp / "load.txt").unlink()
+    bad = site.merge("src/c.py", "boom = 1\n")
+    code, text = _pass(site)
     assert code == 1, text
-    assert site.forge.reverts == [] and site.forge.armed == []
+    assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+def test_one_load_episode_across_a_probe_and_its_repeat_blames_no_earlier_merge(site):
+    """#2668 (adversary, review of 5437359): merge c really breaks test_c, and one load
+    episode fails the probes at d, then a, then a's repeat. The confirmation probes the
+    commit before the culprit first (here the last verdict, loaded too), so a is not
+    blamed. The real culprit goes unnamed: reported, never the wrong PR."""
+    _pass(site)
+    for name in ("a", "d"):
+        site.merge(f"src/{name}.py", f"{name} = 1\n")
+    a_pr = site.forge.prs[_git(site.app, "rev-parse", "HEAD~1")]["number"]
+    site.merge("src/c.py", "boom = 1\n")
+    site.merge("src/e.py", "e = 1\n")
+    first = site.reruns() + 1
+    # `first` is the tip's rerun, `first + 1` the last verdict's; the episode covers the
+    # probes at d and a and the confirmation's first probe.
+    (site.tmp / "load.txt").write_text(f"{first + 2},{first + 3},{first + 4}", encoding="utf-8")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
+    assert not any(number == a_pr for number, _ in site.forge.comments)
     assert "unattributed" in site.forge.last()["description"]
 
 
@@ -367,6 +398,50 @@ def test_the_attribution_reruns_hold_the_lanes_lock_and_the_revert_check_does_no
     assert "rerun held" in lines and "rerun free" not in lines, lines
     assert at_check == ["free"]
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+def _in_thread(fn, seconds: float = 120.0):
+    """Run `fn` in a thread; fail (rather than hang the suite) if it does not finish."""
+    import threading
+
+    box: dict = {}
+    worker = threading.Thread(target=lambda: box.setdefault("value", fn()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"still running after {seconds:.0f}s (waiting on a lock?)"
+    return box.get("value")
+
+
+def test_a_pass_with_nothing_to_rerun_does_not_wait_for_the_lock(site):
+    """#2668 (both voices, review of 5437359): master red only with a known failure, and a
+    session's suite holding the lane's lock. The pass reruns nothing, so it posts at once
+    instead of waiting out that suite."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)  # test_c, red at the last verdict too: a known failure from here
+    site.merge("src/d.py", "d = 1\n")
+    with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
+        code, text = _in_thread(lambda: _pass(site))
+    assert code == 1, text
+    assert "known" in site.forge.last()["description"]
+
+
+def test_two_trunk_lanes_on_one_lock_take_it_once():
+    """The lock names are deduplicated: the same name taken twice in one process would
+    wait on itself forever (coop, review of 5437359)."""
+    repo = type("Repo", (), {"main": Path("."), "leaf": "t"})()
+    lanes = [
+        lanes_mod.Lane(name="a", command=["x"], lock="shared"),
+        lanes_mod.Lane(name="b", command=["x"], lock="shared"),
+    ]
+
+    def hold() -> bool:
+        with trunk._attribution_locks(repo, lanes, "f" * 40, io.StringIO()):
+            return True
+
+    assert _in_thread(hold, 30.0) is True
 
 
 def test_a_failure_that_passes_alone_is_a_flake(site):
@@ -823,8 +898,9 @@ def test_bisect_finds_each_ids_first_failing_commit():
 
     found, lost = trunk._bisect(commits, ["t1", "t2"], probe)
     assert found == [("c1", {"t1"}), ("c3", {"t2"})] and lost == set()
-    assert len(probes) <= 7  # the search's five, and one confirmation per culprit (#2668)
-    assert probes[-2:] == ["c1", "c3"]
+    # The search's five, then each culprit confirmed: the commit before it, then it (#2668).
+    assert len(probes) <= 9
+    assert probes[-4:] == ["c0", "c1", "c2", "c3"]
 
 
 @pytest.mark.parametrize(
@@ -875,6 +951,57 @@ def test_bisect_probes_the_tip_before_blaming_it():
 
     assert trunk._bisect(commits, ["t1"], probe) == ([], {"t1"})
     assert "c2" in probes
+
+
+def test_a_tip_culprit_takes_the_tips_rerun_and_one_confirmation():
+    """The tip's own rerun (outside the bisect) is the first probe of the tip; the bisect
+    adds only the confirmation, not a second search probe (coop, review of 5437359)."""
+    probes: list[str] = []
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        probes.append(sha)
+        return trunk.Answer(failed=set(wanted))
+
+    assert trunk._bisect(["c0"], ["t1"], probe) == ([("c0", {"t1"})], set())
+    assert probes == ["c0"]
+
+
+def test_bisect_does_not_search_again_after_a_confirmation_fails():
+    """One false failure at c2 locates t1 there; the confirmation does not repeat it, so
+    t1 is lost rather than searched for after c2. A search after it would move a real but
+    intermittent break at c2 to c3, an innocent merge (coop, review of 5437359)."""
+    commits = ["c0", "c1", "c2", "c3", "c4"]
+    seen: list[str] = []
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        seen.append(sha)
+        false_once = sha == "c2" and seen.count("c2") == 1
+        failed = set(wanted) if commits.index(sha) >= 3 or false_once else set()
+        return trunk.Answer(failed=failed, passed=set(wanted) - failed)
+
+    assert trunk._bisect(commits, ["t1"], probe) == ([], {"t1"})
+
+
+def test_a_culprit_whose_parent_fails_again_is_not_blamed():
+    """#2668 (adversary, review of 5437359): a load episode that fails the culprit's
+    probes also fails its parent's repeat, so nothing is named."""
+    commits = ["c0", "c1", "c2"]
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        return trunk.Answer(failed=set(wanted))  # everything fails: one long load episode
+
+    assert trunk._bisect(commits, ["t1"], probe, base="b") == ([], {"t1"})
+
+
+def test_a_test_the_culprit_added_is_absent_at_its_parent_and_still_blamed():
+    commits = ["c0", "c1"]
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        if sha in ("b", "c0"):
+            return trunk.Answer(absent=set(wanted))
+        return trunk.Answer(failed=set(wanted))
+
+    assert trunk._bisect(commits, ["t1"], probe, base="b") == ([("c1", {"t1"})], set())
 
 
 def test_bisect_names_a_culprit_only_when_its_probe_repeats():

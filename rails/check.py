@@ -74,7 +74,8 @@ def _postgres_reachable() -> bool:
     reply = b""
     try:
         with socket.create_connection((host, port), timeout=3) as conn:
-            conn.settimeout(3)
+            # A backend start under load can take seconds; the connect itself cannot.
+            conn.settimeout(10)
             conn.sendall(struct.pack("!I", len(body) + 4) + body)
             kind = conn.recv(1)
             if kind in (b"R", b"v"):  # an authentication request; a protocol negotiation
@@ -88,8 +89,11 @@ def _postgres_reachable() -> bool:
                 reply += chunk
     except OSError:
         return False
-    # An ErrorResponse is fields of (type byte, text, NUL); the SQLSTATE is type `C`.
-    return b"\0C57P03\0" not in b"\0" + reply[4:]
+    # An ErrorResponse is fields of (type byte, text, NUL); the SQLSTATE is type `C`. One
+    # without a five-character SQLSTATE is not a v3 answer (the postmaster's fork failure
+    # is a bare v2 message), so it is no answer, as pg_isready reads it.
+    codes = [field[1:] for field in reply[4:].split(b"\0") if field[:1] == b"C"]
+    return len(codes) == 1 and len(codes[0]) == 5 and codes[0] != b"57P03"
 
 
 def _docker_alive() -> bool:

@@ -16,7 +16,10 @@ not already have is rerun alone at the tip (``trunk_rerun``):
 * it fails again: it is rerun at the last verdict's commit. Failing there too, it was
   already broken (an environment change, a renamed lane): reported, not attributed.
   Passing there, it is bisected over the first-parent commits between, rerunning only
-  those ids, and the first commit where it fails is its culprit. Not there at all, it is
+  those ids, and the first commit where it fails is its culprit, once a second probe of
+  the commit before it passes and a second probe of the culprit fails (one false failure
+  from load cannot move the blame). One that passes when the tip is probed again is a
+  flake. Not there at all, it is
   a new test or one a merge moved: a known failure with the same id after its file, gone
   from the tip, or the same test failing at the last verdict in a file gone from the
   tip, makes it the old one (reported); otherwise it is bisected;
@@ -37,8 +40,9 @@ naming every failure, a crash) posts ``error`` and is retried: at once by ``rail
 run``, by ``watch`` after a backoff and at most a few times per tip.
 
 One runner per repository holds the machine lock ``trunk-<repo>``; a second finds it
-held and leaves. The trunk lane does not take its ``lock`` (the pre-merge lane's), so a
-pre-merge suite never queues behind a full run.
+held and leaves. The full run does not take the trunk lane's ``lock`` (the pre-merge
+lane's), so a pre-merge suite never queues behind a full run; the reruns that decide a
+culprit do, when there is any to run, so a pre-merge suite cannot load them (#2668).
 """
 
 from __future__ import annotations
@@ -698,8 +702,11 @@ def _run(
             new[name] = [i for i in ids if i not in seen]
 
     # The reruns that decide who broke the tip run under the lanes' locks; released
-    # before `_act`, whose revert check takes them too (#2668).
-    with _attribution_locks(repo, trunk_lanes, tip, out):
+    # before `_act`, whose revert check takes them too (#2668). A pass with nothing to
+    # rerun (only known failures, or lanes without a rerun) does not wait for them.
+    reruns_needed = any(by_name[name].trunk_rerun for name in new)
+    locks = _attribution_locks(repo, trunk_lanes, tip, out) if reruns_needed else contextlib.nullcontext()
+    with locks:
         reproduced: dict[str, list[str]] = {}
         no_rerun: dict[str, list[str]] = {}
         for name, ids in new.items():
@@ -756,11 +763,28 @@ def _run(
             if not bisectable:
                 continue
 
-            def probe(sha: str, wanted: list[str], lane=lane, name=name) -> Answer:
-                return _ask(top, tree_path, sha, lane, wanted, log_dir / f"{name}.bisect-{sha[:12]}.log", result)
+            tip_passed: set[str] = set()
+            probes_at: dict[str, int] = {}
 
-            located, lost = _bisect(commits, bisectable, probe)
-            result.unattributed.extend(sorted(lost))
+            def probe(sha: str, wanted: list[str], lane=lane, name=name, tip_passed=tip_passed) -> Answer:
+                # Each probe keeps its own log: a confirmation must not overwrite the
+                # failing probe it repeats.
+                probes_at[sha] = probes_at.get(sha, 0) + 1
+                log = log_dir / f"{name}.bisect-{sha[:12]}.{probes_at[sha]}.log"
+                answer = _ask(top, tree_path, sha, lane, wanted, log, result)
+                if sha == tip:
+                    tip_passed.update(answer.passed)
+                return answer
+
+            located, lost = _bisect(commits, bisectable, probe, base=base_sha)
+            # An id that passed when the tip was probed again is this module's flake (it
+            # fails in the full run and passes alone): recorded as one, never as a known
+            # failure that would hide its next real break (#2668).
+            now_flaky = sorted(lost & tip_passed)
+            if now_flaky:
+                result.flaky.extend(now_flaky)
+                _remember_flakes(state, tip, now_flaky)
+            result.unattributed.extend(sorted(lost - tip_passed))
             for sha, ids_here in located:
                 found.setdefault(sha, []).extend(sorted(ids_here))
 
@@ -804,13 +828,19 @@ def _run(
 
 
 def _bisect(
-    commits: list[str], ids: list[str], probe: Callable[[str, list[str]], Answer]
+    commits: list[str],
+    ids: list[str],
+    probe: Callable[[str, list[str]], Answer],
+    *,
+    base: str | None = None,
 ) -> tuple[list[tuple[str, set[str]]], set[str]]:
-    """Each id's first failing commit, confirmed by a second probe there, and the ids a
-    probe could not answer for or a confirmation did not repeat. Every id is known to pass
-    before the first commit and was seen failing at the last, in the tip's own rerun; the
-    search takes that, but a culprit is only named on the confirmation's probe. The tip's
-    rerun alone once named the newest merge for a failure that was load (#2668)."""
+    """Each id's first failing commit, confirmed, and the ids a probe could not answer for
+    or a confirmation did not bear out. Every id is known to pass before the first commit
+    (at `base`, the last verdict) and was seen failing at the last, in the tip's own rerun;
+    the search takes that. A culprit is named only when, probed again, the commit before
+    it passes and then the culprit fails: the tip's rerun alone named the newest merge for
+    a failure that was load, and one load episode across a probe and its repeat named an
+    earlier one (#2668)."""
     remaining = set(ids)
     lost: set[str] = set()
     out: list[tuple[str, set[str]]] = []
@@ -850,13 +880,21 @@ def _bisect(
         out.append((commits[lo], here))
         remaining -= here
         start = lo + 1
-    lost |= remaining  # never located: reported, not lost
-    # A culprit is named on two probes, not one: a single false failure (load, a database
-    # restarting mid-probe) would otherwise move the blame to an innocent merge (#2668).
+    lost |= remaining  # never located: reported, never blamed
+    # The confirmation: the commit before the culprit passes, then the culprit fails, each
+    # probed again (the parent first, so a load episode would have to stop and start again
+    # between them). A false failure from load or a database restarting mid-probe cannot
+    # move the blame to an innocent merge (#2668). Without `base`, the first commit's
+    # parent is taken on the search's word.
     confirmed: list[tuple[str, set[str]]] = []
     for sha, here in out:
-        again = probe(sha, sorted(here))
-        kept = again.failed & here
+        index = commits.index(sha)
+        parent = commits[index - 1] if index else base
+        clean = set(here)
+        if parent is not None:
+            before = probe(parent, sorted(here))
+            clean &= before.passed | before.absent  # a test the culprit added is absent before it
+        kept = probe(sha, sorted(clean)).failed & clean if clean else set()
         lost |= here - kept
         if kept:
             confirmed.append((sha, kept))
