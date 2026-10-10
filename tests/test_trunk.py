@@ -1,5 +1,6 @@
 """The trunk runner: one full run per base tip, a culprit found by bisecting reruns, a
-flake forgiven, a known failure not attributed twice, and the culprit's PR reverted.
+flake forgiven, a known or pre-existing failure not attributed, an unanswerable rerun
+never turned into a verdict, and the culprit's PR reverted exactly once.
 
 Real git throughout (a bare `origin`, a clone, linear "merged" commits on main); only
 the code host is a fake that records what the runner posts, opens and arms.
@@ -18,9 +19,10 @@ from rails import lanes as lanes_mod, store, trunk
 
 PY = sys.executable.replace("\\", "/")
 
-# The trunk lane: counts its runs; `test_b` fails while src/b.py says boom, `test_c`
-# while src/c.py does, and `test_flaky` fails one full run after the flaky switch is
-# set.
+# The trunk lane. argv: runs-counter, flaky-switch, environment-switch.
+# `test_b` / `test_c` fail while src/b.py / src/c.py say boom; `test_c` also fails while
+# the environment switch exists (a failure from outside the repo); `test_p[b]` fails
+# while src/p.py says boom; `test_flaky` fails one full run after its switch is set.
 SUITE = """
 import pathlib, sys
 count = pathlib.Path(sys.argv[1])
@@ -28,12 +30,17 @@ n = (int(count.read_text()) if count.exists() else 0) + 1
 count.write_text(str(n))
 root = pathlib.Path.cwd()
 fails = []
-for name in ("b", "c"):
+def boom(name):
     src = root / "src" / f"{name}.py"
-    if src.exists() and "boom" in src.read_text():
-        fails.append(f"tests/test_x.py::test_{name} - boom")
+    return src.exists() and "boom" in src.read_text()
+if boom("b"):
+    fails.append("tests/test_x.py::test_b - boom")
+if boom("c") or pathlib.Path(sys.argv[3]).exists():
+    fails.append("tests/test_x.py::test_c - boom")
+if boom("p"):
+    fails.append("tests/test_x.py::test_p[b] - boom")
 flag = pathlib.Path(sys.argv[2])
-if flag.exists():  # fails one full run, then clears itself
+if flag.exists():
     flag.unlink()
     fails.append("tests/test_x.py::test_flaky - flaky")
 for line in fails:
@@ -41,24 +48,35 @@ for line in fails:
 sys.exit(1 if fails else 0)
 """
 
-# The rerun: the same verdicts for the ids it is handed, except that a flake passes.
+# The rerun. argv: reruns-counter, environment-switch, then the ids. A `[b]` id that
+# does not exist at this commit (no src/p.py) makes the whole run fail like pytest's
+# "not found": exit 4, nothing named. A flake passes.
 RERUN = """
 import pathlib, sys
 count = pathlib.Path(sys.argv[1])
 count.write_text(str((int(count.read_text()) if count.exists() else 0) + 1))
 root = pathlib.Path.cwd()
-bad = []
-for test_id in sys.argv[2:]:
-    name = test_id.rsplit("_", 1)[-1]
+ids = sys.argv[3:]
+def boom(name):
     src = root / "src" / f"{name}.py"
-    if name in ("b", "c") and src.exists() and "boom" in src.read_text():
+    return src.exists() and "boom" in src.read_text()
+if any(i.endswith("[b]") for i in ids) and not (root / "src" / "p.py").exists():
+    print("ERROR: not found: tests/test_x.py::test_p[b]")
+    sys.exit(4)
+bad = []
+for test_id in ids:
+    if test_id.endswith("::test_b") and boom("b"):
+        bad.append(test_id)
+    if test_id.endswith("::test_c") and (boom("c") or pathlib.Path(sys.argv[2]).exists()):
+        bad.append(test_id)
+    if test_id.endswith("::test_p[b]") and boom("p"):
         bad.append(test_id)
 for test_id in bad:
     print("FAILED " + test_id + " - boom")
 sys.exit(1 if bad else 0)
 """
 
-TESTS = "def test_b(): pass\ndef test_c(): pass\ndef test_flaky(): pass\n"
+TESTS = "def test_b(): pass\ndef test_c(): pass\ndef test_p(): pass\ndef test_flaky(): pass\n"
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -75,7 +93,6 @@ class FakeForge:
         self.reverts: list[dict] = []
         self.armed: list[int] = []
         self.comments: list[tuple[int, str]] = []
-        self.revert_fails = False
 
     def post_status(self, sha: str, context: str, state: str, description: str) -> None:
         self.statuses.append({"sha": sha, "context": context, "state": state, "description": description})
@@ -84,8 +101,6 @@ class FakeForge:
         return self.prs.get(sha)
 
     def revert(self, pr: dict, title: str, body: str):
-        if self.revert_fails:
-            return None
         made = {"number": 900 + pr["number"], "head_ref": f"revert-{pr['number']}", "head_sha": "f" * 40}
         self.reverts.append({"pr": pr["number"], "title": title, "body": body, **made})
         return made
@@ -118,10 +133,16 @@ def site(tmp_path):
     scripts.mkdir()
     (scripts / "suite.py").write_text(SUITE, encoding="utf-8")
     (scripts / "rerun.py").write_text(RERUN, encoding="utf-8")
-    runs, reruns, flaky = tmp_path / "runs.txt", tmp_path / "reruns.txt", tmp_path / "flaky.on"
+    runs, reruns = tmp_path / "runs.txt", tmp_path / "reruns.txt"
+    flaky, env_broken = tmp_path / "flaky.on", tmp_path / "env.broken"
     s = lambda p: str(p).replace("\\", "/")  # noqa: E731
 
-    def lanes(revert: str = "auto") -> str:
+    def lanes(revert: str = "auto", rerun: str | None = "default", needs: str = "") -> str:
+        rerun_line = {
+            "default": f'trunk_rerun = ["{PY}", "{s(scripts / "rerun.py")}", "{s(reruns)}", "{s(env_broken)}"]',
+            "exit4": f'trunk_rerun = ["{PY}", "-c", "import sys; sys.exit(4)"]',
+            None: "",
+        }[rerun]
         return f"""
 [settings]
 base = "origin/main"
@@ -130,8 +151,9 @@ trunk_revert = "{revert}"
 name = "suite"
 always = true
 command = ["{PY}", "-c", "print('pre-merge')"]
-trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}"]
-trunk_rerun = ["{PY}", "{s(scripts / 'rerun.py')}", "{s(reruns)}"]
+trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}", "{s(env_broken)}"]
+{rerun_line}
+{needs}
 """
 
     (app / "lanes.toml").write_text(lanes(), encoding="utf-8")
@@ -166,7 +188,8 @@ trunk_rerun = ["{PY}", "{s(scripts / 'rerun.py')}", "{s(reruns)}"]
         pass
 
     site = Site()
-    site.app, site.forge, site.merge, site.flaky, site.lanes = app, forge, merge, flaky, lanes
+    site.app, site.forge, site.merge, site.lanes = app, forge, merge, lanes
+    site.flaky, site.env_broken = flaky, env_broken
     site.runs = lambda: count(runs)  # type: ignore[attr-defined]
     site.reruns = lambda: count(reruns)  # type: ignore[attr-defined]
     site.checked = []  # type: ignore[attr-defined]
@@ -174,15 +197,21 @@ trunk_rerun = ["{PY}", "{s(scripts / 'rerun.py')}", "{s(reruns)}"]
     return site
 
 
-def _pass(site, *, check_ok: bool = True) -> tuple[int, str]:
+def _pass(site, *, check=None) -> tuple[int, str]:
     out = io.StringIO()
 
     def revert_check(made: dict) -> bool:
         site.checked.append(made["number"])
-        return check_ok
+        return True if check is None else check(made)
 
     code = trunk.run_once(site.app, forge=site.forge, revert_check=revert_check, out=out)
     return code, out.getvalue()
+
+
+def _relanes(site, **kwargs) -> None:
+    (site.app / "lanes.toml").write_text(site.lanes(**kwargs), encoding="utf-8")
+    _git(site.app, "commit", "-q", "-am", "lanes")
+    _git(site.app, "push", "-q", "origin", "main")
 
 
 def test_two_merges_take_one_run_and_an_unchanged_tip_takes_none(site):
@@ -202,7 +231,8 @@ def test_two_merges_take_one_run_and_an_unchanged_tip_takes_none(site):
 
 
 def test_the_middle_merge_is_bisected_reverted_and_armed(site):
-    """a2: one full run, at most two bisect reruns (plus the tip's flake check)."""
+    """a2: one full run; reruns are the tip's flake check, one at the last verdict, and at
+    most two bisect probes."""
     _pass(site)
     site.merge("src/a.py", "a = 1\n")
     bad = site.merge("src/b.py", "boom = 1\n")
@@ -210,7 +240,7 @@ def test_the_middle_merge_is_bisected_reverted_and_armed(site):
     code, text = _pass(site)
     assert code == 1, text
     assert site.runs() == 2
-    assert site.reruns() <= 3, f"{site.reruns()} reruns: one at the tip, at most two to bisect"
+    assert site.reruns() <= 4, f"{site.reruns()} reruns"
     pr = site.forge.prs[bad]["number"]
     assert [r["pr"] for r in site.forge.reverts] == [pr]
     assert "(rails trunk)" in site.forge.reverts[0]["title"]
@@ -245,7 +275,7 @@ def test_a_known_failure_is_not_attributed_twice(site):
     assert code == 1, text
     assert len(site.forge.reverts) == 1, "the revert in flight is the answer; no second one"
     status = site.forge.last()
-    assert status["sha"] == tip and status["state"] == "failure" and "still red" in status["description"]
+    assert status["sha"] == tip and status["state"] == "failure" and "still-red" in status["description"]
 
 
 def test_the_first_pass_ever_red_is_a_baseline(site):
@@ -269,10 +299,8 @@ def test_a_runner_revert_is_reported_and_never_reverted_again(site):
 
 
 def test_propose_opens_the_revert_unarmed(site):
-    """a6, second half."""
-    (site.app / "lanes.toml").write_text(site.lanes("propose"), encoding="utf-8")
-    _git(site.app, "commit", "-q", "-am", "propose")
-    _git(site.app, "push", "-q", "origin", "main")
+    """a6, second half: the policy is read at the last verdict's commit."""
+    _relanes(site, revert="propose")
     _pass(site)
     site.merge("src/b.py", "boom = 1\n")
     code, _ = _pass(site)
@@ -280,12 +308,57 @@ def test_propose_opens_the_revert_unarmed(site):
     assert len(site.forge.reverts) == 1 and site.forge.armed == [] and site.checked == []
 
 
+def test_a_culprit_cannot_switch_off_its_own_revert(site):
+    _pass(site)
+    (site.app / "lanes.toml").write_text(site.lanes(revert="off"), encoding="utf-8")
+    site.merge("src/b.py", "boom = 1\n")  # one PR: breaks test_b and sets trunk_revert = off
+    _pass(site)
+    assert len(site.forge.reverts) == 1, "the policy at the last verdict was auto"
+
+
 def test_a_red_revert_check_leaves_the_revert_unarmed(site):
     _pass(site)
     site.merge("src/b.py", "boom = 1\n")
-    _pass(site, check_ok=False)
+    _pass(site, check=lambda made: False)
     assert len(site.forge.reverts) == 1 and site.forge.armed == []
     assert any("not armed" in body for _, body in site.forge.comments)
+
+
+def test_a_revert_is_recorded_before_its_check_and_never_opened_twice(site):
+    """A check that raises (a failed fetch, a killed run) is a red check; the revert row
+    is already saved, so a pass that attributes the same PR again opens nothing."""
+    _pass(site)
+    before = trunk.read_state(site.repo)["verdict"]
+    site.merge("src/b.py", "boom = 1\n")
+
+    def explode(made):
+        raise trunk.GitError("fetch failed")
+
+    code, text = _pass(site, check=explode)
+    assert code == 1, text
+    state = trunk.read_state(site.repo)
+    assert [r["armed"] for r in state["reverts"]] == [False]
+    assert site.forge.armed == []
+    state["verdict"], state["last"] = before, {}  # as if the pass had died before recording
+    trunk.write_state(site.repo, state)
+    _pass(site)
+    assert len(site.forge.reverts) == 1
+
+
+def test_a_runner_killed_during_the_revert_check_leaves_the_revert_on_record(site):
+    """A kill is not an exception the pass can catch: the revert row must already be on
+    disk, or the next pass opens a second revert of the same PR."""
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+
+    def killed(made):
+        raise SystemExit(137)
+
+    with pytest.raises(SystemExit):
+        _pass(site, check=killed)
+    assert [r["pr"] for r in trunk.read_state(site.repo)["reverts"]] == [site.forge.reverts[0]["pr"]]
+    _pass(site)  # the tip was never recorded, so this pass attributes the same PR again
+    assert len(site.forge.reverts) == 1
 
 
 def test_two_culprits_are_found_in_one_pass(site):
@@ -301,6 +374,87 @@ def test_two_culprits_are_found_in_one_pass(site):
     )
 
 
+def test_an_id_a_probe_cannot_find_does_not_empty_the_probe(site):
+    """pytest refuses a whole run for one id it cannot find; the probe asks again one id
+    at a time, so the earlier culprit is still named (review of 001122d)."""
+    _pass(site)
+    b = site.merge("src/b.py", "boom = 1\n")
+    site.merge("src/d.py", "d = 1\n")
+    p = site.merge("src/p.py", "boom = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert sorted(r["pr"] for r in site.forge.reverts) == sorted(
+        [site.forge.prs[b]["number"], site.forge.prs[p]["number"]]
+    )
+
+
+def test_a_failure_already_red_at_the_last_verdict_is_not_blamed(site):
+    """Something outside the repo breaks test_c everywhere: it fails at the last verdict
+    too, so no merge in the range is reverted (review of 001122d)."""
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    site.merge("src/d.py", "d = 1\n")
+    site.env_broken.write_text("on", encoding="utf-8")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
+    status = site.forge.last()
+    assert status["state"] == "failure" and "unattributed" in status["description"]
+
+
+def test_a_rerun_that_cannot_answer_is_red_not_a_flake(site):
+    """A trunk_rerun that runs nothing (pytest exit 4) says nothing: the tip stays red,
+    no flake is recorded, nothing is reverted (review of 001122d)."""
+    _relanes(site, rerun="exit4")
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == []
+    status = site.forge.last()
+    assert status["state"] == "failure" and "unattributed" in status["description"]
+    assert not trunk.read_state(site.repo).get("flaky")
+
+
+def test_a_lane_without_a_rerun_reports_its_culprit_and_never_reverts(site):
+    _relanes(site, rerun=None)
+    _pass(site)
+    site.flaky.write_text("on", encoding="utf-8")
+    bad = site.merge("src/a.py", "a = 1\n")
+    code, _ = _pass(site)
+    assert code == 1
+    assert site.forge.reverts == [] and site.forge.armed == []
+    assert any(n == site.forge.prs[bad]["number"] for n, _ in site.forge.comments)
+
+
+def test_an_error_pass_posts_error_and_is_retried(site, monkeypatch):
+    from rails import check
+
+    site.merge("src/a.py", "a = 1\n")
+    calls = {"n": 0}
+
+    def missing(lane):
+        calls["n"] += 1
+        return "Postgres is not reachable" if calls["n"] == 1 else None
+
+    monkeypatch.setattr(check, "missing_prerequisite", missing)
+    code, _ = _pass(site)
+    assert code == 1 and site.runs() == 0
+    assert site.forge.last()["state"] == "error"
+    code, text = _pass(site)  # `rails trunk run` retries an error at once
+    assert code == 0 and site.runs() == 1, text
+
+
+def test_a_lane_that_names_fewer_failures_than_it_counts_is_an_error(site, monkeypatch):
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    real = trunk.failure_tally
+    monkeypatch.setattr(trunk, "failure_tally", lambda text: 2 if "FAILED" in text else real(text))
+    code, _ = _pass(site)
+    assert code == 1 and site.forge.reverts == []
+    assert site.forge.last()["state"] == "error"
+
+
 def test_a_second_runner_leaves_the_tip_to_the_first(site):
     """a7."""
     site.merge("src/a.py", "a = 1\n")
@@ -310,13 +464,13 @@ def test_a_second_runner_leaves_the_tip_to_the_first(site):
     assert site.runs() == 0
 
 
-def test_watch_runs_a_pass_when_the_tip_moves_and_stops_when_idle(site):
-    site.merge("src/a.py", "a = 1\n")
+def _watch(site, *, idle: float = 300.0, until: float = 10_000.0) -> tuple[int, str]:
     now = [0.0]
     out = io.StringIO()
 
     def sleep(_secs: float) -> None:
         now[0] += 60.0
+        assert now[0] < until, "watch did not stop"
 
     code = trunk.watch(
         site.app,
@@ -324,15 +478,42 @@ def test_watch_runs_a_pass_when_the_tip_moves_and_stops_when_idle(site):
         revert_check=lambda made: True,
         out=out,
         poll=60.0,
-        idle=300.0,
+        idle=idle,
         clock=lambda: now[0],
         sleep=sleep,
     )
-    assert code == 0 and "stopping" in out.getvalue(), out.getvalue()
+    return code, out.getvalue()
+
+
+def test_watch_runs_a_pass_when_the_tip_moves_and_stops_when_idle(site):
+    site.merge("src/a.py", "a = 1\n")
+    code, text = _watch(site)
+    assert code == 0 and "stopping" in text, text
     assert site.runs() == 1, "one pass for the moved tip, none while idle"
 
 
-def test_ship_starts_a_runner_only_for_a_trunk_lane_and_only_once(site, monkeypatch):
+def test_watch_stops_when_the_tip_has_no_trunk_lane(site):
+    (site.app / "lanes.toml").write_text(
+        '[settings]\nbase = "origin/main"\n[[lane]]\nname = "suite"\ncommand = ["x"]\n', encoding="utf-8"
+    )
+    _git(site.app, "commit", "-q", "-am", "no trunk lane")
+    _git(site.app, "push", "-q", "origin", "main")
+    code, text = _watch(site)
+    assert code == 0 and "stopping" in text, text
+
+
+def test_watch_stops_when_every_retry_of_an_error_is_spent(site, monkeypatch):
+    from rails import check
+
+    monkeypatch.setattr(check, "missing_prerequisite", lambda lane: "Postgres is not reachable")
+    monkeypatch.setattr(trunk, "ERROR_RETRY_SECS", 0.0)
+    site.merge("src/a.py", "a = 1\n")
+    code, text = _watch(site)
+    assert code == 0 and "stopping" in text, text
+    assert trunk.read_state(site.repo)["last"]["attempts"] == trunk.ERROR_ATTEMPTS
+
+
+def test_ship_starts_a_runner_only_for_a_trunk_lane_and_kicks_a_live_one(site, monkeypatch):
     started: list[list[str]] = []
 
     class Popen:
@@ -342,8 +523,10 @@ def test_ship_starts_a_runner_only_for_a_trunk_lane_and_only_once(site, monkeypa
     monkeypatch.setattr(trunk.subprocess, "Popen", Popen)
     assert trunk.start_background(site.app, out=io.StringIO()) is True
     assert started and started[0][-2:] == ["trunk", "watch"]
+    before = trunk._read_kick(site.repo)
     with store.machine_lock(trunk.lock_name(site.repo), {"leaf": "w"}):
         assert trunk.start_background(site.app, out=io.StringIO()) is False
+    assert trunk._read_kick(site.repo) != before, "a live runner is told a merge is coming"
     (site.app / "lanes.toml").write_text(
         '[settings]\nbase = "origin/main"\n[[lane]]\nname = "suite"\ncommand = ["x"]\n',
         encoding="utf-8",
@@ -352,19 +535,43 @@ def test_ship_starts_a_runner_only_for_a_trunk_lane_and_only_once(site, monkeypa
     assert len(started) == 1
 
 
+def test_ids_that_fail_the_leak_check_are_not_posted(site, monkeypatch):
+    from rails import leak
+
+    (site.app / "rails").mkdir()
+    (site.app / "rails" / "leak.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(leak, "check_lines", lambda *a, **k: leak.Result(leak.EXIT_COULD_NOT_LOOK, [], "no snapshot"))
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    _pass(site)
+    bodies = [body for _, body in site.forge.comments] + [r["body"] for r in site.forge.reverts]
+    assert bodies and not any("test_b" in body for body in bodies)
+
+
 def test_bisect_finds_each_ids_first_failing_commit():
     commits = ["c0", "c1", "c2", "c3", "c4"]
     breaks = {"t1": 1, "t2": 3}
     probes: list[str] = []
 
-    def probe(sha: str, wanted: list[str]) -> set[str]:
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
         probes.append(sha)
         index = commits.index(sha)
-        return {t for t in wanted if index >= breaks[t]}
+        failed = {t for t in wanted if index >= breaks[t]}
+        return trunk.Answer(failed=failed, passed=set(wanted) - failed)
 
-    found = trunk._bisect(commits, ["t1", "t2"], probe)
-    assert found == [("c1", {"t1"}), ("c3", {"t2"})]
+    found, lost = trunk._bisect(commits, ["t1", "t2"], probe)
+    assert found == [("c1", {"t1"}), ("c3", {"t2"})] and lost == set()
     assert len(probes) <= 5
+
+
+def test_bisect_drops_an_id_a_probe_cannot_answer():
+    commits = ["c0", "c1", "c2"]
+
+    def probe(sha: str, wanted: list[str]) -> trunk.Answer:
+        return trunk.Answer(failed=set(), passed={t for t in wanted if t != "t2"})
+
+    found, lost = trunk._bisect(commits, ["t1", "t2"], probe)
+    assert lost == {"t2"} and found == [("c2", {"t1"})]
 
 
 def test_a_lane_file_declares_trunk_keys_and_reserves_the_name():
@@ -385,13 +592,48 @@ def test_a_lane_file_declares_trunk_keys_and_reserves_the_name():
         lanes_mod.loads('[[lane]]\nname = "s"\ncommand = ["x"]\ntrunk_command = "y"\n')
 
 
-def test_failed_ids_reads_pytest_short_summary():
+def test_failed_ids_reads_pytest_short_summary_including_spaced_params():
     log = "\n".join(
         [
             "....F.E",
             "FAILED tests/a.py::test_one - AssertionError: x",
             "ERROR tests/b.py::test_two - psycopg.OperationalError",
             "FAILED tests/a.py::test_one - again",
+            "FAILED pkg/tests/t.py::test_id[mem ber] - AssertionError: a - b",
+            "FAILED pkg/tests/t.py::test_bare[x y]",
+            "FAILED pkg/tests/t.py::test_dash[a - b] - AssertionError",
+            "==== 5 failed, 1 error, 9 passed in 2.01s ====",
         ]
     )
-    assert trunk.failed_ids(log) == ["tests/a.py::test_one", "tests/b.py::test_two"]
+    assert trunk.failed_ids(log) == [
+        "tests/a.py::test_one",
+        "tests/b.py::test_two",
+        "pkg/tests/t.py::test_id[mem ber]",
+        "pkg/tests/t.py::test_bare[x y]",
+        "pkg/tests/t.py::test_dash[a - b]",
+    ]
+    assert trunk.failure_tally(log) == 6
+    assert trunk.failure_tally("FAILED x - 3 failed things in total\n") is None
+
+
+def test_a_rootdir_relative_id_matches_the_id_that_was_asked():
+    asked = ["toolbox-x/tests/test_p.py::test_a", "toolbox-y/tests/test_q.py::test_a"]
+    assert trunk._match(asked, ["tests/test_p.py::test_a"]) == {"toolbox-x/tests/test_p.py::test_a"}
+    assert trunk._match(asked + ["toolbox-z/tests/test_p.py::test_a"], ["tests/test_p.py::test_a"]) == set()
+
+
+def test_github_revert_sends_the_mutation_and_reads_the_new_pr(monkeypatch, tmp_path):
+    sent: list[tuple[str, dict]] = []
+
+    def gh_api(top, path, *, method="GET", payload=None, timeout=60):
+        sent.append((path, payload))
+        return {"data": {"revertPullRequest": {"revertPullRequest": {"number": 7, "headRefName": "revert-5-x", "headRefOid": "a" * 40}}}}
+
+    monkeypatch.setattr(trunk, "gh_api", gh_api)
+    made = trunk.GitHub(tmp_path, "o/r").revert({"node_id": "PR_x"}, "t", "b")
+    assert made == {"number": 7, "head_ref": "revert-5-x", "head_sha": "a" * 40}
+    path, payload = sent[0]
+    assert path == "graphql" and payload["variables"] == {"id": "PR_x", "title": "t", "body": "b"}
+    assert "revertPullRequest(input:" in payload["query"]
+    monkeypatch.setattr(trunk, "gh_api", lambda *a, **k: {"errors": [{"message": "conflict"}]})
+    assert trunk.GitHub(tmp_path, "o/r").revert({"node_id": "PR_x"}, "t", "b") is None

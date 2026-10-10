@@ -7,17 +7,31 @@ tip finds the commit that broke it and reverts it.
 
 A pass pools every merge since the last one. Each lane that declares ``trunk_command``
 runs once on the tip, in a worktree kept under the rails data root and reused across
-passes. Green: ``rails/trunk`` = success on the tip. Red: each failed test id the last
-verdict did not already have is rerun alone at the tip with the lane's ``trunk_rerun``;
-one that passes is a flake (it fails in the full run and passes alone) and is recorded,
-never reverted. The rest are bisected over the first-parent commits since the last
-verdict, rerunning only those ids; the first commit where an id fails is its culprit.
+passes. Green: ``rails/trunk`` = success on the tip.
 
-``trunk_revert`` (lanes file ``[settings]``) decides what happens to a culprit's PR:
-``auto`` opens a revert PR through GitHub's ``revertPullRequest``, runs ``rails check
---post`` on its head and arms auto-squash when that is green; ``propose`` opens it and
-leaves it unarmed; ``off`` only comments. Every culprit PR gets a comment naming the
-failing tests. A revert the runner opened is never reverted again, only reported.
+Red is attributed only on definite answers. Each failed test id the last verdict did
+not already have is rerun alone at the tip (``trunk_rerun``):
+
+* it passes: a flake (it fails in the full run and passes alone), recorded, never reverted;
+* it fails again: it is rerun at the last verdict's commit. Failing there too, it was
+  already broken (an environment change, a renamed lane or test): reported, not
+  attributed. Passing there, it is bisected over the first-parent commits between,
+  rerunning only those ids, and the first commit where it fails is its culprit;
+* the rerun could not answer (pytest ran nothing, named other ids, crashed before any
+  verdict, or the id cannot be found): the tip stays red and the id is reported, never
+  attributed.
+
+``trunk_revert`` (lanes file ``[settings]``, read at the last verdict's commit so a culprit
+cannot switch off its own revert) decides what happens to a culprit's PR: ``auto`` opens
+a revert PR through GitHub's ``revertPullRequest``, runs ``rails check`` and ``rails post``
+on its head and arms auto-squash when both pass; ``propose`` opens it and leaves it
+unarmed; ``off`` only comments. A revert is recorded the moment it opens, a PR already
+reverted is never reverted again, and neither is a revert the runner opened. A lane with
+no ``trunk_rerun`` cannot tell a flake, so its culprits are reported, never reverted.
+
+A pass that could not reach a verdict (a missing prerequisite, a lane that failed without
+naming every failure, a crash) posts ``error`` and is retried: at once by ``rails trunk
+run``, by ``watch`` after a backoff and at most a few times per tip.
 
 One runner per repository holds the machine lock ``trunk-<repo>``; a second finds it
 held and leaves. The trunk lane does not take its ``lock`` (the pre-merge lane's), so a
@@ -27,6 +41,7 @@ pre-merge suite never queues behind a full run.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -39,17 +54,26 @@ from typing import Any, Callable, Protocol
 from rails import VERSION, lanes as lanes_mod, store
 from rails.gitutil import GitError, gh, gh_api, git, origin_slug, run
 
-#: pytest's short summary: `FAILED path::test - message` / `ERROR path::test - message`.
-_FAILED_ID = re.compile(r"^(?:FAILED|ERROR) (\S+?)(?: - .*)?$")
 #: The status context a pass posts on the tip (a lane may not take this name).
 CONTEXT = "trunk"
 #: How often `watch` asks the remote for the tip, and how long it waits for a move.
 POLL_SECS = 120.0
 IDLE_SECS = 90 * 60.0
+#: An error pass is retried by `watch` after this long, at most this many times per tip.
+ERROR_RETRY_SECS = 30 * 60.0
+ERROR_ATTEMPTS = 3
 #: The title suffix that marks a revert the runner opened.
 REVERT_MARK = "(rails trunk)"
 #: pytest exit codes that mean "nothing ran", not "these ids failed".
 _NOTHING_RAN = (4, 5)
+#: pytest's short summary prefixes, and its closing tally (`2 failed, 1 error in 3s`).
+_PREFIXES = ("FAILED ", "ERROR ")
+_TALLY_LINE = re.compile(
+    r"^=*\s*\d+ (?:failed|passed|errors?|skipped|deselected|xfailed|xpassed|warnings?)\b.* in [\d.]+s"
+)
+_TALLY = re.compile(r"(\d+) (failed|errors?)\b")
+#: Log directories kept under the trunk dir (one per tested tip).
+_KEEP_LOG_DIRS = 20
 
 
 # --- the code host -------------------------------------------------------------------
@@ -97,14 +121,14 @@ class GitHub:
             rows = gh_api(self.top, f"repos/{self.slug}/commits/{sha}/pulls") or []
         except (GitError, ValueError):
             return None
-        merged = [r for r in rows if isinstance(r, dict) and r.get("merged_at")]
-        for row in merged or []:
-            return {
-                "number": int(row["number"]),
-                "node_id": str(row.get("node_id", "")),
-                "head_ref": str((row.get("head") or {}).get("ref", "")),
-                "title": str(row.get("title", "")),
-            }
+        for row in rows:
+            if isinstance(row, dict) and row.get("merged_at"):
+                return {
+                    "number": int(row["number"]),
+                    "node_id": str(row.get("node_id", "")),
+                    "head_ref": str((row.get("head") or {}).get("ref", "")),
+                    "title": str(row.get("title", "")),
+                }
         return None
 
     def revert(self, pr: dict[str, Any], title: str, body: str) -> dict[str, Any] | None:
@@ -120,10 +144,10 @@ class GitHub:
             )
         except (GitError, ValueError):
             return None
-        made = (((data or {}).get("data") or {}).get("revertPullRequest") or {}).get(
-            "revertPullRequest"
-        )
-        if not made or (data or {}).get("errors"):
+        if not isinstance(data, dict) or data.get("errors"):
+            return None
+        made = ((data.get("data") or {}).get("revertPullRequest") or {}).get("revertPullRequest")
+        if not made:
             return None
         return {
             "number": int(made["number"]),
@@ -170,14 +194,54 @@ def write_state(repo: store.RepoId, state: dict[str, Any]) -> None:
     store.write_json(trunk_dir(repo) / "state.json", state)
 
 
+def _node_id(rest: str) -> str:
+    """The node id at the start of a short-summary line's remainder. A parametrize id may
+    hold spaces (`test_x[mem ber]`), so the id ends at the bracket that closes it."""
+    rest = rest.rstrip()
+    dash = rest.find(" - ")
+    bracket = rest.find("[")
+    if bracket != -1 and (dash == -1 or bracket < dash):
+        close = rest.find("] - ", bracket)
+        if close != -1:
+            return rest[: close + 1]
+        return rest
+    return rest if dash == -1 else rest[:dash]
+
+
 def failed_ids(log_text: str) -> list[str]:
     """Test ids from pytest's short summary, in order, each once."""
     seen: dict[str, None] = {}
     for line in log_text.splitlines():
-        m = _FAILED_ID.match(line.strip())
-        if m:
-            seen.setdefault(m.group(1))
+        line = line.strip()
+        for prefix in _PREFIXES:
+            if line.startswith(prefix):
+                node = _node_id(line[len(prefix) :])
+                if node:
+                    seen.setdefault(node)
     return list(seen)
+
+
+def failure_tally(log_text: str) -> int | None:
+    """`failed + errors` from pytest's closing tally line, or None when there is none."""
+    for line in reversed(log_text.splitlines()):
+        line = line.strip()
+        if _TALLY_LINE.match(line):
+            return sum(int(n) for n, _ in _TALLY.findall(line))
+    return None
+
+
+def _match(asked: list[str], named: list[str]) -> set[str]:
+    """The asked ids that `named` reports, allowing a rootdir-relative spelling
+    (`tests/t.py::x` for `pkg/tests/t.py::x`) when exactly one asked id fits."""
+    out: set[str] = set()
+    for name in named:
+        if name in asked:
+            out.add(name)
+            continue
+        fits = [a for a in asked if a.endswith("/" + name)]
+        if len(fits) == 1:
+            out.add(fits[0])
+    return out
 
 
 # --- the worktree a pass runs in -----------------------------------------------------
@@ -214,18 +278,32 @@ def _present(tree: Path, test_id: str) -> bool:
     a `file::name` id, the name appears in it. An id added later fails nothing earlier."""
     file, _, rest = test_id.partition("::")
     target = tree / file
-    if not target.exists():
+    if not target.is_file():
         return False
     if not rest:
         return True
-    name = rest.split("::")[-1].split("[")[0]
+    name = rest.split("[")[0].split("::")[-1]
     try:
         return name in target.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
 
 
-def _rerun(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple[int, str]:
+@dataclass
+class Answer:
+    """What a rerun said about the ids it was asked: each is failed, passed, absent (it
+    cannot exist at that commit), or none of these (the rerun could not answer)."""
+
+    failed: set[str] = field(default_factory=set)
+    passed: set[str] = field(default_factory=set)
+    absent: set[str] = field(default_factory=set)
+
+    def unknown(self, ids: list[str]) -> set[str]:
+        return set(ids) - self.failed - self.passed - self.absent
+
+
+def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple[Answer, bool]:
+    """The rerun's answer, and whether it ran nothing at all (pytest exit 4 or 5)."""
     from rails.check import run_lane
 
     rerun = lanes_mod.Lane(
@@ -236,7 +314,43 @@ def _rerun(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple
     )
     code, _ = run_lane(rerun, tree, log)
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-    return code, text
+    if code == 0:
+        return Answer(passed=set(ids)), False
+    named = _match(ids, failed_ids(text))
+    if named and failure_tally(text) in (None, len(named)):
+        return Answer(failed=named, passed=set(ids) - named), False
+    if named:
+        return Answer(failed=named), False  # more failed than it named: the rest are unknown
+    # Nothing ran, a crash, or ids in a form we cannot match: no answer.
+    return Answer(), code in _NOTHING_RAN
+
+
+def _ask(
+    top: Path, tree: Path, sha: str, lane: lanes_mod.Lane, ids: list[str], log: Path, result: "Pass"
+) -> Answer:
+    """Rerun `ids` at `sha`. pytest refuses a whole run for one id it cannot find, so a
+    group that gets no answer is asked again one id at a time; one id that runs nothing
+    alone does not exist at this commit (a parametrize case added later) and is absent."""
+    _checkout(top, tree, sha)
+    present = [i for i in ids if _present(tree, i)]
+    answer = Answer(absent=set(ids) - set(present))
+    if not present:
+        return answer
+    got, nothing = _run_ids(lane, tree, present, log)
+    result.reruns += 1
+    if len(present) == 1:
+        if nothing:
+            answer.absent.update(present)
+    elif got.unknown(present):
+        for index, one in enumerate(sorted(got.unknown(present))):
+            alone, nothing = _run_ids(lane, tree, [one], log.with_name(f"{log.stem}.{index}{log.suffix}"))
+            result.reruns += 1
+            got.failed |= alone.failed
+            got.passed |= alone.passed
+            if nothing:
+                answer.absent.add(one)
+    answer.failed, answer.passed = got.failed, got.passed
+    return answer
 
 
 # --- one pass ------------------------------------------------------------------------
@@ -246,6 +360,7 @@ def _rerun(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple
 class Culprit:
     sha: str
     ids: list[str]
+    revertable: bool = True
     pr: int | None = None
     revert: int | None = None
     armed: bool = False
@@ -255,9 +370,10 @@ class Culprit:
 @dataclass
 class Pass:
     tip: str
-    state: str = ""  # green | red | baseline | still-red | error | unchanged
+    state: str = ""  # green | red | baseline | still-red | error | unchanged | no-trunk-lane
     failed: dict[str, list[str]] = field(default_factory=dict)
     flaky: list[str] = field(default_factory=list)
+    unattributed: list[str] = field(default_factory=list)
     culprits: list[Culprit] = field(default_factory=list)
     lane_runs: int = 0
     reruns: int = 0
@@ -270,7 +386,37 @@ def _remote_branch(base: str) -> tuple[str, str]:
 
 
 def _description(tree_sha: str, state: str, note: str) -> str:
-    return " ".join(p for p in (f"trunk {state}", note, f"tree={tree_sha[:12]}", f"rails-{VERSION}") if p)
+    parts = (f"trunk {state}", note, f"tree={tree_sha[:12]}", f"rails-{VERSION}")
+    return " ".join(p for p in parts if p)
+
+
+def _skip(state: dict[str, Any], tip: str, *, force: bool, now: float) -> str | None:
+    """Why this tip needs no pass now, or None. An error pass is retried: always when
+    forced (`rails trunk run`), else after a backoff and only a few times."""
+    last = state.get("last") or {}
+    if last.get("sha") != tip:
+        return None
+    if last.get("state") != "error":
+        return "was already tested"
+    if force:
+        return None
+    if int(last.get("attempts", 1)) >= ERROR_ATTEMPTS:
+        return f"errored {last.get('attempts')} times; `rails trunk run` retries it"
+    if now - float(last.get("at", 0)) < ERROR_RETRY_SECS:
+        return "errored; it is retried after a backoff"
+    return None
+
+
+def _policy(top: Path, rel: str | None, verdict_sha: str | None, fallback: str) -> str:
+    """`trunk_revert` as the last verdict's commit had it, so a culprit that edits the
+    lanes file cannot switch off its own revert."""
+    if not rel or not verdict_sha:
+        return fallback
+    try:
+        text = git(top, "show", f"{verdict_sha}:{rel}")
+        return lanes_mod.loads(text).trunk_revert
+    except (GitError, ValueError):
+        return fallback
 
 
 def run_pass(
@@ -278,10 +424,11 @@ def run_pass(
     *,
     forge: Forge,
     revert_check: Callable[[dict[str, Any]], bool],
+    force: bool = False,
     out=sys.stdout,
 ) -> Pass:
     """Test the base tip once, attribute what is newly red, act, record, post."""
-    from rails.check import find_lanes_file, missing_prerequisite, run_lane
+    from rails.check import find_lanes_file
 
     repo = store.find_repo(top)
     assert repo is not None
@@ -292,23 +439,53 @@ def run_pass(
     tip = git(top, "rev-parse", f"{remote}/{branch}")
     state = read_state(repo)
     result = Pass(tip=tip)
-    if (state.get("last") or {}).get("sha") == tip:
+    why = _skip(state, tip, force=force, now=time.time())
+    if why:
         result.state = "unchanged"
-        print(f"rails trunk: {tip[:12]} was already tested", file=out)
+        print(f"rails trunk: {tip[:12]} {why}", file=out)
         return result
+    try:
+        _run(repo, top, tip, branch, state, result, forge, revert_check, out)
+    except Exception as exc:  # noqa: BLE001 - recorded as an error pass, retried with backoff
+        result.state, result.note = "error", f"the pass crashed ({type(exc).__name__}: {exc})"[:300]
+        _record(repo, state, result, verdict=None)
+        raise
+    return result
+
+
+def _run(
+    repo: store.RepoId,
+    top: Path,
+    tip: str,
+    branch: str,
+    state: dict[str, Any],
+    result: Pass,
+    forge: Forge,
+    revert_check: Callable[[dict[str, Any]], bool],
+    out,
+) -> None:
+    from rails.check import find_lanes_file, missing_prerequisite, run_lane
 
     root = trunk_dir(repo)
     tree_path = root / "tree"
     log_dir = root / "logs" / tip[:12]
     _checkout(top, tree_path, tip)
+    _prune_logs(root / "logs")
     tip_lanes = find_lanes_file(tree_path)
-    tip_config = lanes_mod.load(tip_lanes) if tip_lanes else config
+    if tip_lanes is None:
+        result.state = "no-trunk-lane"
+        _record(repo, state, result, verdict=None)
+        print("rails trunk: the tip has no lanes file; nothing to run", file=out)
+        return
+    tip_config = lanes_mod.load(tip_lanes)
+    rel = tip_lanes.relative_to(tree_path).as_posix()
     trunk_lanes = [lane for lane in tip_config.lanes if lane.trunk]
     tree_sha = git(top, "rev-parse", f"{tip}^{{tree}}")
     if not trunk_lanes:
+        result.state = "no-trunk-lane"
+        _record(repo, state, result, verdict=None)
         print("rails trunk: no lane declares trunk_command; nothing to run", file=out)
-        result.state = "unchanged"
-        return result
+        return
 
     print(f"rails trunk: testing {tip[:12]} ({branch})", file=out, flush=True)
     failing: dict[str, list[str]] = {}
@@ -323,18 +500,24 @@ def run_pass(
         print(f"  {'PASS' if code == 0 else 'FAIL'}  {lane.name:<14} {int(secs)}s  log: {log}", file=out)
         if code == 0:
             continue
-        ids = failed_ids(log.read_text(encoding="utf-8", errors="replace") if log.exists() else "")
-        if not ids:
+        text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+        ids = failed_ids(text)
+        tally = failure_tally(text)
+        if not ids or (tally is not None and tally > len(ids)):
             result.state = "error"
-            result.note = f"{lane.name} exited {code} without naming a failed test"
+            result.note = (
+                f"{lane.name} exited {code} without naming a failed test"
+                if not ids
+                else f"{lane.name}: {tally} failures, {len(ids)} named"
+            )
             break
         failing[lane.name] = ids
 
     if result.state == "error":
-        # No verdict: the tip is recorded as tried, the last verdict stays the bisect base.
-        _post(forge, tip_config, tip, tree_sha, "failure", "error", result.note)
+        # No verdict: the tip is retried, and the last verdict stays the bisect base.
+        _post(forge, tip_config, tip, tree_sha, "error", "error", result.note)
         _record(repo, state, result, verdict=None)
-        return result
+        return
 
     result.failed = failing
     verdict = state.get("verdict") if isinstance(state.get("verdict"), dict) else None
@@ -342,131 +525,117 @@ def run_pass(
         result.state = "green"
         _post(forge, tip_config, tip, tree_sha, "success", "green", f"{result.lane_runs} lane(s)")
         _record(repo, state, result, verdict={"sha": tip, "failed": {}})
-        return result
+        return
 
     if verdict is None or not _is_ancestor(top, str(verdict.get("sha", "")), tip):
         result.state = "baseline"
         count = sum(len(v) for v in failing.values())
         _post(forge, tip_config, tip, tree_sha, "failure", "baseline", f"red baseline: {count} failing")
         _record(repo, state, result, verdict={"sha": tip, "failed": failing})
-        return result
+        return
 
+    base_sha = str(verdict["sha"])
     known = verdict.get("failed") or {}
     by_name = {lane.name: lane for lane in trunk_lanes}
-    still: dict[str, list[str]] = {}
+    carried: dict[str, list[str]] = {}
     new: dict[str, list[str]] = {}
     for name, ids in failing.items():
         seen = set(known.get(name) or [])
-        still[name] = [i for i in ids if i in seen]
-        fresh = [i for i in ids if i not in seen]
-        if fresh:
-            new[name] = fresh
+        if [i for i in ids if i in seen]:
+            carried[name] = [i for i in ids if i in seen]
+        if [i for i in ids if i not in seen]:
+            new[name] = [i for i in ids if i not in seen]
 
-    confirmed: dict[str, list[str]] = {}
+    reproduced: dict[str, list[str]] = {}
+    no_rerun: dict[str, list[str]] = {}
     for name, ids in new.items():
         lane = by_name[name]
         if not lane.trunk_rerun:
-            confirmed[name] = ids  # no way to tell a flake: every new id is attributed
+            no_rerun[name] = ids
             continue
-        failing_now = _failing_at(top, tree_path, tip, lane, ids, log_dir / f"{name}.rerun.log", result)
-        result.flaky.extend(i for i in ids if i not in failing_now)
-        if failing_now:
-            confirmed[name] = [i for i in ids if i in failing_now]
+        answer = _ask(top, tree_path, tip, lane, ids, log_dir / f"{name}.rerun.log", result)
+        result.flaky.extend(i for i in ids if i in answer.passed)
+        result.unattributed.extend(i for i in ids if i not in answer.passed and i not in answer.failed)
+        if answer.failed:
+            reproduced[name] = [i for i in ids if i in answer.failed]
     if result.flaky:
         _remember_flakes(state, tip, result.flaky)
 
-    carried = {k: v for k, v in still.items() if v}
-    if not confirmed:
-        result.state = "still-red" if carried else "green"
-        note = f"{len(result.flaky)} flake(s)" if result.flaky else ""
-        if carried:
-            note = (note + "; " if note else "") + f"still red: {sum(len(v) for v in carried.values())} known"
-        _post(
-            forge,
-            tip_config,
-            tip,
-            tree_sha,
-            "failure" if carried else "success",
-            result.state,
-            note,
-        )
-        _record(repo, state, result, verdict={"sha": tip, "failed": carried})
-        return result
-
-    commits = _first_parent(top, str(verdict["sha"]), tip)
+    commits = _first_parent(top, base_sha, tip)
     found: dict[str, list[str]] = {}
-    unattributed: list[str] = []
-    for name, ids in confirmed.items():
+    unrevertable: set[str] = set()
+    for name, ids in no_rerun.items():
+        # Without a rerun there is no flake check and no bisect: one merge is named,
+        # several are left to a person, and neither is reverted.
+        if len(commits) == 1:
+            found.setdefault(commits[0], []).extend(ids)
+            unrevertable.add(commits[0])
+        else:
+            result.unattributed.extend(ids)
+    for name, ids in reproduced.items():
         lane = by_name[name]
-        if not lane.trunk_rerun:
-            # Without a rerun there is no bisect: one merge is its own culprit, several
-            # are reported for a person to split.
-            if len(commits) == 1:
-                found.setdefault(commits[0], []).extend(ids)
-            else:
-                unattributed.extend(ids)
+        at_base = _ask(top, tree_path, base_sha, lane, ids, log_dir / f"{name}.base.log", result)
+        # Failing at the last verdict too (an environment change, a renamed lane or test),
+        # or no answer there: not this range's to blame.
+        result.unattributed.extend(i for i in ids if i in at_base.failed or i in at_base.unknown(ids))
+        bisectable = [i for i in ids if i in at_base.passed or i in at_base.absent]
+        if not bisectable:
             continue
 
-        def probe(sha: str, wanted: list[str], lane=lane, name=name) -> set[str]:
-            return _failing_at(
-                top, tree_path, sha, lane, wanted, log_dir / f"{name}.bisect-{sha[:12]}.log", result
-            )
+        def probe(sha: str, wanted: list[str], lane=lane, name=name) -> Answer:
+            return _ask(top, tree_path, sha, lane, wanted, log_dir / f"{name}.bisect-{sha[:12]}.log", result)
 
-        for sha, ids_here in _bisect(commits, ids, probe):
+        located, lost = _bisect(commits, bisectable, probe)
+        result.unattributed.extend(sorted(lost))
+        for sha, ids_here in located:
             found.setdefault(sha, []).extend(sorted(ids_here))
-    if unattributed:
-        result.note = f"{len(unattributed)} new failure(s) over {len(commits)} merges, no trunk_rerun to bisect"
+
     for sha in commits:
         if sha in found:
-            result.culprits.append(Culprit(sha=sha, ids=found[sha]))
+            result.culprits.append(Culprit(sha=sha, ids=found[sha], revertable=sha not in unrevertable))
+    mode = _policy(top, rel, base_sha, tip_config.trunk_revert)
     for culprit in result.culprits:
-        _act(repo, state, tip_config, forge, culprit, tip, revert_check, out)
+        _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
 
-    result.state = "red"
-    named = ", ".join(
-        f"{c.sha[:12]}" + (f" #{c.pr}" if c.pr else "") + (f" -> #{c.revert}" if c.revert else "")
-        for c in result.culprits
-    )
-    words = [f"culprit {named}"] if named else []
-    if result.note:
-        words.append(result.note)
-    _post(forge, tip_config, tip, tree_sha, "failure", "red", "; ".join(words))
-    merged = {k: sorted(set(carried.get(k, [])) | set(confirmed.get(k, []))) for k in set(carried) | set(confirmed)}
-    _record(repo, state, result, verdict={"sha": tip, "failed": merged})
-    return result
-
-
-def _failing_at(
-    top: Path,
-    tree: Path,
-    sha: str,
-    lane: lanes_mod.Lane,
-    ids: list[str],
-    log: Path,
-    result: Pass,
-) -> set[str]:
-    """The subset of `ids` that fails at `sha`, by rerunning only those ids there."""
-    _checkout(top, tree, sha)
-    present = [i for i in ids if _present(tree, i)]
-    if not present:
-        return set()
-    code, text = _rerun(lane, tree, present, log)
-    result.reruns += 1
-    if code == 0:
-        return set()
-    named = set(failed_ids(text)) & set(present)
-    if named:
-        return named
-    if code in _NOTHING_RAN:
-        return set()
-    return set(present)  # it failed without naming ids: count every one as failing
+    confirmed = {
+        name: sorted(set(ids) - set(result.flaky)) for name, ids in new.items() if set(ids) - set(result.flaky)
+    }
+    still_failing = {
+        name: sorted(set(carried.get(name, [])) | set(confirmed.get(name, [])))
+        for name in set(carried) | set(confirmed)
+    }
+    words = []
+    if result.culprits:
+        words.append(
+            "culprit "
+            + ", ".join(
+                f"{c.sha[:12]}" + (f" #{c.pr}" if c.pr else "") + (f" -> #{c.revert}" if c.revert else "")
+                for c in result.culprits
+            )
+        )
+    if result.unattributed:
+        words.append(f"{len(result.unattributed)} unattributed")
+    if carried:
+        words.append(f"{sum(len(v) for v in carried.values())} known")
+    if result.flaky:
+        words.append(f"{len(result.flaky)} flake(s)")
+    result.note = "; ".join(words)
+    if not still_failing:
+        result.state = "green"
+        _post(forge, tip_config, tip, tree_sha, "success", "green", result.note)
+    else:
+        result.state = "red" if (confirmed or result.culprits) else "still-red"
+        _post(forge, tip_config, tip, tree_sha, "failure", result.state, result.note)
+    _record(repo, state, result, verdict={"sha": tip, "failed": still_failing})
 
 
 def _bisect(
-    commits: list[str], ids: list[str], probe: Callable[[str, list[str]], set[str]]
-) -> list[tuple[str, set[str]]]:
-    """Each id's first failing commit. Every id is known to fail at the last commit."""
+    commits: list[str], ids: list[str], probe: Callable[[str, list[str]], Answer]
+) -> tuple[list[tuple[str, set[str]]], set[str]]:
+    """Each id's first failing commit, and the ids a probe could not answer for. Every id
+    is known to fail at the last commit and to pass before the first."""
     remaining = set(ids)
+    lost: set[str] = set()
     out: list[tuple[str, set[str]]] = []
     start = 0
     cache: dict[tuple[int, frozenset[str]], set[str]] = {}
@@ -476,39 +645,62 @@ def _bisect(
             return set(remaining)
         key = (index, frozenset(remaining))
         if key not in cache:
-            cache[key] = probe(commits[index], sorted(remaining)) & remaining
+            answer = probe(commits[index], sorted(remaining))
+            unsure = answer.unknown(sorted(remaining))
+            if unsure:
+                lost.update(unsure)
+                remaining.difference_update(unsure)
+            cache[(index, frozenset(remaining))] = answer.failed & remaining
+            return answer.failed & remaining
         return cache[key]
 
     while remaining and start < len(commits):
         lo, hi = start, len(commits) - 1
-        while lo < hi:
+        while lo < hi and remaining:
             mid = (lo + hi) // 2
             if failing(mid):
                 hi = mid
             else:
                 lo = mid + 1
+        if not remaining:
+            break
         here = failing(lo)
         if not here:
             break
         out.append((commits[lo], here))
         remaining -= here
         start = lo + 1
-    return out
+    return out, lost
 
 
-def _report(culprit: Culprit, tip: str) -> str:
+def _report(culprit: Culprit, tip: str, ids_ok: bool) -> str:
+    head = (
+        f"rails trunk: the full suite on the base tip `{tip[:12]}` fails tests that passed "
+        f"before `{culprit.sha[:12]}` (this PR's merge)"
+    )
+    if not ids_ok:
+        return head + f": {len(culprit.ids)} test(s). Their ids are held on the operator's machine (`rails trunk status`).\n"
     tests = "\n".join(f"- `{i}`" for i in culprit.ids[:20])
     more = f"\n- (+{len(culprit.ids) - 20} more)" if len(culprit.ids) > 20 else ""
-    return (
-        f"rails trunk: the full suite on the base tip `{tip[:12]}` fails tests that passed "
-        f"before `{culprit.sha[:12]}` (this PR's merge):\n\n{tests}{more}\n"
-    )
+    return f"{head}:\n\n{tests}{more}\n"
+
+
+def _ids_postable(repo: store.RepoId, top: Path, ids: list[str]) -> bool:
+    """Test ids leave this machine only through the leak check `rails ship` applies; a
+    repo without one posts them as they are."""
+    if not (top / "rails" / "leak.toml").is_file():
+        return True
+    from rails import leak
+
+    result = leak.check_lines(repo, list(leak.text_lines("trunk", "\n".join(ids))), leak.allowlist_for(top))
+    return result.code == leak.EXIT_CLEAN
 
 
 def _act(
     repo: store.RepoId,
+    top: Path,
     state: dict[str, Any],
-    config: lanes_mod.LaneConfig,
+    mode: str,
     forge: Forge,
     culprit: Culprit,
     tip: str,
@@ -522,19 +714,24 @@ def _act(
         return
     culprit.pr = int(pr["number"])
     reverts = state.setdefault("reverts", [])
+    for row in reverts:
+        if isinstance(row, dict) and int(row.get("pr", -1)) == culprit.pr:
+            culprit.revert, culprit.note = row.get("revert"), "already reverted"
+            print(f"  culprit #{culprit.pr} was already reverted by #{row.get('revert')}", file=out)
+            return
     ours = {int(r["revert"]) for r in reverts if isinstance(r, dict) and r.get("revert")}
-    report = _report(culprit, tip)
+    report = _report(culprit, tip, _ids_postable(repo, top, culprit.ids))
     if culprit.pr in ours or str(pr.get("title", "")).endswith(REVERT_MARK):
         culprit.note = "a runner revert; not reverted again"
         forge.comment(culprit.pr, report + "\nThis PR is a rails trunk revert, so it is not reverted again.")
         print(f"  culprit #{culprit.pr} is a runner revert; reported only", file=out)
         return
-    if config.trunk_revert == "off":
-        culprit.note = "reported"
+    if mode == "off" or not culprit.revertable:
+        culprit.note = "reported" if culprit.revertable else "reported (no trunk_rerun: no flake check)"
         forge.comment(culprit.pr, report)
         return
     title = f"Revert #{culprit.pr}: master red at {tip[:12]} {REVERT_MARK}"
-    body = report + f"\nOpened by rails trunk ({config.trunk_revert}). Re-land with a fix.\n"
+    body = report + f"\nOpened by rails trunk ({mode}). Re-land with a fix.\n"
     made = forge.revert(pr, title, body)
     if made is None:
         culprit.note = "the revert could not be opened (a conflict?)"
@@ -542,13 +739,31 @@ def _act(
         print(f"  culprit #{culprit.pr}: no revert could be opened", file=out)
         return
     culprit.revert = int(made["number"])
-    if config.trunk_revert == "auto":
-        if revert_check(made):
+    row = {
+        "culprit": culprit.sha,
+        "pr": culprit.pr,
+        "revert": culprit.revert,
+        "ids": culprit.ids,
+        "armed": False,
+        "at": int(time.time()),
+    }
+    reverts.append(row)
+    del reverts[:-50]
+    write_state(repo, state)  # recorded before anything that can fail or take an hour
+    if mode == "auto":
+        try:
+            ok = bool(revert_check(made))
+        except Exception as exc:  # noqa: BLE001 - a check that cannot run is a red check
+            ok = False
+            print(f"  revert #{culprit.revert}: its check could not run ({type(exc).__name__}: {exc})", file=out)
+        if ok:
             culprit.armed = forge.arm(culprit.revert)
             if not culprit.armed:
                 culprit.note = "the revert could not be armed"
         else:
             culprit.note = "the revert's check is red; not armed"
+        row["armed"] = culprit.armed
+        write_state(repo, state)
     forge.comment(
         culprit.pr,
         report
@@ -556,17 +771,6 @@ def _act(
         + (" (auto-squash armed)." if culprit.armed else " (not armed: a person merges it).")
         + " Re-land with a fix.",
     )
-    reverts.append(
-        {
-            "culprit": culprit.sha,
-            "pr": culprit.pr,
-            "revert": culprit.revert,
-            "ids": culprit.ids,
-            "armed": culprit.armed,
-            "at": int(time.time()),
-        }
-    )
-    del reverts[:-50]
     print(
         f"  culprit #{culprit.pr} ({culprit.sha[:12]}): revert #{culprit.revert}"
         + (" armed" if culprit.armed else " NOT armed"),
@@ -590,13 +794,27 @@ def _remember_flakes(state: dict[str, Any], tip: str, ids: list[str]) -> None:
     del rows[:-50]
 
 
+def _prune_logs(logs: Path) -> None:
+    try:
+        dirs = sorted((p for p in logs.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return
+    for old in dirs[:-_KEEP_LOG_DIRS]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def _record(
     repo: store.RepoId, state: dict[str, Any], result: Pass, *, verdict: dict[str, Any] | None
 ) -> None:
+    previous = state.get("last") or {}
+    attempts = 1
+    if result.state == "error" and previous.get("sha") == result.tip and previous.get("state") == "error":
+        attempts = int(previous.get("attempts", 1)) + 1
     state["last"] = {
         "sha": result.tip,
         "state": result.state,
         "note": result.note,
+        "attempts": attempts,
         "at": int(time.time()),
     }
     if verdict is not None:
@@ -609,6 +827,7 @@ def _record(
             "state": result.state,
             "failed": result.failed,
             "flaky": result.flaky,
+            "unattributed": result.unattributed,
             "culprits": [c.__dict__ for c in result.culprits],
             "lane_runs": result.lane_runs,
             "reruns": result.reruns,
@@ -644,23 +863,35 @@ def _default_forge(top: Path, out) -> Forge | None:
     return GitHub(top, slug)
 
 
+def _python() -> str:
+    """rails is standard library only, so the base interpreter runs it. A session
+    worktree's venv would be pinned for the runner's whole life (and may be deleted)."""
+    return getattr(sys, "_base_executable", "") or sys.executable
+
+
 def check_revert(repo: store.RepoId, top: Path, made: dict[str, Any], out=sys.stdout) -> bool:
-    """`rails check --post` on a revert PR's head, in the kept worktree."""
+    """`rails check`, then `rails post`, on a revert PR's head in the kept worktree. Both
+    must pass: a green check whose statuses never landed cannot merge."""
     tree_path = trunk_dir(repo) / "tree"
-    git(top, "fetch", "--quiet", "origin", str(made["head_ref"]), check=False)
+    git(top, "fetch", "--quiet", "origin", str(made["head_ref"]))
     _checkout(top, tree_path, str(made["head_sha"]))
     rails_bin = Path(__file__).resolve().parent.parent / "bin" / "rails"
     log = trunk_dir(repo) / "logs" / f"revert-{made['number']}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    codes = []
     with open(log, "w", encoding="utf-8", errors="replace") as handle:
-        done = subprocess.run(
-            [sys.executable, str(rails_bin), "check", "--post"],
-            cwd=str(tree_path),
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-        )
-    print(f"  revert #{made['number']}: rails check --post exited {done.returncode} (log: {log})", file=out)
-    return done.returncode == 0
+        for sub in ("check", "post"):
+            done = subprocess.run(
+                [_python(), str(rails_bin), sub],
+                cwd=str(tree_path),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+            )
+            codes.append(done.returncode)
+            if done.returncode != 0:
+                break
+    print(f"  revert #{made['number']}: rails check/post exited {codes} (log: {log})", file=out)
+    return codes == [0, 0]
 
 
 def run_once(
@@ -681,11 +912,14 @@ def run_once(
     holder = {"leaf": repo.leaf, "lane": "trunk", "sha": ""}
     try:
         with store.machine_lock(lock_name(repo), holder, wait=False):
-            result = run_pass(top, forge=forge, revert_check=checker, out=out)
+            result = run_pass(top, forge=forge, revert_check=checker, force=True, out=out)
     except store.LockBusy:
         print("rails trunk: a runner is already live; it will test the tip", file=out)
         return 0
-    return 0 if result.state in ("green", "unchanged") else 1
+    except Exception as exc:  # noqa: BLE001 - run_pass recorded it as an error pass
+        print(f"rails trunk: the pass failed ({type(exc).__name__}: {exc})", file=out)
+        return 1
+    return 0 if result.state in ("green", "unchanged", "no-trunk-lane") else 1
 
 
 def _remote_tip(top: Path, base: str) -> str | None:
@@ -696,6 +930,24 @@ def _remote_tip(top: Path, base: str) -> str | None:
         return None
     first = out.split()
     return first[0] if first else None
+
+
+def _kick_path(repo: store.RepoId) -> Path:
+    return trunk_dir(repo) / "kick"
+
+
+def _kick(repo: store.RepoId) -> None:
+    """Tell a live watcher a merge is coming: it restarts its idle clock."""
+    path = _kick_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(time.time_ns()), encoding="utf-8")
+
+
+def _read_kick(repo: store.RepoId) -> str:
+    try:
+        return _kick_path(repo).read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def watch(
@@ -709,7 +961,8 @@ def watch(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """A pass whenever the remote tip moves past the last tested one; exit when idle."""
+    """A pass whenever the remote tip moves past the last tested one (or an error pass is
+    due a retry); exit after `idle` seconds with no pass and no kick from `rails ship`."""
     found = _context(cwd, out)
     if found is None:
         return 2
@@ -722,16 +975,24 @@ def watch(
     try:
         with store.machine_lock(lock_name(repo), holder, wait=False):
             last_move = clock()
+            kick = _read_kick(repo)
             while True:
                 tip = _remote_tip(top, config.base)
-                if tip and tip != (read_state(repo).get("last") or {}).get("sha"):
+                last = read_state(repo).get("last") or {}
+                if tip and (tip != last.get("sha") or last.get("state") == "error"):
                     try:
-                        run_pass(top, forge=forge, revert_check=checker, out=out)
-                    except GitError as exc:
-                        print(f"rails trunk: the pass failed to run: {exc}", file=out)
-                    last_move = clock()
-                elif clock() - last_move >= idle:
-                    print(f"rails trunk: no new tip for {int(idle // 60)} min; stopping", file=out)
+                        result = run_pass(top, forge=forge, revert_check=checker, out=out)
+                        if result.state != "unchanged":
+                            last_move = clock()
+                    except Exception as exc:  # noqa: BLE001 - recorded by run_pass; keep watching
+                        # Not activity: a pass that keeps crashing must not keep the
+                        # watcher alive. run_pass recorded it, so it is retried on backoff.
+                        print(f"rails trunk: the pass failed ({type(exc).__name__}: {exc})", file=out)
+                now_kick = _read_kick(repo)
+                if now_kick != kick:
+                    kick, last_move = now_kick, clock()
+                if clock() - last_move >= idle:
+                    print(f"rails trunk: no pass for {int(idle // 60)} min; stopping", file=out)
                     return 0
                 sleep(poll)
     except store.LockBusy:
@@ -749,28 +1010,32 @@ def runner_live(repo: store.RepoId) -> bool:
 
 def start_background(top: Path, out=sys.stdout) -> bool:
     """Start `rails trunk watch` detached when the lanes declare a trunk lane and no runner
-    is live. Its output goes to the trunk's own log. True when one was started."""
+    is live; a live one is kicked so it waits for this merge. True when one was started."""
     from rails.check import find_lanes_file
 
     repo = store.find_repo(top)
     if repo is None:
         return False
     lanes_file = find_lanes_file(repo.main)
-    if lanes_file is None or not any(l.trunk for l in lanes_mod.load(lanes_file).lanes):
+    if lanes_file is None or not any(lane.trunk for lane in lanes_mod.load(lanes_file).lanes):
         return False
+    _kick(repo)
     if runner_live(repo):
         print("  trunk: a runner is live; it tests the tip after this merges", file=out)
         return False
     log = trunk_dir(repo) / "watch.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     rails_bin = Path(__file__).resolve().parent.parent / "bin" / "rails"
-    argv = [sys.executable, str(rails_bin), "trunk", "watch"]
+    argv = [_python(), str(rails_bin), "trunk", "watch"]
+    # The session's virtualenv is not the runner's: each lane resolves its own.
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     with open(log, "ab") as handle:
         kwargs: dict[str, Any] = {
             "cwd": str(repo.main),
             "stdout": handle,
             "stderr": subprocess.STDOUT,
             "stdin": subprocess.DEVNULL,
+            "env": env,
         }
         if sys.platform == "win32":
             # No console window for the lanes it starts, its own process group, and out of
@@ -801,8 +1066,11 @@ def status(cwd: Path, out=sys.stdout) -> int:
     else:
         print("rails trunk: no pass yet", file=out)
     if verdict:
-        count = sum(len(v) for v in (verdict.get("failed") or {}).values())
-        print(f"  verdict {str(verdict.get('sha', ''))[:12]}: {count} failing", file=out)
+        failed = verdict.get("failed") or {}
+        print(f"  verdict {str(verdict.get('sha', ''))[:12]}: {sum(len(v) for v in failed.values())} failing", file=out)
+        for name, ids in failed.items():
+            for test_id in ids[:20]:
+                print(f"    {name}: {test_id}", file=out)
     for row in (state.get("flaky") or [])[-5:]:
         print(f"  flake {row.get('id')} at {str(row.get('sha', ''))[:12]}", file=out)
     for row in (state.get("reverts") or [])[-5:]:
@@ -832,6 +1100,7 @@ def main(argv: list[str]) -> int:
 
 
 __all__ = [
+    "Answer",
     "CONTEXT",
     "Culprit",
     "Forge",
@@ -839,6 +1108,7 @@ __all__ = [
     "Pass",
     "check_revert",
     "failed_ids",
+    "failure_tally",
     "lock_name",
     "main",
     "read_state",
