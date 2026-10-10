@@ -17,6 +17,7 @@ Schema::
     status_prefix = "rails/"          # commit status context = prefix + lane name
     all_lanes_on = ["rails/lanes.toml"]   # a change here selects every lane
     gate_workflow = "pr-gate.yml"     # re-run by `rails post` if it finished before the statuses landed
+    trunk_revert = "propose"          # a trunk culprit's revert PR: "auto" (armed) | "propose" | "off"
 
     [[lane]]
     name = "suite"
@@ -30,6 +31,9 @@ Schema::
     needs = ["postgres"]              # prerequisites: docker | postgres | node | pnpm | uv
     advisory_until = "2026-10-20"     # optional: runs and reports, gates nothing, until this date
     lock = "suite"                    # optional: wait for this machine-wide lock first; the wait is outside timeout_min
+    trunk_command = ["uv", "run", "pytest", "-q"]   # optional: what `rails trunk` runs on the base tip after merges
+    trunk_rerun = ["uv", "run", "pytest", "-q"]     # with trunk_command: reruns failed test ids (appended)
+    trunk_timeout_min = 120           # with trunk_command: its timeout (default: twice timeout_min)
 
 Globs: ``**`` spans any number of path segments (including none), ``*`` and
 ``?`` stay inside one segment, a trailing ``/`` matches everything under that
@@ -55,6 +59,11 @@ _DOS_DEVICES = frozenset(
 )
 
 
+#: What `rails trunk` may do with a culprit's PR: open an armed revert, open one for a
+#: person to arm, or only report.
+TRUNK_REVERT = ("auto", "propose", "off")
+
+
 def valid_lock_name(name: str) -> bool:
     return bool(LOCK_NAME.fullmatch(name)) and name.split(".")[0].upper() not in _DOS_DEVICES
 
@@ -74,6 +83,26 @@ class Lane:
     # A machine-wide lock taken before the lane runs: every worktree and repo on the box
     # whose lane names the same lock runs it one at a time. Empty: no lock.
     lock: str = ""
+    # A trunk lane also runs on the base branch's tip after merges (`rails trunk`), pooled
+    # over every merge since the last pass. `trunk_rerun` is the argv that reruns the
+    # failed test ids it reports, to tell a flake from a culprit and to bisect.
+    trunk_command: list[str] = field(default_factory=list)
+    trunk_rerun: list[str] = field(default_factory=list)
+    trunk_timeout_min: float = 0  # 0: twice timeout_min
+
+    @property
+    def trunk(self) -> bool:
+        return bool(self.trunk_command)
+
+    def on_trunk(self) -> "Lane":
+        """This lane as `rails trunk` runs it: its trunk argv and timeout, same env."""
+        return Lane(
+            name=self.name,
+            command=list(self.trunk_command),
+            env=dict(self.env),
+            timeout_min=self.trunk_timeout_min or 2 * self.timeout_min,
+            needs=list(self.needs),
+        )
 
     def advisory(self, today: "_dt.date | None" = None) -> bool:
         """True while this lane is advisory. A lane that has never been green on the
@@ -95,6 +124,7 @@ class LaneConfig:
     status_prefix: str = "rails/"
     all_lanes_on: list[str] = field(default_factory=list)
     gate_workflow: str = ""  # the PR workflow file `rails post` re-runs when it finished early
+    trunk_revert: str = "propose"  # what `rails trunk` does with a culprit: auto | propose | off
 
     def lane(self, name: str) -> Lane:
         for lane in self.lanes:
@@ -144,6 +174,8 @@ def parse(data: dict[str, Any]) -> LaneConfig:
         name = raw["name"]
         if name in seen:
             raise ValueError(f"lane {name!r} declared twice")
+        if name == "trunk":
+            raise ValueError("lane name 'trunk' is reserved: `rails trunk` posts rails/trunk")
         seen.add(name)
         command = raw.get("command", [])
         if isinstance(command, str):
@@ -158,6 +190,13 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 f"lane {name!r}: lock {lock!r} must be a plain word "
                 "(letters, digits, '.', '_' or '-', at most 64, not a Windows device name)"
             )
+        for key in ("trunk_command", "trunk_rerun"):
+            if isinstance(raw.get(key, []), str):
+                raise ValueError(
+                    f"lane {name!r}: {key} must be an argv list, not a shell string"
+                )
+        if raw.get("trunk_rerun") and not raw.get("trunk_command"):
+            raise ValueError(f"lane {name!r}: trunk_rerun needs a trunk_command")
         lanes.append(
             Lane(
                 name=name,
@@ -171,7 +210,15 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 needs=list(raw.get("needs", [])),
                 advisory_until=str(raw.get("advisory_until", "")),
                 lock=lock,
+                trunk_command=[str(part) for part in raw.get("trunk_command", [])],
+                trunk_rerun=[str(part) for part in raw.get("trunk_rerun", [])],
+                trunk_timeout_min=float(raw.get("trunk_timeout_min", 0)),
             )
+        )
+    trunk_revert = str(settings.get("trunk_revert", "propose"))
+    if trunk_revert not in TRUNK_REVERT:
+        raise ValueError(
+            f"settings.trunk_revert must be one of {', '.join(TRUNK_REVERT)}, not {trunk_revert!r}"
         )
     return LaneConfig(
         lanes=lanes,
@@ -179,6 +226,7 @@ def parse(data: dict[str, Any]) -> LaneConfig:
         status_prefix=settings.get("status_prefix", "rails/"),
         all_lanes_on=list(settings.get("all_lanes_on", [])),
         gate_workflow=str(settings.get("gate_workflow", "")),
+        trunk_revert=trunk_revert,
     )
 
 

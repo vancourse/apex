@@ -374,6 +374,13 @@ def ship(
 
     post(top, out=out)
     receipts.write(repo, "ship", sha=sha, pr=number, armed=armed)
+    # The full suite runs after merge: a trunk runner tests the base tip once this lands.
+    try:
+        from rails import trunk
+
+        trunk.start_background(top, out=out)
+    except Exception as exc:  # noqa: BLE001 - the PR is open and armed; this never fails ship
+        print(f"  trunk: the runner could not be started ({type(exc).__name__}: {exc})", file=out)
     print(f"rails ship: PR #{number} {url}", file=out)
     if arm:
         print("  armed: auto-squash" if armed else "  NOT armed (see above)", file=out)

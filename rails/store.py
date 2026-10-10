@@ -190,6 +190,15 @@ def locked(path: Path, timeout: float = 5.0) -> Iterator[None]:
         handle.close()
 
 
+class LockBusy(Exception):
+    """A machine lock taken with ``wait=False`` was held; ``holder`` is its record."""
+
+    def __init__(self, name: str, holder: Any) -> None:
+        super().__init__(f"lock {name!r} is held")
+        self.name = name
+        self.holder = holder if isinstance(holder, dict) else None
+
+
 @contextlib.contextmanager
 def machine_lock(
     name: str,
@@ -198,6 +207,7 @@ def machine_lock(
     poll: float = 1.0,
     notify_every: float = 60.0,
     on_wait: Callable[[dict[str, Any] | None, float], None] | None = None,
+    wait: bool = True,
 ) -> Iterator[float]:
     """Hold the machine-wide lock ``name`` for the block; yields the seconds spent waiting.
 
@@ -206,7 +216,8 @@ def machine_lock(
     exits, so a crashed or killed holder leaves nothing stale. ``holder`` (what holds
     it, from where) is written beside the lock so a waiter can say who it waits for;
     ``on_wait`` gets that record and the seconds waited on the first failed try and
-    every ``notify_every`` seconds after.
+    every ``notify_every`` seconds after. With ``wait=False`` a held lock raises
+    ``LockBusy`` (carrying the holder's record) instead of waiting.
     """
     from rails.lanes import valid_lock_name
 
@@ -220,6 +231,8 @@ def machine_lock(
     next_note = started
     try:
         while not _try_lock(handle, strict=True):
+            if not wait:
+                raise LockBusy(name, read_json(holder_path, None))
             now = time.monotonic()
             if on_wait is not None and now >= next_note:
                 on_wait(read_json(holder_path, None), now - started)

@@ -4,6 +4,48 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.5.0] — 2026-10-09
+
+### Added
+- **The full suite runs after merge, once per base tip: `rails trunk`.** jarvis decided on
+  2026-10-09 that a PR merges on the tests its paths select, and that the full battery runs on
+  master afterwards. A lane opts in with `trunk_command` (what runs on the tip), `trunk_rerun` (an
+  argv that reruns failed test ids, appended) and `trunk_timeout_min` (default: twice
+  `timeout_min`). The lane is not run differently before merge.
+  - **`rails trunk run`** is one pass. It fetches the base branch and checks the tip out in a
+    worktree kept under the rails data root (ignored files such as `.venv` survive between
+    passes). It runs each trunk lane once there, pooling every merge since the last pass, and
+    posts `rails/trunk` on the tip. A lane may not be named `trunk`.
+  - **A red tip is attributed, not just reported.** Each failed test id the last verdict did not
+    already have is first rerun alone at the tip. One that passes is a flake (it fails in the full
+    run and passes alone), recorded and never reverted. The rest are bisected over the
+    first-parent commits since the last verdict, rerunning only those ids. The first commit where
+    an id fails is its culprit; two culprits in one pass are both found. A lane without
+    `trunk_rerun` attributes only a single merge and reports several.
+  - **`trunk_revert`** (`[settings]`, default `propose`) decides what happens to a culprit's PR.
+    `auto` opens a revert PR through GitHub's `revertPullRequest`, runs `rails check --post` on
+    its head and arms auto-squash when that is green. `propose` opens it unarmed, and `off` only
+    comments. Every culprit PR gets a comment naming the tests. A revert the runner opened is
+    never reverted again.
+  - **A failure that was already failing is not attributed twice,** and the first pass ever, if
+    red, is a baseline. A pass whose lane fails without naming a test, or whose prerequisite is
+    missing, records an error and keeps the last verdict as the bisect base.
+  - **`rails trunk watch`** asks the remote for the tip every 2 minutes and runs a pass when it
+    moves; it exits after 90 idle minutes. **`rails ship` starts it** (detached, no console
+    window) when the lanes declare a trunk lane and no runner is live. One runner per repository
+    holds the machine lock `trunk-<repo>`; the trunk lane does not take the pre-merge lane's
+    `lock`. **`rails trunk status`** prints the last pass, its flakes and reverts, and whether a
+    runner is live.
+- **`machine_lock(..., wait=False)`** raises `LockBusy` with the holder's record instead of
+  waiting.
+
+### Fixed
+- **A red lane's tail no longer crashes `rails check` on a cp1252 console.** The CLI writes
+  stdout and stderr with `errors="backslashreplace"`, so a lane log carrying a character the
+  console cannot encode (a thin space, an arrow) prints and the lanes after it still run.
+
+---
+
 ## [1.4.0] — 2026-10-09
 
 ### Added
