@@ -4,6 +4,31 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.5.1] — 2026-10-10
+
+### Fixed
+- **Load or a restarting Postgres no longer blames the newest merge** (morphyxAI/jarvis#2668).
+  On jarvis's laptop, concurrent suites failed 22 of 38 runs. A load failure that lasted
+  through the tip's rerun and was gone by the rerun at the last verdict made every bisect probe
+  pass. The bisect then assumed the tip failed, named the newest merge, and in `auto` mode its
+  revert's own check passed unloaded and the revert was armed.
+  - **A culprit takes two probes.** The commit a bisect names is probed again before it
+    counts, the tip included: the tip's own rerun is no longer enough to blame the newest merge.
+    One false failure (load, a database restarting mid-probe) cannot move the blame to an
+    innocent merge. An id the confirmation does not repeat is reported. A real culprit costs
+    one rerun more.
+  - **The reruns that decide take the lane's lock.** A trunk lane with `lock = "<name>"`
+    (jarvis's suite lane has `lock = "suite"`) holds it from the tip's rerun to the end of the
+    bisect, so a session's pre-merge suite cannot load them. The long full run does not take it,
+    or every session's suite would wait out the pass. The lock is released before a revert's own
+    `rails check`, which takes the same lock.
+  - **Postgres is up only when it takes a session.** The `postgres` prerequisite sends a startup
+    packet, as `pg_isready` does, instead of only connecting. A server that answers "cannot
+    connect now" (SQLSTATE 57P03: starting up, shutting down, in recovery), or does not answer,
+    is not up. A probe then gets no answer instead of failures. This also applies to `rails check`
+    before merge: a restarting Postgres stops the lane as "not a code failure" instead of failing
+    its tests.
+
 ## [1.5.0] — 2026-10-09
 
 ### Added

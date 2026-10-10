@@ -23,11 +23,12 @@ import os
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from rails import VERSION, lanes as lanes_mod, receipts, store
 from rails.gitutil import (
@@ -55,17 +56,40 @@ def find_lanes_file(top: Path) -> Path | None:
 
 
 def _postgres_reachable() -> bool:
+    """Whether Postgres at DATABASE_URL takes a session, as `pg_isready` asks: a startup
+    packet answered by an authentication request, or by any error but "cannot connect
+    now" (SQLSTATE 57P03: starting up, shutting down, in recovery), is up. A TCP connect
+    is not enough: a restarting Postgres accepts it and refuses every session, every test
+    then errors, and a rerun read that as failures that blamed a merge (#2668)."""
     url = os.environ.get(
         "DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
     )
     parsed = urlparse(url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 5432
+    user = unquote(parsed.username or "postgres")
+    database = unquote(parsed.path.lstrip("/")) or user
+    params = b"user\0" + user.encode() + b"\0database\0" + database.encode() + b"\0\0"
+    body = struct.pack("!I", 196608) + params  # protocol 3.0
+    reply = b""
     try:
-        with socket.create_connection((host, port), timeout=3):
-            return True
+        with socket.create_connection((host, port), timeout=3) as conn:
+            conn.settimeout(3)
+            conn.sendall(struct.pack("!I", len(body) + 4) + body)
+            kind = conn.recv(1)
+            if kind in (b"R", b"v"):  # an authentication request; a protocol negotiation
+                return True
+            if kind != b"E":
+                return False
+            while len(reply) < 4 or len(reply) < struct.unpack("!I", reply[:4])[0]:
+                chunk = conn.recv(4096)
+                if not chunk or len(reply) > 65536:
+                    break
+                reply += chunk
     except OSError:
         return False
+    # An ErrorResponse is fields of (type byte, text, NUL); the SQLSTATE is type `C`.
+    return b"\0C57P03\0" not in b"\0" + reply[4:]
 
 
 def _docker_alive() -> bool:
@@ -89,7 +113,10 @@ def missing_prerequisite(lane: lanes_mod.Lane) -> str | None:
         if need == "docker" and not _docker_alive():
             return "Docker is not answering (`docker info` failed) - not a code failure"
         if need == "postgres" and not _postgres_reachable():
-            return "Postgres is not reachable at DATABASE_URL - not a code failure"
+            return (
+                "Postgres at DATABASE_URL is not taking sessions (down, starting up or "
+                "shutting down) - not a code failure"
+            )
     return None
 
 

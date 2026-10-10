@@ -43,6 +43,7 @@ pre-merge suite never queues behind a full run.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -53,7 +54,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 from rails import VERSION, lanes as lanes_mod, store
 from rails.gitutil import GitError, gh, gh_api, git, origin_slug, run
@@ -575,6 +576,31 @@ def run_pass(
     return result
 
 
+@contextlib.contextmanager
+def _attribution_locks(
+    repo: store.RepoId, lanes: list[lanes_mod.Lane], tip: str, out
+) -> Iterator[None]:
+    """Hold the trunk lanes' machine locks (`lock = "<name>"`) while reruns decide who
+    broke the tip. A session's pre-merge suite on the same lock would load them, and a
+    load failure that outlives one rerun blamed a merge (#2668). The full run does not
+    take them: every session's suite would wait out the whole pass. A revert's own
+    `rails check` takes the same locks, so the caller releases them before it."""
+    with contextlib.ExitStack() as stack:
+        for name in sorted({lane.lock for lane in lanes if lane.lock}):
+
+            def note(holder: object, waited: float, name: str = name) -> None:
+                who = holder.get("leaf", "?") if isinstance(holder, dict) else "another check"
+                print(
+                    f"  wait  lock {name!r} held by {who}; waited {waited / 60:.0f} min",
+                    file=out,
+                    flush=True,
+                )
+
+            holder = {"repo": str(repo.main), "leaf": "rails trunk", "lane": name, "sha": tip}
+            stack.enter_context(store.machine_lock(name, holder, on_wait=note))
+        yield
+
+
 def _run(
     repo: store.RepoId,
     top: Path,
@@ -671,69 +697,72 @@ def _run(
         if [i for i in ids if i not in seen]:
             new[name] = [i for i in ids if i not in seen]
 
-    reproduced: dict[str, list[str]] = {}
-    no_rerun: dict[str, list[str]] = {}
-    for name, ids in new.items():
-        lane = by_name[name]
-        if not lane.trunk_rerun:
-            no_rerun[name] = ids
-            continue
-        answer = _ask(top, tree_path, tip, lane, ids, log_dir / f"{name}.rerun.log", result)
-        result.flaky.extend(i for i in ids if i in answer.passed)
-        result.unattributed.extend(i for i in ids if i not in answer.passed and i not in answer.failed)
-        if answer.failed:
-            reproduced[name] = [i for i in ids if i in answer.failed]
-    if result.flaky:
-        _remember_flakes(state, tip, result.flaky)
+    # The reruns that decide who broke the tip run under the lanes' locks; released
+    # before `_act`, whose revert check takes them too (#2668).
+    with _attribution_locks(repo, trunk_lanes, tip, out):
+        reproduced: dict[str, list[str]] = {}
+        no_rerun: dict[str, list[str]] = {}
+        for name, ids in new.items():
+            lane = by_name[name]
+            if not lane.trunk_rerun:
+                no_rerun[name] = ids
+                continue
+            answer = _ask(top, tree_path, tip, lane, ids, log_dir / f"{name}.rerun.log", result)
+            result.flaky.extend(i for i in ids if i in answer.passed)
+            result.unattributed.extend(i for i in ids if i not in answer.passed and i not in answer.failed)
+            if answer.failed:
+                reproduced[name] = [i for i in ids if i in answer.failed]
+        if result.flaky:
+            _remember_flakes(state, tip, result.flaky)
 
-    commits = _first_parent(top, base_sha, tip)
-    found: dict[str, list[str]] = {}
-    unrevertable: set[str] = set()
-    for name, ids in no_rerun.items():
-        # Without a rerun there is no flake check and no bisect: one merge is named,
-        # several are left to a person, and neither is reverted.
-        if len(commits) == 1:
-            found.setdefault(commits[0], []).extend(ids)
-            unrevertable.add(commits[0])
-        else:
-            result.unattributed.extend(ids)
-    for name, ids in reproduced.items():
-        lane = by_name[name]
-        at_base = _ask(top, tree_path, base_sha, lane, ids, log_dir / f"{name}.base.log", result)
-        # Failing at the last verdict too (an environment change, a renamed lane), or no
-        # answer there: not this range's to blame.
-        result.unattributed.extend(i for i in ids if i in at_base.failed or i in at_base.unknown(ids))
-        bisectable = [i for i in ids if i in at_base.passed]
-        for index, test_id in enumerate(sorted(at_base.absent & set(ids))):
-            # Absent at the last verdict: a new test, or an old one a merge moved. A known
-            # failure with the same class, name and parameters that is gone from the tip,
-            # or the same test in a file that no longer defines it at the tip failing (or
-            # unanswerable) at the last verdict, makes it the old one: reported, not
-            # blamed on the move.
-            if _tail(test_id) in moved_tails:
-                result.unattributed.append(test_id)
-                continue
-            twins = _twins(top, base_sha, tip, test_id)
-            if twins is None:
-                result.unattributed.append(test_id)
-                continue
-            if twins:
-                log = log_dir / f"{name}.twins-{index}.log"
-                seen = _ask(top, tree_path, base_sha, lane, twins, log, result)
-                if seen.failed or seen.unknown(twins):
+        commits = _first_parent(top, base_sha, tip)
+        found: dict[str, list[str]] = {}
+        unrevertable: set[str] = set()
+        for name, ids in no_rerun.items():
+            # Without a rerun there is no flake check and no bisect: one merge is named,
+            # several are left to a person, and neither is reverted.
+            if len(commits) == 1:
+                found.setdefault(commits[0], []).extend(ids)
+                unrevertable.add(commits[0])
+            else:
+                result.unattributed.extend(ids)
+        for name, ids in reproduced.items():
+            lane = by_name[name]
+            at_base = _ask(top, tree_path, base_sha, lane, ids, log_dir / f"{name}.base.log", result)
+            # Failing at the last verdict too (an environment change, a renamed lane), or no
+            # answer there: not this range's to blame.
+            result.unattributed.extend(i for i in ids if i in at_base.failed or i in at_base.unknown(ids))
+            bisectable = [i for i in ids if i in at_base.passed]
+            for index, test_id in enumerate(sorted(at_base.absent & set(ids))):
+                # Absent at the last verdict: a new test, or an old one a merge moved. A known
+                # failure with the same class, name and parameters that is gone from the tip,
+                # or the same test in a file that no longer defines it at the tip failing (or
+                # unanswerable) at the last verdict, makes it the old one: reported, not
+                # blamed on the move.
+                if _tail(test_id) in moved_tails:
                     result.unattributed.append(test_id)
                     continue
-            bisectable.append(test_id)
-        if not bisectable:
-            continue
+                twins = _twins(top, base_sha, tip, test_id)
+                if twins is None:
+                    result.unattributed.append(test_id)
+                    continue
+                if twins:
+                    log = log_dir / f"{name}.twins-{index}.log"
+                    seen = _ask(top, tree_path, base_sha, lane, twins, log, result)
+                    if seen.failed or seen.unknown(twins):
+                        result.unattributed.append(test_id)
+                        continue
+                bisectable.append(test_id)
+            if not bisectable:
+                continue
 
-        def probe(sha: str, wanted: list[str], lane=lane, name=name) -> Answer:
-            return _ask(top, tree_path, sha, lane, wanted, log_dir / f"{name}.bisect-{sha[:12]}.log", result)
+            def probe(sha: str, wanted: list[str], lane=lane, name=name) -> Answer:
+                return _ask(top, tree_path, sha, lane, wanted, log_dir / f"{name}.bisect-{sha[:12]}.log", result)
 
-        located, lost = _bisect(commits, bisectable, probe)
-        result.unattributed.extend(sorted(lost))
-        for sha, ids_here in located:
-            found.setdefault(sha, []).extend(sorted(ids_here))
+            located, lost = _bisect(commits, bisectable, probe)
+            result.unattributed.extend(sorted(lost))
+            for sha, ids_here in located:
+                found.setdefault(sha, []).extend(sorted(ids_here))
 
     for sha in commits:
         if sha in found:
@@ -777,8 +806,11 @@ def _run(
 def _bisect(
     commits: list[str], ids: list[str], probe: Callable[[str, list[str]], Answer]
 ) -> tuple[list[tuple[str, set[str]]], set[str]]:
-    """Each id's first failing commit, and the ids a probe could not answer for. Every id
-    is known to fail at the last commit and to pass before the first."""
+    """Each id's first failing commit, confirmed by a second probe there, and the ids a
+    probe could not answer for or a confirmation did not repeat. Every id is known to pass
+    before the first commit and was seen failing at the last, in the tip's own rerun; the
+    search takes that, but a culprit is only named on the confirmation's probe. The tip's
+    rerun alone once named the newest merge for a failure that was load (#2668)."""
     remaining = set(ids)
     lost: set[str] = set()
     out: list[tuple[str, set[str]]] = []
@@ -819,7 +851,16 @@ def _bisect(
         remaining -= here
         start = lo + 1
     lost |= remaining  # never located: reported, not lost
-    return out, lost
+    # A culprit is named on two probes, not one: a single false failure (load, a database
+    # restarting mid-probe) would otherwise move the blame to an innocent merge (#2668).
+    confirmed: list[tuple[str, set[str]]] = []
+    for sha, here in out:
+        again = probe(sha, sorted(here))
+        kept = again.failed & here
+        lost |= here - kept
+        if kept:
+            confirmed.append((sha, kept))
+    return confirmed, lost
 
 
 def _report(culprit: Culprit, tip: str, ids_ok: bool) -> str:
