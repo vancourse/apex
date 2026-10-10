@@ -3,6 +3,7 @@
 rails check [--quick] [--post] [--lane X]   run the lanes the diff needs; seal a marker
 rails post                                  post rails/<lane> statuses for HEAD
 rails ship [--title T] [--closes N]         one PR, Ready, auto-squash armed, statuses posted
+rails trunk run | watch | status            the full suite once on the base tip after merges; bisect, revert
 rails walk [--name planted]                 run a walk; record step ids pass/fail
 rails claim "#12,#34" | --milestone T [--kind release|harness|prep] | --adhoc "line" | --list | --release
 rails work add "<text>" [--step a1] | from-issue <N> | done <id> | list | stop <kind> "<text>" | monitor-bound
@@ -486,6 +487,13 @@ def cmd_doctor(argv: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
+    # A lane's output carries characters a cp1252 console or a redirected stdout cannot
+    # encode; printing its tail must never cost the lanes after it (1.4.0's crash).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -505,6 +513,10 @@ def main(argv: list[str]) -> int:
         from rails import ship
 
         return ship.main(rest)
+    if cmd == "trunk":
+        from rails import trunk
+
+        return trunk.main(rest)
     if cmd == "walk":
         return cmd_walk(rest)
     if cmd == "claim":

@@ -4,6 +4,88 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.5.0] — 2026-10-09
+
+### Added
+- **The full suite runs after merge, once per base tip: `rails trunk`.** jarvis decided on
+  2026-10-09 that a PR merges on the tests its paths select, and that the full battery runs on
+  master afterwards. A lane opts in with `trunk_command` (what runs on the tip), `trunk_rerun` (an
+  argv that reruns failed test ids, appended) and `trunk_timeout_min` (default: twice
+  `timeout_min`). The lane is not run differently before merge.
+  - **`rails trunk run`** is one pass. It fetches the base branch and checks the tip out in a
+    worktree kept under the rails data root (ignored files such as `.venv` survive between
+    passes). It runs each trunk lane once there, pooling every merge since the last pass, and
+    posts `rails/trunk` on the tip. A lane may not be named `trunk`.
+  - **A red tip is attributed only on definite answers.** Each failed test id the last verdict
+    did not already have is rerun alone at the tip:
+    - **Passes:** a flake (it fails in the full run and passes alone), recorded and never
+      reverted.
+    - **Fails again:** it is rerun at the last verdict's commit. Failing there too means it was
+      already broken (an environment change, a renamed lane), so it is reported and not
+      attributed. Passing there, it is bisected over the first-parent commits between, rerunning
+      only those ids; the first commit where it fails is its culprit. Two culprits in one pass are
+      both found, and an id the bisect cannot locate is reported.
+    - **Not there at the last verdict** (a new test, or one a merge moved): it is the old test,
+      and reported, if a known failure with the same id after its file (class, name, parameters)
+      is gone from the tip, or if the same test in a file that no longer defines it at the tip
+      (moved with its file, or split out of one that stays) fails there or gives no answer. A
+      collection error, named by its file alone, matches only itself, and a twin search git cannot
+      answer leaves the id reported. Otherwise it is bisected: a new failing case of a
+      still-failing parametrized test is still blamed on the merge that broke it.
+    - **The rerun cannot answer** (pytest ran nothing, crashed, skipped an asked id, named other
+      ids, or the lane's prerequisite went away mid-probe): the tip stays red and the id is
+      reported, never attributed.
+    - **pytest refuses a whole run for one id it cannot find,** so a group with no answer is asked
+      one id at a time, at most 20. An id that pytest says it cannot find alone ("not found" or
+      "no tests ran") does not exist at that commit (a parametrize case added later); an exit 4
+      for any other reason (a conftest or usage error) is no answer. A rootdir-relative id
+      (`tests/t.py::x` for `pkg/tests/t.py::x`) matches the id that was asked.
+    - **Parsing:** ids are read from pytest's short summary only (captured log records that start
+      with `ERROR` are not ids), including parametrize ids that hold spaces. A lane whose closing
+      tally counts more failures than its summary lists is an error, not a verdict. A failure plus
+      a teardown error on one test is two of each.
+  - **`trunk_revert`** (`[settings]`, default `propose`) decides what happens to a culprit's PR.
+    It is read at the last verdict's commit, so a culprit that edits, moves or adds a lanes file
+    cannot switch off its own revert; no lanes file there gives the default. The options:
+    - `auto` opens a revert PR through GitHub's `revertPullRequest`, runs `rails check` and
+      `rails post` on its head, and arms auto-squash when both pass. A check that raises counts as
+      red.
+    - `propose` opens it unarmed, and `off` only comments.
+    - A revert is written to the runner's state the moment it opens, before its check, so a
+      runner killed mid-check never opens a second one. The next pass that names the same culprit
+      finishes what the killed one did not reach (the check, the arm, the comment). A revert the
+      runner opened is never reverted again.
+    - A lane without `trunk_rerun` cannot tell a flake, so its culprits are reported and never
+      reverted.
+    - Test ids go into comments only through the repository's leak check, when it has one (as
+      `rails ship` applies it); otherwise the comment gives only the count.
+  - **A failure that was already failing is not attributed twice,** and the first pass ever, if
+    red, is a baseline.
+  - **A pass with no verdict posts `error` and is retried.** This covers a missing prerequisite, a
+    lane that fails without naming every failure, or a crash. `rails trunk run` retries at once;
+    `watch` retries after 30 minutes, up to 3 attempts per tip in all. The last verdict stays the bisect
+    base. A tip with no trunk lane is recorded and left alone.
+  - **`rails trunk watch`** asks the remote for the tip every 2 minutes and runs a pass when it
+    moves (or an error is due a retry). It exits after 90 minutes with no pass and no kick.
+    **`rails ship` starts it** detached, with no console window, under the base interpreter and
+    without the session's `VIRTUAL_ENV` (or its directory on `PATH`), when the shipping
+    worktree's lanes file or the base branch's committed one declares a trunk lane (never the
+    main checkout's working tree, which may be behind) and no runner is live. Trunk runs and
+    reruns set `PY_COLORS=0`, so a coloured summary cannot hide a failure. It kicks a live one, so that runner waits for this merge.
+  - **One runner per repository** holds the machine lock `trunk-<repo>`. The trunk lane does not
+    take the pre-merge lane's `lock`.
+  - **`rails trunk status`** prints the last pass, the failing ids, the flakes and reverts, and
+    whether a runner is live. Only the last 20 tips' logs and 20 revert-check logs are kept.
+- **`machine_lock(..., wait=False)`** raises `LockBusy` with the holder's record instead of
+  waiting.
+
+### Fixed
+- **A red lane's tail no longer crashes `rails check` on a cp1252 console.** The CLI writes
+  stdout and stderr with `errors="backslashreplace"`, so a lane log carrying a character the
+  console cannot encode (a thin space, an arrow) prints and the lanes after it still run.
+
+---
+
 ## [1.4.0] — 2026-10-09
 
 ### Added
