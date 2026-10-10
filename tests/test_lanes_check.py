@@ -6,7 +6,10 @@ import io
 import json
 import os
 import signal
+import socket
+import struct
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -180,6 +183,76 @@ def test_missing_prerequisite_fails_the_lane_with_its_reason(monkeypatch):
     lane = lanes.Lane(name="db", needs=["postgres"])
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/x")
     assert "not a code failure" in check.missing_prerequisite(lane)
+
+
+def _fake_postgres(reply: bytes) -> tuple[socket.socket, int]:
+    """A listener that reads one startup packet and answers it with `reply`."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def serve() -> None:
+        try:
+            conn, _ = server.accept()
+        except OSError:
+            return
+        with conn:
+            conn.recv(1024)
+            if reply:
+                conn.sendall(reply)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return server, server.getsockname()[1]
+
+
+def _error_response(sqlstate: str, message: str) -> bytes:
+    body = b"SFATAL\0C" + sqlstate.encode() + b"\0M" + message.encode() + b"\0\0"
+    return b"E" + struct.pack("!I", len(body) + 4) + body
+
+
+def test_a_postgres_that_is_starting_up_is_a_missing_prerequisite(monkeypatch):
+    """#2668: a restarting Postgres accepts the TCP connection and refuses every session
+    (SQLSTATE 57P03, "the database system is starting up"). Every test then errors, so a
+    probe run then is no answer, not a failure: it must not pass a TCP-only check."""
+    server, port = _fake_postgres(_error_response("57P03", "the database system is starting up"))
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        why = check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
+    assert why and "Postgres" in why and "not a code failure" in why
+
+
+def test_an_error_without_a_sqlstate_is_no_answer(monkeypatch):
+    """The postmaster's fork failure is a bare v2 message, no SQLSTATE: pg_isready reads it
+    as no response, and so does this (coop, review of 5437359)."""
+    server, port = _fake_postgres(b"Ecould not fork new process for connection: Resource busy\n\0")
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
+
+
+def test_a_listener_that_closes_without_answering_is_not_postgres(monkeypatch):
+    server, port = _fake_postgres(b"")
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        b"R" + struct.pack("!II", 8, 3),  # asks for a password: it takes sessions
+        _error_response("28P01", "password authentication failed"),
+        _error_response("3D000", 'database "x" does not exist'),
+    ],
+    ids=["auth-request", "bad-password", "no-database"],
+)
+def test_a_postgres_that_answers_a_startup_packet_is_up(monkeypatch, reply):
+    """As `pg_isready` reads it: any answer but "cannot connect now" means the server takes
+    sessions. A wrong password or database is the lane's own failure to report."""
+    server, port = _fake_postgres(reply)
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"])) is None
 
 
 # --- a stopped lane stops everything it started --------------------------------
