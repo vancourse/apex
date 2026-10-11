@@ -60,7 +60,9 @@ def _postgres_reachable() -> bool:
     packet answered by an authentication request, or by any error but "cannot connect
     now" (SQLSTATE 57P03: starting up, shutting down, in recovery), is up. A TCP connect
     is not enough: a restarting Postgres accepts it and refuses every session, every test
-    then errors, and a rerun read that as failures that blamed a merge (#2668)."""
+    then errors, and a rerun read that as failures that blamed a merge (#2668). Unlike
+    pg_isready, "too many clients" (53300) is not up either: every session the lane opens
+    then fails, from load (#2673)."""
     url = os.environ.get(
         "DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
     )
@@ -78,7 +80,10 @@ def _postgres_reachable() -> bool:
             conn.settimeout(10)
             conn.sendall(struct.pack("!I", len(body) + 4) + body)
             kind = conn.recv(1)
-            if kind in (b"R", b"v"):  # an authentication request; a protocol negotiation
+            if kind == b"R":  # an authentication request
+                _drain_auth_request(conn)
+                return True
+            if kind == b"v":  # a protocol negotiation
                 return True
             if kind != b"E":
                 return False
@@ -93,7 +98,27 @@ def _postgres_reachable() -> bool:
     # without a five-character SQLSTATE is not a v3 answer (the postmaster's fork failure
     # is a bare v2 message), so it is no answer, as pg_isready reads it.
     codes = [field[1:] for field in reply[4:].split(b"\0") if field[:1] == b"C"]
-    return len(codes) == 1 and len(codes[0]) == 5 and codes[0] != b"57P03"
+    return len(codes) == 1 and len(codes[0]) == 5 and codes[0] not in (b"57P03", b"53300")
+
+
+def _drain_auth_request(conn: socket.socket) -> None:
+    """Read the rest of an authentication request before the probe closes: a socket closed
+    on unread data resets the connection, and Postgres logs a reset for every probe
+    (#2673). A server that let the probe in (trust) is sent Terminate and read to its
+    close. The answer is already in; nothing here can change it."""
+    rest = b""
+    with contextlib.suppress(OSError, struct.error):
+        while len(rest) < 4 or len(rest) < struct.unpack("!I", rest[:4])[0]:
+            chunk = conn.recv(4096)
+            if not chunk or len(rest) > 65536:
+                return
+            rest += chunk
+        if rest[4:8] == b"\0\0\0\0":  # AuthenticationOk: a session started
+            conn.sendall(b"X" + struct.pack("!I", 4))
+            conn.shutdown(socket.SHUT_WR)
+            conn.settimeout(2)
+            while conn.recv(4096):
+                pass
 
 
 def _docker_alive() -> bool:
@@ -118,8 +143,8 @@ def missing_prerequisite(lane: lanes_mod.Lane) -> str | None:
             return "Docker is not answering (`docker info` failed) - not a code failure"
         if need == "postgres" and not _postgres_reachable():
             return (
-                "Postgres at DATABASE_URL is not taking sessions (down, starting up or "
-                "shutting down) - not a code failure"
+                "Postgres at DATABASE_URL is not taking sessions (down, starting up, "
+                "shutting down or out of connection slots) - not a code failure"
             )
     return None
 

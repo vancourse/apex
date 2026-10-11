@@ -364,6 +364,19 @@ fp_count = 0
 fp_measured_on = "unmeasured: shadow week starts 2026-10-08"
 
 [[gate]]
+name = "ship_findings"
+module = "cli"
+events = ["rails:ship"]
+kind = "cli"
+class = "friction"
+mode = "enforce"
+shadow_until = "2026-10-18"
+cites = ["operator ruling 2026-09-11: a finding a PR leaves open is a separate issue, never only a PR-body bullet", "morphyxAI/jarvis#2658 merged with thirteen untracked bullets under \"Findings left for later\" (twelve left on purpose, one accepted at ship); filed as issues 2026-10-09 (morphyxAI/jarvis#2663)"]
+planted = "tests/test_session_gates.py::test_ship_refuses_a_deferred_finding_with_no_issue"
+fp_count = 0
+fp_measured_on = "unmeasured: shadow week starts 2026-10-11"
+
+[[gate]]
 name = "test_filter"
 module = "test_filter"
 events = ["PreToolUse"]

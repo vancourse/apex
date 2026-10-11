@@ -230,6 +230,45 @@ def test_an_error_without_a_sqlstate_is_no_answer(monkeypatch):
         assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
 
 
+def test_a_postgres_with_no_free_connection_slot_is_a_missing_prerequisite(monkeypatch):
+    """#2673 (3): "too many clients" (SQLSTATE 53300) is a server that refuses every new
+    session; pg_isready calls it up, but a probe run then fails every test from load."""
+    server, port = _fake_postgres(_error_response("53300", "sorry, too many clients already"))
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{port}/x")
+        why = check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"]))
+    assert why and "not a code failure" in why
+
+
+def test_the_postgres_probe_reads_the_auth_request_before_it_closes(monkeypatch):
+    """#2673 (5): a probe that closes on an unread authentication request resets the
+    connection, and Postgres logs a reset for every probe. Read to its end, the close is
+    a plain end of stream."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    seen: dict[str, object] = {}
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        with conn:
+            conn.recv(1024)
+            conn.sendall(b"R" + struct.pack("!II", 8, 3))  # asks for a password
+            conn.settimeout(10)
+            try:
+                seen["after"] = conn.recv(1)
+            except OSError as exc:
+                seen["after"] = exc
+
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    with server:
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{server.getsockname()[1]}/x")
+        assert check.missing_prerequisite(lanes.Lane(name="db", needs=["postgres"])) is None
+        worker.join(15)
+    assert seen.get("after") == b"", seen
+
+
 def test_a_listener_that_closes_without_answering_is_not_postgres(monkeypatch):
     server, port = _fake_postgres(b"")
     with server:

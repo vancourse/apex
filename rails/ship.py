@@ -8,7 +8,10 @@
 3. Title and body: from the flags, else from ``.rails/intent.md`` (first heading =
    title, the rest = body). Every `Closes #N` gets its own line — `Closes #A, #B`
    closes only #A.
-4. Leak-checks title and body (repos with rails/leak.toml) BEFORE any gh call.
+4. Refuses a body whose section of findings left open ("Findings left for later",
+   "Accepted", "Follow-ups", ...) has a bullet with no `#N` and no `no-issue: <reason>`
+   (``ship_findings``). Leak-checks title and body (repos with rails/leak.toml) BEFORE
+   any gh call.
 5. Pushes the branch (through the pre-push hook), opens ONE Ready PR — or reuses
    the open one — arms `--auto --squash`, posts the lane statuses, writes pr.json.
 6. Prints the monitor step: the desktop's ccd_pr bind_pr + set_monitor, then
@@ -142,6 +145,68 @@ def _review_allows_arming(repo: store.RepoId, top: Path, out, base_ref: str | No
     return False
 
 
+#: A section of a PR body that holds findings left open. Each of its bullets names the issue
+#: that tracks it (`#N`) or says why none is needed (`no-issue: <reason>`): the operator
+#: ruled on 2026-09-11 that a finding a PR leaves open is an issue, never only a bullet, and
+#: a PR merged thirteen such bullets that nothing tracked (morphyxAI/jarvis#2663). Questions
+#: put to the reviewer, and a section on what this PR follows up, hold no such finding.
+_DEFERRED = re.compile(
+    r"left (?:for later|on purpose|open)|\blatent\b|\baccepted\b|\bdeferred\b|"
+    r"\bfollow[- ]?ups?\b(?!\s+(?:to|of|on|from)\b)|"
+    r"\bopen (?:items?|findings?|issues?)\b|\bstill open\b|^\W*open\W*$",
+    re.IGNORECASE,
+)
+_LINKED = re.compile(r"#\d+\b|/issues/\d+\b|\bno-issue:", re.IGNORECASE)
+_HEADING = re.compile(r"(#{1,6})\s+(.*)")
+_BULLET = re.compile(r"(?:[-*+]|\d+[.)])\s")
+
+
+def unlinked_findings(body: str) -> list[str]:
+    """The bullets under a heading (or a label line: `**Accepted:**`, `Left on purpose:`)
+    that holds findings left open, with no `#N` and no `no-issue:`. A bullet's own indented
+    lines count as the bullet; a heading section ends at the next heading of its level."""
+    out: list[str] = []
+    level = 0  # the open deferred heading's level; 0: none
+    label = False  # under a deferred label line, until the next paragraph
+    item: list[str] = []
+    indent = 0  # the open bullet's indent: a deeper line is its own text or a sub-bullet
+    fenced = False
+
+    def close() -> None:
+        if item and not _LINKED.search(" ".join(item)):
+            out.append(item[0])
+        item.clear()
+
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        depth = len(raw) - len(raw.lstrip())
+        if item and line and depth > indent:
+            item.append(line)
+            continue
+        close()
+        heading = _HEADING.fullmatch(line)
+        if heading:
+            hashes = len(heading.group(1))
+            if not level or hashes <= level:
+                level = hashes if _DEFERRED.search(heading.group(2)) else 0
+            label = False
+        elif _BULLET.match(line):
+            if level or label:
+                item.append(line)
+                indent = depth
+        elif line and (line.endswith(":") or re.fullmatch(r"\*\*.+\*\*:?", line)):
+            label = bool(_DEFERRED.search(line.strip("*: ")))
+        elif line:
+            label = False
+    close()
+    return out
+
+
 def unreceipted_absences(body: str) -> list[str]:
     """Lines that claim an absence without naming the receipt that looked (design R29)."""
     return [
@@ -261,6 +326,21 @@ def ship(
             f"  advisory: an absence claim with no `receipt:` id: {line[:120]}",
             file=out,
         )
+    unlinked = unlinked_findings(body)
+    if unlinked:
+        from rails.githooks import _log, _shadowed
+
+        lines = "\n".join(f"    {line[:160]}" for line in unlinked)
+        why = (
+            "each finding a PR leaves open links the issue that tracks it (`#N`), or says why "
+            f"none is needed (`no-issue: <reason>`). These do neither:\n{lines}"
+        )
+        if _shadowed("ship_findings"):
+            _log(repo, "ship_findings", "would-deny")
+            print(f"  [rails shadow: ship_findings would refuse] {why}", file=out)
+        else:
+            print(f"rails ship: refused - {why}", file=out)
+            return 1
     if (top / "rails" / "leak.toml").is_file():
         result = leak.check_lines(
             repo,

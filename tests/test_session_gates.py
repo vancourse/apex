@@ -654,6 +654,52 @@ def test_ship_leak_check_follows_the_leak_gates_shadow(repo, git, commit, monkey
     assert "could not look" in out.getvalue()
 
 
+def test_ship_refuses_a_deferred_finding_with_no_issue(repo, git, commit, monkeypatch):
+    """morphyxAI/jarvis#2663: a finding a PR leaves open is an issue, never only a bullet
+    (operator ruling, 2026-09-11). A bullet under "Findings left for later" with no `#N`
+    is refused by name before anything is pushed; with `#N`, or `no-issue: <reason>`
+    for an answer rather than a finding, the same body ships."""
+    import io
+
+    from rails import githooks
+
+    rid, _, calls = _ship_fixture(repo, git, commit, monkeypatch)
+    monkeypatch.setattr(githooks, "_shadowed", lambda name: False)
+    body = (
+        "## What this does\n\n- Exports the summary as CSV.\n\n"
+        "## Findings left for later\n\n"
+        "**Accepted at ship:**\n"
+        "- **Stage flags.** A deferred selection reports `frontend` as a narrow one does.\n"
+        "- **The rename tests.** Command-line git config outranks them (#41).\n\n"
+        "## Test plan\n\n- the CSV round-trips\n"
+    )
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body=body, base="main", closes=[], arm=False, out=out) == 1
+    assert "Stage flags" in out.getvalue() and "rename tests" not in out.getvalue(), out.getvalue()
+    assert "round-trips" not in out.getvalue() and "Exports" not in out.getvalue()
+    assert calls["api"] == [] and git(repo.parent / "origin.git", "for-each-ref") == ""  # nothing pushed
+    for fixed in ("(#42)", "no-issue: nothing reads the flags under a deferral"):
+        good = body.replace("as a narrow one does.", f"as a narrow one does {fixed}.")
+        out = io.StringIO()
+        assert ship.ship(repo, title="t", body=good, base="main", closes=[], arm=False, out=out) == 0, out.getvalue()
+    monkeypatch.setattr(githooks, "_shadowed", lambda name: True)
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body=body, base="main", closes=[], arm=False, out=out) == 0
+    assert "rails shadow: ship_findings would refuse" in out.getvalue()
+
+
+def test_sections_that_hold_no_deferred_findings_do_not_flag():
+    """Questions put to the reviewer, and a section saying what this PR follows up, hold no
+    finding left open (review of 1.5.2). A follow-ups section does."""
+    body = (
+        "## Open questions\n\n- Should the export include archived rows?\n\n"
+        "## Follow-up to #2600\n\n- Moves the CSV writer into the toolbox.\n\n"
+        "### Follow-up on the review\n\n- Renamed the flag.\n\n"
+        "## Follow-ups\n\n- The XLSX writer still buffers the whole file.\n"
+    )
+    assert ship.unlinked_findings(body) == ["- The XLSX writer still buffers the whole file."]
+
+
 def test_a_reship_reads_the_current_intent_not_the_first_ones(repo, git, commit, monkeypatch):
     import io
 

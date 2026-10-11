@@ -4,6 +4,72 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.5.2] — 2026-10-11
+
+### Fixed
+- **A known failure renamed in its own file no longer blames the rename** (morphyxAI/jarvis#2660).
+  A test red at the last verdict from an outside cause, renamed in place by a merge, failed
+  at the tip under a new id that had no twin in another file and no known name, so it was
+  bisected and the rename's PR reverted. A known failure in the new id's own file that the
+  tip no longer defines is now asked at the last verdict as a twin is; failing there, the id
+  is reported, not attributed.
+- **A regression that fails only inside the full run turns the tip red on its second pass**
+  (morphyxAI/jarvis#2661). It passes alone, so each pass recorded it as a flake and
+  `rails/trunk` stayed `success`. The last verdict now records its flakes, and an id that is
+  a flake there and again at the tip is reported as failing (`N flaky twice`, the id
+  printed and kept in the verdict), never attributed. Load is read per test id, from that
+  id's own short-summary message or failure section (not source lines, not the lane's
+  command line): an id the box failed (out of connections) counts toward no streak, and
+  one that was a flake at the last verdict carries its streak to the next pass.
+- **Two cases the runner reported that it could have bisected** (morphyxAI/jarvis#2664):
+  - A known failure that a merge fixed, not moved, no longer hides a new failure with the
+    same class, name and parameters in another file. Only a known failure whose file no
+    longer defines it at the tip can be a moved test's old copy. "Defines" is the qualified
+    name, read with `ast` (a module-level `test_x` is not `TestAdmin.test_x`; nested
+    classes count), so the twin search reads it that way too; a file that does not parse
+    is read by names alone.
+  - Failed ids whose rerun command line passed Windows' 32,767 characters (about 270 at
+    jarvis's id lengths) could not start, so all but the 20 asked one at a time were
+    reported. Rerun ids are now split into parts under 24,000 characters, and the answers
+    are merged.
+- **Four inputs outside jarvis's setup** (morphyxAI/jarvis#2665):
+  - A lane that runs several pytest processes has every run's failures read. An earlier
+    summary is read when a new run (its header, or under `-q` a progress line) follows its
+    tally. A run nested in a failing test's captured output is still skipped.
+  - ANSI escapes are stripped before parsing, so `--color=yes` in a repo's addopts (which
+    outranks `PY_COLORS=0`) no longer hides the summary.
+  - A main checkout without a lanes file, or with one that does not parse (named in the
+    runner's log), takes the base from the one committed on `origin/HEAD`, `origin/main`
+    or `origin/master`, instead of exiting 2 or dying.
+  - `rails ship` names a shipping worktree's lanes file that does not parse. Without a
+    parsable one, the base branch is looked for in that same order, not `origin/main` alone.
+- **rails 1.5.1 follow-ups** (morphyxAI/jarvis#2673):
+  - **The reruns that decide a culprit stop after 60 minutes** (`ATTRIBUTION_SECS`). They
+    hold the trunk lanes' locks, and every pre-merge suite on them waited out up to
+    probes × 21 reruns × `timeout_min`. No rerun starts past the budget and a running one is
+    stopped at it. What the budget did not reach is reported (`rerun budget spent`).
+  - **Two trunk lanes on different locks** take them together or not at all. The runner
+    waits for a busy lock holding none of the others, so a lock is not held idle.
+  - **A probe that fails only on a connection the box could not make is no answer.** This
+    covers Windows out of local ports (`Address already in use`, 10048), Postgres out of
+    slots (53300) and Postgres starting up or shutting down. Such a probe locates nothing.
+  - **The `postgres` prerequisite treats SQLSTATE 53300 (too many clients) as not up.**
+    pg_isready calls it up, but every session the lane opens then fails from load.
+  - **The startup probe reads the whole authentication request before it closes.** A
+    socket closed on unread data resets the connection, and Postgres logged a reset for
+    every probe. A server that let the probe in (trust) is sent Terminate.
+
+### Added
+- **`rails ship` refuses a deferred finding with no issue** (`ship_findings`,
+  morphyxAI/jarvis#2663). The operator ruled on 2026-09-11 that a finding a PR leaves open is a
+  separate issue. A body section titled like "Findings left for later", "Accepted", "Latent",
+  "Follow-ups", "Deferred" or "Open items" (a heading, or a label line such as
+  `**Accepted at ship:**`) must give each bullet a `#N` link, or `no-issue: <reason>` for
+  an answer that is not a finding. "Open questions" and "Follow-up to/on/of ..." (what this
+  PR follows up) are not such sections. The refusal names each bullet and comes before any
+  push. Measured on #2658's body: 13 bullets (twelve left on purpose, one accepted at ship).
+  It runs in shadow (logged, not refused) until 2026-10-18.
+
 ## [1.5.1] — 2026-10-10
 
 ### Fixed
