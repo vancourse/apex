@@ -48,6 +48,19 @@ if flag.exists():
     fails.append("tests/test_x.py::test_flaky - flaky")
 if count.with_name("load.txt").exists():  # load from a concurrent suite breaks test_c
     fails.append(c_file + "::test_c - load")
+if count.with_name("order.on").exists():  # fails in every full run and passes alone (test order)
+    fails.append("tests/test_x.py::test_flaky - order")
+if count.with_name("mixed.on").exists():  # one test's own failure is load, another's is not
+    fails.append("tests/test_x.py::test_flaky - AssertionError: expected 3, got 4")
+    fails.append("tests/test_x.py::test_b - psycopg.OperationalError: sorry, too many clients already")
+if count.with_name("ports.on").exists():  # the box ran out of local ports mid-run
+    fails.append("tests/test_x.py::test_flaky - psycopg.OperationalError: connection failed: "
+                 "Address already in use (0x00002740/10048)")
+if count.with_name("old.broken").exists():  # an outside cause breaks test_old, by whatever name its file gives it
+    renamed = "def test_new" in (root / "tests" / "test_x.py").read_text()
+    fails.append("tests/test_x.py::" + ("test_new" if renamed else "test_old") + " - outside")
+if boom("many"):  # one merge breaks 300 cases, more ids than one command line holds
+    fails.extend(f"tests/test_x.py::test_many[{n:03d}-{'x' * 100}] - boom" for n in range(300))
 probe = count.with_name("lockprobe.txt")
 if probe.exists():
     name, home = probe.read_text().split("|")
@@ -81,6 +94,8 @@ n = (int(count.read_text()) if count.exists() else 0) + 1
 count.write_text(str(n))
 root = pathlib.Path.cwd()
 ids = sys.argv[4:]
+with open(count.with_name("argv.txt"), "a") as fh:  # each rerun's command-line length
+    fh.write(str(len(" ".join(sys.argv))) + "\\n")
 # load.txt: the rerun numbers (this counter's values) during which load still breaks test_c.
 load = count.with_name("load.txt")
 loaded = load.exists() and str(n) in load.read_text().split(",")
@@ -111,6 +126,10 @@ for test_id in ids:
     if test_id.endswith("::test_p[a]") and pathlib.Path(sys.argv[3]).exists():
         bad.append(test_id)
     if test_id.endswith("::test_p[b]") and boom("p"):
+        bad.append(test_id)
+    if test_id.endswith(("::test_old", "::test_new")) and count.with_name("old.broken").exists():
+        bad.append(test_id)
+    if "::test_many[" in test_id and boom("many"):
         bad.append(test_id)
 for test_id in bad:
     print("FAILED " + test_id + " - boom")
@@ -1181,3 +1200,422 @@ def test_github_revert_sends_the_mutation_and_reads_the_new_pr(monkeypatch, tmp_
     assert "revertPullRequest(input:" in payload["query"]
     monkeypatch.setattr(trunk, "gh_api", lambda *a, **k: {"errors": [{"message": "conflict"}]})
     assert trunk.GitHub(tmp_path, "o/r").revert({"node_id": "PR_x"}, "t", "b") is None
+
+
+# --- rails 1.5.2 (morphyxAI/jarvis#2660, #2661, #2664, #2665, #2673) --------------------
+
+
+def _last_pass(site) -> dict:
+    return store.read_jsonl(trunk.trunk_dir(site.repo) / "passes.jsonl")[-1]
+
+
+def test_a_known_failure_renamed_in_its_own_file_is_not_blamed_on_the_rename(site):
+    """#2660: test_old is red at the last verdict (an outside cause), and a merge renames it
+    test_new in the same file. test_new fails at the tip and is absent at the last verdict,
+    with no twin in another file and no known name. The known failure its file no longer
+    defines is asked there in its place, fails, and the rename is not blamed."""
+    site.merge("tests/test_x.py", TESTS + "def test_old(): pass\n")
+    _pass(site)
+    (site.tmp / "old.broken").write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_old"]}
+    site.merge("tests/test_x.py", TESTS + "def test_new(): pass\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == [] and site.forge.comments == []
+    assert _last_pass(site)["unattributed"] == ["tests/test_x.py::test_new"]
+    assert "unattributed" in site.forge.last()["description"]
+
+
+def test_a_test_whose_class_was_renamed_is_gone_at_the_tip(site):
+    """#2660: a rename in place can be of the class (`TestA::test_b` to `TestB::test_b`).
+    The file still defines `test_b` but not the id the verdict knew, so that id may be the
+    new one's old copy. One the tip still defines, class and all, was fixed (#2664)."""
+    before = site.merge("tests/test_k.py", "class TestA:\n    def test_b(self): pass\n")
+    tip = site.merge("tests/test_k.py", "class TestB:\n    def test_b(self): pass\n")
+    assert trunk._gone_at_tip(site.app, tip, "tests/test_k.py::TestA::test_b") is True
+    assert trunk._gone_at_tip(site.app, before, "tests/test_k.py::TestA::test_b") is False
+    assert trunk._gone_at_tip(site.app, tip, "tests/test_k.py::TestB::test_b[64:ff9b::a9fe]") is False
+    assert trunk._gone_at_tip(site.app, tip, "tests/gone.py::test_b") is True
+
+
+def test_a_failure_only_the_full_run_shows_turns_the_tip_red_on_its_second_pass(site):
+    """#2661: a regression that shows only when the whole suite runs (test order, shared
+    state, a shared worker) passes alone, so each pass finds it a flake. The second pass
+    running that finds the same id one posts failure and names it; nothing is reverted."""
+    _pass(site)
+    (site.tmp / "order.on").write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    code, text = _pass(site)
+    assert code == 0 and site.forge.last()["state"] == "success", text
+    tip = site.merge("src/d.py", "d = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    status = site.forge.last()
+    assert status["sha"] == tip and status["state"] == "failure", status
+    assert "tests/test_x.py::test_flaky" in text
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_flaky"]}
+    assert site.forge.reverts == []
+
+
+def test_a_flake_from_a_connection_the_box_could_not_make_is_not_counted_twice(site):
+    """#2673 (3): a full run under load fails a test with `Address already in use`
+    (Windows out of local ports), on two passes running; alone it passes. That is the box,
+    not a regression the full run shows: the tip stays green."""
+    _pass(site)
+    (site.tmp / "ports.on").write_text("on", encoding="utf-8")
+    for name in ("a", "d"):
+        site.merge(f"src/{name}.py", f"{name} = 1\n")
+        code, text = _pass(site)
+        assert code == 0 and site.forge.last()["state"] == "success", text
+
+
+def test_a_rerun_that_fails_only_for_a_connection_is_no_answer(tmp_path):
+    """#2673 (3): a probe whose tests fail because the client could not connect (Windows
+    out of local ports, Postgres out of slots) says nothing about the commit it ran on."""
+    script = tmp_path / "ports.py"
+    script.write_text(
+        "import sys\n"
+        "print('FAILED t.py::a - psycopg.OperationalError: connection failed: connection to server "
+        "at \"127.0.0.1\", port 5432 failed: Address already in use (0x00002740/10048)')\n"
+        "print('=== 1 failed in 0.1s ===')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    lane = lanes_mod.Lane(name="s", command=["x"], trunk_command=["x"], trunk_rerun=[PY, str(script)])
+    answer, _ = trunk._run_ids(lane, tmp_path, ["t.py::a"], tmp_path / "r.log")
+    assert answer.unknown(["t.py::a"]) == {"t.py::a"}
+
+
+def test_a_fixed_known_failure_does_not_hide_a_new_failure_with_its_name(site):
+    """#2664 (1): tests/test_x.py::test_c is red at the last verdict (a baseline). In one
+    range a merge fixes it, a merge adds tests/test_y.py with a test_c of its own, and a
+    merge breaks that one. The known test_c was fixed, not moved (its file still defines it
+    at the tip), so the new one is bisected and its culprit reverted."""
+    site.merge("src/c.py", "boom = 1\n")
+    _pass(site)  # the first pass, red: a baseline that knows tests/test_x.py::test_c
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_c"]}
+    site.merge("src/c.py", "c = 1\n")
+    site.merge("tests/test_y.py", "def test_c(): pass\n")
+    bad = site.merge("src/c.py", "boom = 2\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+def test_three_hundred_failing_ids_are_rerun_in_parts_and_their_culprit_reverted(site):
+    """#2664 (2): one merge breaks 300 cases whose ids together pass Windows' 32,767
+    character command line. Each rerun's ids are split under a budget and the answers
+    merged, so every id is bisected to the culprit, which is reverted."""
+    site.merge("tests/test_x.py", TESTS + "def test_many(): pass\n")
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    bad = site.merge("src/many.py", "boom = 1\n")
+    site.merge("src/d.py", "d = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+    last = _last_pass(site)
+    assert last["unattributed"] == [] and [len(c["ids"]) for c in last["culprits"]] == [300]
+    lengths = [int(n) for n in (site.tmp / "argv.txt").read_text(encoding="utf-8").split()]
+    assert max(lengths) < 32_000, max(lengths)
+
+
+def test_each_pytest_run_in_a_lane_has_its_failures_read():
+    """#2665 (1): a lane that runs pytest twice prints two summaries, and the first run's
+    failure is read, not only the last banner's. A run nested in a failing test's captured
+    output is still not read: what follows its tally is the outer run, not a new one."""
+    two_runs = "\n".join(
+        [
+            "============================= test session starts ==============================",
+            "tests/a/test_one.py .F                                                   [100%]",
+            "=========================== short test summary info ============================",
+            "FAILED tests/a/test_one.py::test_x - assert 0",
+            "========================= 1 failed, 1 passed in 0.10s ==========================",
+            "tests/b/test_two.py F                                                    [100%]",  # -q: no header
+            "=========================== short test summary info ============================",
+            "FAILED tests/b/test_two.py::test_y - assert 0",
+            "============================== 1 failed in 0.05s ===============================",
+        ]
+    )
+    assert trunk.failed_ids(two_runs) == ["tests/a/test_one.py::test_x", "tests/b/test_two.py::test_y"]
+    nested = "\n".join(
+        [
+            "tests/t.py F                                                             [100%]",
+            "------ Captured stdout call ------",
+            "inner/test_fake.py F                                                     [100%]",
+            "=========== short test summary info ============",
+            "FAILED inner/test_fake.py::test_inner - planted",
+            "1 failed in 0.01s",
+            "=========== short test summary info ============",
+            "FAILED tests/t.py::test_outer - x",
+            "1 failed in 0.05s",
+        ]
+    )
+    assert trunk.failed_ids(nested) == ["tests/t.py::test_outer"]
+    # Two failing tests that each ran pytest: a progress line follows the first nested
+    # tally, but only after the next test's header, so the report goes on.
+    twice = "\n".join(
+        [
+            "tests/t.py FF                                                            [100%]",
+            "=================================== FAILURES ===================================",
+            "__________________________________ test_one ___________________________________",
+            "------ Captured stdout call ------",
+            "=========== short test summary info ============",
+            "FAILED inner/test_a.py::test_inner_a - planted",
+            "1 failed in 0.01s",
+            "__________________________________ test_two ___________________________________",
+            "------ Captured stdout call ------",
+            "inner/test_b.py F                                                        [100%]",
+            "=========== short test summary info ============",
+            "FAILED inner/test_b.py::test_inner_b - planted",
+            "1 failed in 0.01s",
+            "=========== short test summary info ============",
+            "FAILED tests/t.py::test_one - x",
+            "FAILED tests/t.py::test_two - x",
+            "2 failed in 0.05s",
+        ]
+    )
+    assert trunk.failed_ids(twice) == ["tests/t.py::test_one", "tests/t.py::test_two"]
+
+
+def test_a_coloured_summary_is_parsed():
+    """#2665 (2): `--color=yes` in a repo's addopts outranks the PY_COLORS=0 trunk runs set,
+    so the summary carries ANSI escapes (pytest's own markup, below); they are stripped."""
+    red, green, cyan, bold, reset = "\x1b[31m", "\x1b[32m", "\x1b[36m", "\x1b[1m", "\x1b[0m"
+    log = "\n".join(
+        [
+            f"{cyan}{bold}=========================== short test summary info ============================{reset}",
+            f"{red}FAILED{reset} tests/a.py::{bold}test_one{reset} - AssertionError: x",
+            f"{red}ERROR{reset} tests/b.py::{bold}test_two{reset} - psycopg.OperationalError",
+            f"{red}===== {red}{bold}1 failed{reset}, {green}3 passed{reset}, {red}{bold}1 error{reset}{red} in 0.05s{reset}{red} ====={reset}",
+        ]
+    )
+    assert trunk.failed_ids(log) == ["tests/a.py::test_one", "tests/b.py::test_two"]
+    assert trunk.failure_tally(log) == 2
+
+
+def test_a_main_checkout_without_a_lanes_file_still_runs_a_pass(site):
+    """#2665 (3): the main checkout sits on a branch with no lanes file. The runner takes
+    the base from the lanes file committed on the remote's default branch and tests the tip."""
+    _git(site.app, "checkout", "-q", "-b", "elsewhere")
+    _git(site.app, "rm", "-q", "lanes.toml")
+    _git(site.app, "commit", "-q", "-m", "a branch without the lanes file")
+    code, text = _pass(site)
+    assert code == 0, text
+    assert site.runs() == 1 and site.forge.last()["state"] == "success"
+
+
+def test_an_unparsable_lanes_file_is_named_when_ship_starts_the_runner(site, monkeypatch):
+    """#2665 (4): the shipping worktree's lanes file does not parse. The base's committed
+    one still decides, and a line names the file that did not (before, nothing did). The
+    watcher it starts (here the main checkout holds that file) names it too and runs on the
+    committed one: it tests the tip instead of dying (review of 1.5.2)."""
+    started: list[list[str]] = []
+    monkeypatch.setattr(trunk, "_spawn", lambda argv, **_kwargs: started.append(argv))
+    (site.app / "lanes.toml").write_text("[[lane]\nname = \n", encoding="utf-8")
+    out = io.StringIO()
+    assert trunk.start_background(site.app, out=out) is True and len(started) == 1
+    assert "lanes.toml" in out.getvalue() and "does not parse" in out.getvalue(), out.getvalue()
+    code, text = _watch(site)
+    assert code == 0 and "does not parse" in text and "stopping" in text, text
+    assert site.runs() == 1 and site.forge.last()["state"] == "success"
+
+
+def test_the_reruns_that_hold_the_lock_stop_at_their_budget(site, monkeypatch):
+    """#2673 (1): the reruns that decide a culprit hold the lane's lock, so every pre-merge
+    suite on it waits for them. Their time is capped (here at nothing): no rerun starts past
+    it, and what it did not reach is reported, never reverted."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    monkeypatch.setattr(trunk, "ATTRIBUTION_SECS", 0.0, raising=False)
+    site.merge("src/b.py", "boom = 1\n")
+    before = site.reruns()
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.reruns() == before, "a rerun started past the budget"
+    assert site.forge.reverts == [] and "unattributed" in site.forge.last()["description"]
+
+
+def test_two_trunk_locks_are_not_held_while_waiting_for_either():
+    """#2673 (2): two trunk lanes on two locks, the second held by a session's suite. The
+    runner holds neither while it waits, so the first lane's suites are not blocked for
+    the wait, and it takes both once the second is free."""
+    import threading
+
+    repo = type("Repo", (), {"main": Path("."), "leaf": "t"})()
+    lanes = [
+        lanes_mod.Lane(name="a", command=["x"], lock="lock-a"),
+        lanes_mod.Lane(name="b", command=["x"], lock="lock-b"),
+    ]
+    out = io.StringIO()
+    held = threading.Event()
+
+    def take() -> bool:
+        with trunk._attribution_locks(repo, lanes, "f" * 40, out):
+            held.set()
+        return True
+
+    with store.machine_lock("lock-b", {"leaf": "a session"}, wait=False):
+        worker = threading.Thread(target=take, daemon=True)
+        worker.start()
+        for _ in range(100):
+            if "wait" in out.getvalue():
+                break
+            threading.Event().wait(0.1)
+        assert "wait" in out.getvalue(), "the runner never waited for lock-b"
+        with store.machine_lock("lock-a", {"leaf": "another session"}, wait=False):
+            pass  # free while the runner waits: LockBusy here is the defect
+        assert not held.is_set()
+    worker.join(30)
+    assert held.is_set() and not worker.is_alive()
+
+
+# --- review of 1.5.2 ------------------------------------------------------------------
+
+
+def test_a_moved_test_whose_name_a_method_keeps_is_not_blamed_on_the_move(site):
+    """Reproducer A: the known failure tests/test_x.py::test_c is a module-level function,
+    and the same file has `TestAdmin.test_c`. A merge moves the function to tests/test_y.py,
+    where it fails. The file still says `def test_c` (the method) but no longer defines the
+    id the verdict knew, so the move is reported, not blamed (as 1.5.1 had it)."""
+    admin = "class TestAdmin:\n    def test_c(self): pass\n"
+    site.merge("tests/test_x.py", TESTS + admin)
+    _pass(site)
+    site.env_broken.write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    _pass(site)
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_c"]}
+    (site.app / "tests" / "test_x.py").write_text(TESTS.replace("def test_c(): pass\n", "") + admin, encoding="utf-8")
+    site.merge("tests/test_y.py", "def test_c(): pass\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert site.forge.reverts == [] and site.forge.comments == []
+    assert _last_pass(site)["unattributed"] == ["tests/test_y.py::test_c"]
+
+
+def test_gone_at_tip_reads_the_qualified_name_not_any_def(site):
+    """Reproducer B: `TestA::test_save` renamed `test_store`, in a file whose `TestB` keeps a
+    `test_save`, is gone; so is a module-level function that only a method's name is left of.
+    Nested classes are qualified. A file that does not parse is read by names alone."""
+    base = site.merge(
+        "tests/test_k.py",
+        "def test_top(): pass\nclass TestA:\n    def test_save(self): pass\n"
+        "class TestB:\n    def test_save(self): pass\n    class TestInner:\n        async def test_deep(self): pass\n",
+    )
+    tip = site.merge(
+        "tests/test_k.py",
+        "class TestA:\n    def test_store(self): pass\nclass TestB:\n    def test_save(self): pass\n"
+        "    class TestInner:\n        async def test_deep(self): pass\nclass TestC:\n    def test_top(self): pass\n",
+    )
+
+    def gone(test_id: str, sha: str = tip) -> bool:
+        return trunk._gone_at_tip(site.app, sha, test_id)
+
+    assert gone("tests/test_k.py::TestA::test_save") is True
+    assert gone("tests/test_k.py::test_top") is True
+    assert gone("tests/test_k.py::test_top", base) is False
+    assert gone("tests/test_k.py::TestB::test_save") is False
+    assert gone("tests/test_k.py::TestB::TestInner::test_deep[1-2]") is False
+    assert gone("tests/test_k.py::TestInner::test_deep") is True
+    broken = site.merge("tests/test_k.py", "class TestA:\n    def test_save(self): pass\n    def broken(:\n")
+    assert gone("tests/test_k.py::TestA::test_save", broken) is False
+    assert gone("tests/test_k.py::TestZ::test_save", broken) is True
+
+
+def test_a_twin_is_found_where_a_method_of_its_name_stays(site):
+    """The module-level test_c moved out of tests/test_x.py, which keeps `TestAdmin.test_c`:
+    tests/test_x.py::test_c is still the moved test's old copy."""
+    admin = "class TestAdmin:\n    def test_c(self): pass\n"
+    base = site.merge("tests/test_x.py", TESTS + admin)
+    (site.app / "tests" / "test_x.py").write_text(TESTS.replace("def test_c(): pass\n", "") + admin, encoding="utf-8")
+    tip = site.merge("tests/test_y.py", "def test_c(): pass\n")
+    assert trunk._twins(site.app, base, tip, "tests/test_y.py::test_c") == ["tests/test_x.py::test_c"]
+
+
+def test_one_loaded_failure_does_not_excuse_another_ids_repeat(site):
+    """Load is read per test id, from its own report: test_b failing on "too many clients"
+    does not make test_flaky's plain assertion load. test_flaky, a flake on two passes
+    running, turns the tip red; test_b does not count."""
+    _pass(site)
+    (site.tmp / "mixed.on").write_text("on", encoding="utf-8")
+    site.merge("src/a.py", "a = 1\n")
+    code, text = _pass(site)
+    assert code == 0, text
+    site.merge("src/d.py", "d = 1\n")
+    code, text = _pass(site)
+    assert code == 1 and site.forge.last()["state"] == "failure", text
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_flaky"]}
+
+
+def test_a_pass_that_loads_a_flake_keeps_its_streak(site):
+    """test_flaky fails one full run on an assertion, the next on a connection the box could
+    not make, the third on the assertion again; it passes alone each time. The loaded pass
+    cannot judge it, so it carries the streak, and the third pass turns the tip red."""
+    _pass(site)
+    order, ports = site.tmp / "order.on", site.tmp / "ports.on"
+    for name, switch in (("a", order), ("d", ports), ("e", order)):
+        for path in (order, ports):
+            path.unlink(missing_ok=True)
+        switch.write_text("on", encoding="utf-8")
+        site.merge(f"src/{name}.py", f"{name} = 1\n")
+        code, text = _pass(site)
+    assert code == 1 and site.forge.last()["state"] == "failure", text
+    assert trunk.read_state(site.repo)["verdict"]["failed"] == {"suite": ["tests/test_x.py::test_flaky"]}
+
+
+def test_load_is_read_from_each_ids_own_report():
+    """A failure is load only by its own short-summary message or a line of its own section
+    that is not source: pytest indents source and marks the failing line with `>`. Sections
+    go to summary entries of their name in order, so two files' test_healthz are two ids."""
+    log = "\n".join(
+        [
+            "$ pytest -q -k 'too many clients'",
+            "=================================== FAILURES ===================================",
+            "__________________________________ test_order __________________________________",
+            "    def test_order():",
+            '        with pytest.raises(OperationalError, match="too many clients"):',
+            ">           assert total() == 3",
+            "E           AssertionError: expected 3, got 4",
+            "tests/test_a.py:9: AssertionError",
+            "___________________________________ test_db ____________________________________",
+            ">       conn.execute('select 1')",
+            "E       psycopg.OperationalError: connection failed: sorry, too many clients already",
+            "_________________________________ test_healthz _________________________________",
+            "E       AssertionError: 503",
+            "_________________________________ test_healthz _________________________________",
+            "E       psycopg.OperationalError: connection failed: Address already in use (0x00002740/10048)",
+            "_______________________________ TestApi.test_get ________________________________",
+            "------------------------------ Captured log call -------------------------------",
+            "WARNING  pool:pool.py:80 the database system is shutting down",
+            "=========================== short test summary info ============================",
+            "FAILED tests/test_a.py::test_order - AssertionError: expected 3, got 4",
+            "FAILED tests/test_b.py::test_db - psycopg.Operati...",
+            "FAILED apps/a/tests/test_h.py::test_healthz - AssertionError: 503",
+            "FAILED apps/b/tests/test_h.py::test_healthz - psycopg.OperationalError: con...",
+            "FAILED tests/test_c.py::TestApi::test_get",
+            "ERROR tests/test_d.py::test_up - psycopg.OperationalError: sorry, too many clients already",
+            "==================== 5 failed, 1 error in 0.20s =====================",
+        ]
+    )
+    assert trunk._loaded_ids(log) == {
+        "tests/test_b.py::test_db",
+        "apps/b/tests/test_h.py::test_healthz",
+        "tests/test_c.py::TestApi::test_get",
+        "tests/test_d.py::test_up",
+    }
+
+
+def test_a_load_phrase_in_an_id_or_the_command_is_not_load(tmp_path):
+    """The rerun's log starts with its command (`$ ...`), ids included: an id whose
+    parameters read "too many clients" fails like any other."""
+    script = tmp_path / "plain.py"
+    script.write_text(
+        "import sys\nprint('FAILED t.py::test_a[too many clients] - assert 0')\n"
+        "print('=== 1 failed in 0.1s ===')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    lane = lanes_mod.Lane(name="s", command=["x"], trunk_command=["x"], trunk_rerun=[PY, str(script)])
+    answer, _ = trunk._run_ids(lane, tmp_path, ["t.py::test_a[too many clients]"], tmp_path / "r.log")
+    assert answer.failed == {"t.py::test_a[too many clients]"}

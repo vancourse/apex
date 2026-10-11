@@ -12,20 +12,28 @@ passes. Green: ``rails/trunk`` = success on the tip.
 Red is attributed only on definite answers. Each failed test id the last verdict did
 not already have is rerun alone at the tip (``trunk_rerun``):
 
-* it passes: a flake (it fails in the full run and passes alone), recorded, never reverted;
+* it passes: a flake (it fails in the full run and passes alone), recorded, never reverted.
+  A flake at the last verdict too is a regression only the whole suite shows: it is
+  reported as failing, never attributed (an id whose own report shows the box ran out of
+  connections counts toward no streak, and carries one it had);
 * it fails again: it is rerun at the last verdict's commit. Failing there too, it was
   already broken (an environment change, a renamed lane): reported, not attributed.
   Passing there, it is bisected over the first-parent commits between, rerunning only
   those ids, and the first commit where it fails is its culprit, once a second probe of
   the commit before it passes and a second probe of the culprit fails (one false failure
   from load cannot move the blame). One that passes when the tip is probed again is a
-  flake. Not there at all, it is
-  a new test or one a merge moved: a known failure with the same id after its file, gone
-  from the tip, or the same test failing at the last verdict in a file gone from the
-  tip, makes it the old one (reported); otherwise it is bisected;
+  flake. Not there at all, it is a new test or one a merge moved: a known failure with the
+  same id after its file, whose file no longer defines it at the tip (by qualified name),
+  or the same test failing at the last verdict in a file gone from the tip, or a known
+  failure its own file no longer defines (a rename in place) failing there, makes it the
+  old one (reported); otherwise it is bisected;
 * the rerun could not answer (pytest ran nothing, skipped it, named other ids, crashed,
-  or the lane's prerequisite went away): the tip stays red and the id is reported, never
-  attributed.
+  failed on a connection the box could not make, or the lane's prerequisite went away):
+  the tip stays red and the id is reported, never attributed.
+
+Many ids are rerun in parts that each fit one command line. The reruns get at most
+``ATTRIBUTION_SECS`` (they hold the lanes' locks; see below); what that leaves unasked is
+reported.
 
 ``trunk_revert`` (lanes file ``[settings]``, read at the last verdict's commit so a culprit
 cannot switch off its own revert) decides what happens to a culprit's PR: ``auto`` opens
@@ -47,6 +55,7 @@ culprit do, when there is any to run, so a pre-merge suite cannot load them (#26
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import os
@@ -90,6 +99,35 @@ _TALLY_LINE = re.compile(
 _TALLY = re.compile(r"(\d+) (failed|errors?)\b")
 #: Log directories kept under the trunk dir (one per tested tip).
 _KEEP_LOG_DIRS = 20
+#: The reruns that decide a culprit hold the trunk lanes' locks, so every pre-merge suite on
+#: them waits: past this many seconds none starts and a running one is stopped (#2673).
+ATTRIBUTION_SECS = 60 * 60.0
+#: A rerun's command line stays under this many characters; more ids run in further reruns.
+#: Windows refuses one over 32,767, and 300 failed ids could not start (#2664).
+_ARGV_BUDGET = 24_000
+#: Where the base is read when the main checkout has no lanes file (#2665).
+_DEFAULT_BASES = ("origin/HEAD", "origin/main", "origin/master")
+#: `--color=yes` in a repo's addopts outranks the PY_COLORS=0 trunk runs set (#2665).
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+#: After a run's closing tally, a run's header (or, under -q, a progress line) before any
+#: report section means another pytest process follows; a section or test header first
+#: (`==== FAILURES ====`, `____ test_x ____`, `---- Captured stdout call ----`) means the
+#: tally was a nested run's, in the captured output of the run whose report goes on.
+_SESSION_START = re.compile(r"test session starts|\[\s*\d+%\]\s*$")
+_SECTION = re.compile(r"^(?:={3,}|_{3,}|-{3,}) .* (?:={3,}|_{3,}|-{3,})$")
+#: One test's section of pytest's report (`____ test_x ____`, `____ ERROR at setup of x ____`),
+#: and a report-level one (`==== FAILURES ====`) that ends it.
+_TEST_SECTION = re.compile(r"^_{3,} (.+?) _{3,}$")
+_TOP_SECTION = re.compile(r"^={3,}.*={3,}$")
+#: A failure that is the box, not the code: the client could not connect (Windows out of
+#: local ports is WSAEADDRINUSE, 10048), or Postgres refused the session (too many clients,
+#: 53300; starting up or shutting down, 57P03). A rerun that meets one is no answer (#2673).
+_INFRA = re.compile(
+    r"Address already in use|WSAEADDRINUSE|Cannot assign requested address|too many clients|"
+    r"remaining connection slots are reserved|"
+    r"the database system is (?:starting up|shutting down|in recovery|not yet accepting connections)",
+    re.IGNORECASE,
+)
 
 
 # --- the code host -------------------------------------------------------------------
@@ -224,20 +262,47 @@ def _node_id(rest: str) -> str:
     return rest if dash == -1 else rest[:dash]
 
 
+def _plain(log_text: str) -> str:
+    return _ANSI.sub("", log_text)
+
+
+def _new_run(lines: list[str]) -> bool:
+    """Whether `lines` (after a tally, up to the next banner) start another pytest run."""
+    for line in lines:
+        line = line.strip()
+        if _SESSION_START.search(line):
+            return True
+        if _SECTION.match(line):
+            return False
+    return False
+
+
 def _summary_entries(log_text: str) -> list[str]:
     """Every FAILED/ERROR node id in pytest's short summary, repeats kept: a test that
-    fails and then errors in teardown is listed twice, and the tally counts it twice.
+    fails and then errors in teardown is listed twice, and the tally counts it twice."""
+    return [node for _, node, _ in _summary(log_text)]
+
+
+def _summary(log_text: str) -> list[tuple[str, str, str]]:
+    """`_summary_entries` with each entry's word (FAILED or ERROR) and message.
     When the log has the summary banner only what follows it is read, because captured
     log records (`ERROR    app:x.py:9 msg`) start with the same word; without one, a line
     whose id would start with whitespace is such a record and is skipped."""
-    lines = log_text.splitlines()
-    # The last banner: pytest prints the real summary after all captured output, which
-    # may hold a nested run's banner.
-    for index in range(len(lines) - 1, -1, -1):
-        if _SUMMARY_BANNER in lines[index]:
-            lines = lines[index + 1 :]
-            break
-    out: list[str] = []
+    lines = _plain(log_text).splitlines()
+    banners = [index for index, line in enumerate(lines) if _SUMMARY_BANNER in line]
+    if banners:
+        # The last banner: pytest prints the real summary after all captured output, which
+        # may hold a nested run's banner. An earlier one is read too when another pytest
+        # process starts after its run's tally (a lane that runs several, #2665); after a
+        # nested run's tally comes the rest of the run that captured it.
+        blocks = []
+        for here, after in zip(banners, banners[1:]):
+            end = next((j for j in range(here + 1, after) if _TALLY_LINE.match(lines[j].strip())), None)
+            if end is not None and _new_run(lines[end + 1 : after]):
+                blocks.append(lines[here + 1 : end])
+        blocks.append(lines[banners[-1] + 1 :])
+        lines = [line for block in blocks for line in block]
+    out: list[tuple[str, str, str]] = []
     for line in lines:
         line = line.strip()
         for prefix in _PREFIXES:
@@ -246,7 +311,41 @@ def _summary_entries(log_text: str) -> list[str]:
                 if rest and not rest[0].isspace():
                     node = _node_id(rest)
                     if node:
-                        out.append(node)
+                        out.append((prefix.strip(), node, rest[len(node) :]))
+    return out
+
+
+def _loaded_ids(log_text: str) -> set[str]:
+    """The failed ids whose own report shows the box failed them, not the code (`_INFRA`):
+    the message on the id's short-summary line, or a line of its section that is not source
+    (pytest indents source and marks the failing line with `>`; `E` lines, a native
+    traceback's last line and captured output start at column 0). Each section goes to the
+    summary entry of its word and name in order, so a name two files share is two ids. The
+    command a lane log starts with (`$ ...`) is no test's report."""
+    text = _plain(log_text)
+    entries = _summary(text)
+    out = {node for _, node, message in entries if _INFRA.search(message)}
+    owners: dict[tuple[str, str], list[str]] = {}
+    for word, node, _ in entries:
+        file, _, rest = node.partition("::")
+        name, bracket, params = rest.partition("[")
+        # As pytest heads a section: `Class.test_x[a]`, or the file for a collection error.
+        owners.setdefault((word, name.replace("::", ".") + bracket + params if rest else file), []).append(node)
+    owner = None
+    for line in text.splitlines():
+        line = line.rstrip()
+        head = _TEST_SECTION.match(line)
+        if head:
+            word, title = "FAILED", head.group(1)
+            for prefix in ("ERROR at setup of ", "ERROR at teardown of ", "ERROR at call of ", "ERROR collecting "):
+                if title.startswith(prefix):
+                    word, title = "ERROR", title[len(prefix) :]
+            queue = owners.get((word, title))
+            owner = queue.pop(0) if queue else None
+        elif _TOP_SECTION.match(line):
+            owner = None
+        elif owner and line and not line[0].isspace() and not line.startswith(">") and _INFRA.search(line):
+            out.add(owner)
     return out
 
 
@@ -256,7 +355,7 @@ def failed_ids(log_text: str) -> list[str]:
 
 
 def _tally_line(log_text: str) -> str | None:
-    for line in reversed(log_text.splitlines()):
+    for line in reversed(_plain(log_text).splitlines()):
         line = line.strip()
         if _TALLY_LINE.match(line):
             return line
@@ -346,15 +445,38 @@ def _present(tree: Path, test_id: str) -> bool:
         return False
 
 
-def _moved_tails(known: dict[str, list[str]], failing: dict[str, list[str]]) -> set[str]:
+def _moved_tails(
+    known: dict[str, list[str]],
+    failing: dict[str, list[str]],
+    gone: Callable[[str], bool] = lambda test_id: True,
+) -> set[str]:
     """The ids (after their file) of known failures gone from the tip: not failing there
-    under their own id. Only such a failure can be the old copy of a test a merge moved;
-    one still failing at the tip is another test with the same name (`test_healthz` in
-    two apps) and must not hide a new failure of it."""
+    under their own id, and (`gone`) their file no longer defines their name. Only such a
+    failure can be the old copy of a test a merge moved; one still failing at the tip is
+    another test with the same name (`test_healthz` in two apps), and one the tip still
+    defines was fixed, not moved (#2664). Neither may hide a new failure of that name."""
     failing_now = {i for ids in failing.values() for i in ids}
     # A file-level id (a collection error) has an empty tail, which would match every
     # other file-level id; it can only be matched by its own file, so it is left out.
-    return {_tail(i) for ids in known.values() for i in ids if "::" in i and i not in failing_now}
+    return {
+        _tail(i) for ids in known.values() for i in ids if "::" in i and i not in failing_now and gone(i)
+    }
+
+
+def _renamed_from(
+    known: dict[str, list[str]], failing: dict[str, list[str]], test_id: str, gone: Callable[[str], bool]
+) -> list[str]:
+    """Known failures in `test_id`'s own file that are gone from the tip, as `_moved_tails`
+    reads it. One may be `test_id` under the name it had before a rename in place, which
+    leaves no twin in another file and no known tail (#2660)."""
+    file = test_id.partition("::")[0]
+    failing_now = {i for ids in failing.values() for i in ids}
+    return [
+        i
+        for ids in known.values()
+        for i in ids
+        if i.partition("::")[0] == file and "::" in i and i not in failing_now and gone(i)
+    ][:_MAX_TWINS]
 
 
 def _grep(top: Path, sha: str, pattern: str, paths: list[str]) -> list[str] | None:
@@ -372,12 +494,51 @@ def _grep(top: Path, sha: str, pattern: str, paths: list[str]) -> list[str] | No
     return [line.split(":", 1)[1] for line in done.stdout.splitlines() if ":" in line]
 
 
+def _defines(source: str, names: list[str]) -> bool | None:
+    """Whether `source` defines the test that `names` qualifies (`["test_x"]` for a
+    module-level function, `["TestA", "TestInner", "test_x"]` for a method), as pytest
+    reads a file: classes and functions in the module's or the class's own body. None when
+    the source does not parse."""
+    try:
+        body = ast.parse(source).body
+    except (SyntaxError, ValueError):
+        return None
+    *classes, name = names
+    for cls in classes:
+        found = [node for node in body if isinstance(node, ast.ClassDef) and node.name == cls]
+        if not found:
+            return False
+        body = found[-1].body  # a later definition of the name replaces an earlier one
+    return any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name for node in body)
+
+
+def _gone_at_tip(top: Path, tip: str, test_id: str) -> bool:
+    """Whether `test_id`'s file at the tip no longer defines it, by its qualified name (a
+    method of another class, or a function of the same name, is not it): the file moved, or
+    the test or its class was renamed or deleted. When git cannot answer it counts as gone,
+    so the new id it could be the old copy of is reported, never blamed."""
+    file, _, rest = test_id.split("[", 1)[0].partition("::")
+    names = rest.split("::")
+    try:
+        source = git(top, "show", f"{tip}:{file}")
+    except GitError:
+        return True
+    defined = _defines(source, names)
+    if defined is None:
+        # A file that does not parse (a syntax error merged, a newer Python's syntax) is read
+        # by its names alone, anywhere in the file: a method of another class then counts.
+        *classes, name = names
+        patterns = [rf"\bclass {re.escape(c)}\b" for c in classes] + [rf"\bdef {re.escape(name)}\b"]
+        defined = all(re.search(pattern, source) for pattern in patterns)
+    return not defined
+
+
 def _twins(top: Path, sha: str, tip: str, test_id: str) -> list[str] | None:
     """The old copy of a moved test: the same name defined at `sha` in another `.py`
     file that no longer defines it at the tip (moved with its file, or split out of a
     file that stays), with the rest of the id kept. A file that still defines it at the
-    tip holds a test of its own (`test_healthz` in two apps). None when git could not
-    answer."""
+    tip, by its qualified name (`_gone_at_tip`), holds a test of its own (`test_healthz` in
+    two apps). None when git could not answer."""
     file, _, rest = test_id.partition("::")
     if not rest:
         return []
@@ -385,13 +546,7 @@ def _twins(top: Path, sha: str, tip: str, test_id: str) -> list[str] | None:
     then = _grep(top, sha, pattern, ["*.py"])
     if then is None:
         return None
-    candidates = [p for p in then if p != file]
-    if not candidates:
-        return []
-    still = _grep(top, tip, pattern, candidates)
-    if still is None:
-        return None
-    left = [p for p in candidates if p not in still]
+    left = [p for p in then if p != file and _gone_at_tip(top, tip, f"{p}::{rest}")]
     return [f"{path}::{rest}" for path in left][:_MAX_TWINS]
 
 
@@ -408,20 +563,54 @@ class Answer:
         return set(ids) - self.failed - self.passed - self.absent
 
 
-def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tuple[Answer, bool]:
+def _parts(prefix: list[str], ids: list[str]) -> list[list[str]]:
+    """`ids` in order, in parts whose command line (`prefix` and the part) stays under
+    `_ARGV_BUDGET`; one id longer than that is a part of its own."""
+    start = len(subprocess.list2cmdline(prefix))
+    parts: list[list[str]] = [[]]
+    size = start
+    for test_id in ids:
+        cost = len(subprocess.list2cmdline([test_id])) + 1
+        if parts[-1] and size + cost > _ARGV_BUDGET:
+            parts.append([])
+            size = start
+        parts[-1].append(test_id)
+        size += cost
+    return parts
+
+
+def _run_ids(
+    lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path, deadline: float = 0.0
+) -> tuple[Answer, bool]:
     """The rerun's answer, and whether pytest said it found nothing to run (exit 4 or 5
     with "not found" / "no tests ran": the ids do not exist here). A conftest or usage
-    error also exits 4, says neither, and is no answer."""
+    error also exits 4, says neither, and is no answer. So is a run that failed on a
+    connection the box could not make, and one past `deadline` (#2673). Ids that would
+    pass `_ARGV_BUDGET` run in several reruns and their answers are merged (#2664)."""
     from rails.check import run_lane
 
+    parts = _parts(lane.trunk_rerun, ids)
+    if len(parts) > 1:
+        merged, nothing = Answer(), True
+        for index, part in enumerate(parts):
+            got, none_here = _run_ids(lane, tree, part, log.with_name(f"{log.stem}.part{index}{log.suffix}"), deadline)
+            merged.failed |= got.failed
+            merged.passed |= got.passed
+            nothing = nothing and none_here
+        return merged, nothing
+    minutes = lane.timeout_min
+    if deadline:
+        minutes = min(minutes, (deadline - time.monotonic()) / 60)
+        if minutes <= 0:
+            return Answer(), False
     rerun = lanes_mod.Lane(
         name=f"{lane.name}-rerun",
         command=[*lane.trunk_rerun, *ids],
         env={**lane.env, "PY_COLORS": "0"},  # a coloured summary line parses as nothing
-        timeout_min=lane.timeout_min,
+        timeout_min=minutes,
     )
     code, _ = run_lane(rerun, tree, log)
-    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    text = _plain(log.read_text(encoding="utf-8", errors="replace")) if log.exists() else ""
     passed = _passed_tally(text)
     if code == 0:
         if passed is not None and passed < len(ids):
@@ -429,13 +618,15 @@ def _run_ids(lane: lanes_mod.Lane, tree: Path, ids: list[str], log: Path) -> tup
         return Answer(passed=set(ids)), False
     entries = _summary_entries(text)
     named = _match(ids, entries)
+    # An id the box failed (out of connections) has no answer here; the rest still do.
+    boxed = _match(ids, sorted(_loaded_ids(text)))
     tally = failure_tally(text)
     if named and (tally is None or tally <= len(entries)):
         if passed is not None and passed + len(named) < len(ids):
-            return Answer(failed=named), False  # some asked ids did not run
-        return Answer(failed=named, passed=set(ids) - named), False
+            return Answer(failed=named - boxed), False  # some asked ids did not run
+        return Answer(failed=named - boxed, passed=set(ids) - named), False
     if named:
-        return Answer(failed=named), False  # more failed than it named: the rest are unknown
+        return Answer(failed=named - boxed), False  # more failed than it named: the rest are unknown
     # Nothing ran, a crash, or ids in a form we cannot match: no answer.
     return Answer(), code in _NOTHING_RAN and bool(_NOT_FOUND.search(text))
 
@@ -447,22 +638,27 @@ def _ask(
     group that gets no answer is asked again one id at a time (at most `_MAX_ALONE` of
     them); one id that pytest finds nothing for alone does not exist at this commit (a
     parametrize case added later) and is absent. A probe that failed while the lane's
-    prerequisite went away (Postgres stopped mid-pass) is no answer at all."""
+    prerequisite went away (Postgres stopped mid-pass) is no answer at all, and so is one
+    asked once the reruns' time is spent (`ATTRIBUTION_SECS`)."""
     from rails.check import missing_prerequisite
 
+    if result.deadline and time.monotonic() >= result.deadline:
+        return Answer()
     _checkout(top, tree, sha)
     present = [i for i in ids if _present(tree, i)]
     answer = Answer(absent=set(ids) - set(present))
     if not present:
         return answer
-    got, nothing = _run_ids(lane, tree, present, log)
+    got, nothing = _run_ids(lane, tree, present, log, result.deadline)
     result.reruns += 1
     if len(present) == 1:
         if nothing:
             answer.absent.update(present)
     elif got.unknown(present):
         for index, one in enumerate(sorted(got.unknown(present))[:_MAX_ALONE]):
-            alone, nothing = _run_ids(lane, tree, [one], log.with_name(f"{log.stem}.{index}{log.suffix}"))
+            alone, nothing = _run_ids(
+                lane, tree, [one], log.with_name(f"{log.stem}.{index}{log.suffix}"), result.deadline
+            )
             result.reruns += 1
             got.failed |= alone.failed
             got.passed |= alone.passed
@@ -499,6 +695,7 @@ class Pass:
     lane_runs: int = 0
     reruns: int = 0
     note: str = ""
+    deadline: float = 0.0  # time.monotonic() past which no rerun starts; 0: none
 
 
 def _remote_branch(base: str) -> tuple[str, str]:
@@ -555,12 +752,9 @@ def run_pass(
     out=sys.stdout,
 ) -> Pass:
     """Test the base tip once, attribute what is newly red, act, record, post."""
-    from rails.check import find_lanes_file
-
     repo = store.find_repo(top)
     assert repo is not None
-    lanes_file = find_lanes_file(top)
-    config = lanes_mod.load(lanes_file) if lanes_file else lanes_mod.LaneConfig(lanes=[])
+    config = _main_config(top, out) or lanes_mod.LaneConfig(lanes=[])
     remote, branch = _remote_branch(config.base)
     git(top, "fetch", "--quiet", remote, branch, check=False)
     tip = git(top, "rev-parse", f"{remote}/{branch}")
@@ -588,20 +782,37 @@ def _attribution_locks(
     broke the tip. A session's pre-merge suite on the same lock would load them, and a
     load failure that outlives one rerun blamed a merge (#2668). The full run does not
     take them: every session's suite would wait out the whole pass. A revert's own
-    `rails check` takes the same locks, so the caller releases them before it."""
-    with contextlib.ExitStack() as stack:
-        for name in sorted({lane.lock for lane in lanes if lane.lock}):
+    `rails check` takes the same locks, so the caller releases them before it. Several
+    are taken together or not at all: a busy one is waited for holding none of the
+    others, so no lane's suites wait on a lock held idle (#2673)."""
+    names = sorted({lane.lock for lane in lanes if lane.lock})
 
-            def note(holder: object, waited: float, name: str = name) -> None:
-                who = holder.get("leaf", "?") if isinstance(holder, dict) else "another check"
-                print(
-                    f"  wait  lock {name!r} held by {who}; waited {waited / 60:.0f} min",
-                    file=out,
-                    flush=True,
-                )
+    def take(stack: contextlib.ExitStack, name: str, wait: bool) -> None:
+        def note(holder: object, waited: float) -> None:
+            who = holder.get("leaf", "?") if isinstance(holder, dict) else "another check"
+            print(f"  wait  lock {name!r} held by {who}; waited {waited / 60:.0f} min", file=out, flush=True)
 
-            holder = {"repo": str(repo.main), "leaf": "rails trunk", "lane": name, "sha": tip}
-            stack.enter_context(store.machine_lock(name, holder, on_wait=note))
+        holder = {"repo": str(repo.main), "leaf": "rails trunk", "lane": name, "sha": tip}
+        stack.enter_context(store.machine_lock(name, holder, on_wait=note, wait=wait))
+
+    first = ""  # the lock last found busy: waited for first, then the rest are tried
+    while True:
+        stack = contextlib.ExitStack()
+        try:
+            if first:
+                take(stack, first, True)
+            for name in names:
+                if name != first:
+                    take(stack, name, False)
+        except store.LockBusy as busy:
+            stack.close()
+            first = busy.name
+            continue
+        except BaseException:
+            stack.close()
+            raise
+        break
+    with stack:
         yield
 
 
@@ -640,6 +851,7 @@ def _run(
 
     print(f"rails trunk: testing {tip[:12]} ({branch})", file=out, flush=True)
     failing: dict[str, list[str]] = {}
+    loaded: set[str] = set()  # failed ids whose own report shows the box ran out of connections
     for lane in trunk_lanes:
         why = missing_prerequisite(lane)
         if why:
@@ -666,6 +878,7 @@ def _run(
             )
             break
         failing[lane.name] = ids
+        loaded |= _loaded_ids(text)
 
     if result.state == "error":
         # No verdict: the tip is retried, and the last verdict stays the bisect base.
@@ -690,7 +903,14 @@ def _run(
 
     base_sha = str(verdict["sha"])
     known = verdict.get("failed") or {}
-    moved_tails = _moved_tails(known, failing)
+    defined: dict[str, bool] = {}
+
+    def gone(test_id: str) -> bool:
+        if test_id not in defined:
+            defined[test_id] = _gone_at_tip(top, tip, test_id)
+        return defined[test_id]
+
+    moved_tails = _moved_tails(known, failing, gone)
     by_name = {lane.name: lane for lane in trunk_lanes}
     carried: dict[str, list[str]] = {}
     new: dict[str, list[str]] = {}
@@ -707,6 +927,7 @@ def _run(
     reruns_needed = any(by_name[name].trunk_rerun for name in new)
     locks = _attribution_locks(repo, trunk_lanes, tip, out) if reruns_needed else contextlib.nullcontext()
     with locks:
+        result.deadline = time.monotonic() + ATTRIBUTION_SECS
         reproduced: dict[str, list[str]] = {}
         no_rerun: dict[str, list[str]] = {}
         for name, ids in new.items():
@@ -745,7 +966,8 @@ def _run(
                 # failure with the same class, name and parameters that is gone from the tip,
                 # or the same test in a file that no longer defines it at the tip failing (or
                 # unanswerable) at the last verdict, makes it the old one: reported, not
-                # blamed on the move.
+                # blamed on the move. So does a known failure in its own file that the tip
+                # no longer defines, failing there: the name it had before a rename (#2660).
                 if _tail(test_id) in moved_tails:
                     result.unattributed.append(test_id)
                     continue
@@ -753,6 +975,7 @@ def _run(
                 if twins is None:
                     result.unattributed.append(test_id)
                     continue
+                twins += [i for i in _renamed_from(known, failing, test_id, gone) if i not in twins]
                 if twins:
                     log = log_dir / f"{name}.twins-{index}.log"
                     seen = _ask(top, tree_path, base_sha, lane, twins, log, result)
@@ -787,6 +1010,9 @@ def _run(
             result.unattributed.extend(sorted(lost - tip_passed))
             for sha, ids_here in located:
                 found.setdefault(sha, []).extend(sorted(ids_here))
+    spent = reruns_needed and time.monotonic() >= result.deadline
+    if spent:
+        print(f"  reruns stopped at their {ATTRIBUTION_SECS / 60:.0f} min budget; the rest is reported", file=out)
 
     for sha in commits:
         if sha in found:
@@ -794,6 +1020,20 @@ def _run(
     mode = _policy(top, base_sha)
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
+
+    # A flake at the last verdict too fails every full run and passes alone: a regression
+    # only the whole suite shows (test order, shared state, a shared worker). It is reported
+    # as failing, never attributed: alone, no rerun can find its culprit (#2661). An id whose
+    # own report shows the box ran out of connections is load: it counts toward no streak,
+    # and one a flake at the last verdict carries its streak to the next pass.
+    countable = {i for ids in failing.values() for i in ids} - loaded
+    before = set(verdict.get("flaky") or [])
+    repeated = sorted(set(result.flaky) & countable & before)
+    if repeated:
+        result.flaky = [i for i in result.flaky if i not in repeated]
+        result.unattributed.extend(repeated)
+        for test_id in repeated:
+            print(f"  flaky twice  {test_id}: fails in the full run and passes alone, two passes running", file=out)
 
     confirmed = {
         name: sorted(set(ids) - set(result.flaky)) for name, ids in new.items() if set(ids) - set(result.flaky)
@@ -817,6 +1057,10 @@ def _run(
         words.append(f"{sum(len(v) for v in carried.values())} known")
     if result.flaky:
         words.append(f"{len(result.flaky)} flake(s)")
+    if repeated:
+        words.append(f"{len(repeated)} flaky twice")
+    if spent:
+        words.append("rerun budget spent")
     result.note = "; ".join(words)
     if not still_failing:
         result.state = "green"
@@ -824,7 +1068,8 @@ def _run(
     else:
         result.state = "red" if (confirmed or result.culprits) else "still-red"
         _post(forge, tip_config, tip, tree_sha, "failure", result.state, result.note)
-    _record(repo, state, result, verdict={"sha": tip, "failed": still_failing})
+    flaky = sorted(set(result.flaky) & (countable | before))  # the next pass asks whether they repeat
+    _record(repo, state, result, verdict={"sha": tip, "failed": still_failing, "flaky": flaky})
 
 
 def _bisect(
@@ -1105,19 +1350,55 @@ def _record(
 # --- the runner ----------------------------------------------------------------------
 
 
-def _context(cwd: Path, out) -> tuple[store.RepoId, Path, lanes_mod.LaneConfig] | None:
+def _committed_lanes(top: Path, ref: str) -> str | None:
+    """The text of the lanes file committed at `ref`, or None when it has none."""
+    from rails.check import LANES_FILES
+
+    for rel in LANES_FILES:
+        try:
+            return git(top, "show", f"{ref}:{rel}")
+        except GitError:
+            continue
+    return None
+
+
+def _main_config(top: Path, out=sys.stdout) -> lanes_mod.LaneConfig | None:
+    """The lanes config a runner takes its base from: the main checkout's lanes file, else
+    the one committed on the remote's default branch. A main checkout may have none (it
+    sits on another branch); the tip's own file decides the lanes (#2665). One that does not
+    parse is named and passed over, as `_declares_trunk` does, so the runner `rails ship`
+    started does not die on it. None when no file parses."""
     from rails.check import find_lanes_file
 
+    found = find_lanes_file(top)
+    if found is not None:
+        try:
+            return lanes_mod.load(found)
+        except (OSError, ValueError) as exc:
+            print(f"rails trunk: {found} does not parse ({exc}); origin's default branch decides", file=out)
+    for ref in _DEFAULT_BASES:
+        text = _committed_lanes(top, ref)
+        if text is None:
+            continue
+        try:
+            return lanes_mod.loads(text)
+        except ValueError as exc:
+            print(f"rails trunk: the lanes file on {ref} does not parse ({exc})", file=out)
+            return None
+    return None
+
+
+def _context(cwd: Path, out) -> tuple[store.RepoId, Path, lanes_mod.LaneConfig] | None:
     repo = store.find_repo(cwd)
     if repo is None:
         print("rails trunk: not inside a git checkout", file=out)
         return None
     top = repo.main
-    lanes_file = find_lanes_file(top)
-    if lanes_file is None:
-        print("rails trunk: no lanes file", file=out)
+    config = _main_config(top, out)
+    if config is None:
+        print("rails trunk: no lanes file that parses in the main checkout or on origin's default branch", file=out)
         return None
-    return repo, top, lanes_mod.load(lanes_file)
+    return repo, top, config
 
 
 def _default_forge(top: Path, out) -> Forge | None:
@@ -1285,24 +1566,24 @@ def _spawn(argv: list[str], **kwargs: Any) -> None:
     subprocess.Popen(argv, **kwargs)
 
 
-def _declares_trunk(top: Path) -> bool:
+def _declares_trunk(top: Path, out=sys.stdout) -> bool:
     """Whether this worktree's lanes file, or the base branch's committed one, declares a
     trunk lane. Never the main checkout's working tree: it may be any number of merges
-    behind the base (review of the jarvis half, 4f47b9216)."""
-    from rails.check import LANES_FILES, find_lanes_file
+    behind the base (review of the jarvis half, 4f47b9216). Without a worktree file that
+    parses, the base is the remote's default branch; one that does not parse is named,
+    since the runner it decides then rests on that default (#2665)."""
+    from rails.check import find_lanes_file
 
     configs: list[lanes_mod.LaneConfig] = []
     found = find_lanes_file(top)
     if found is not None:
         try:
             configs.append(lanes_mod.load(found))
-        except (OSError, ValueError):
-            pass
-    base = configs[0].base if configs else lanes_mod.LaneConfig(lanes=[]).base
-    for rel in LANES_FILES:
-        try:
-            text = git(top, "show", f"{base}:{rel}")
-        except GitError:
+        except (OSError, ValueError) as exc:
+            print(f"  trunk: {found} does not parse ({exc}); the base branch's lanes file decides", file=out)
+    for base in [configs[0].base] if configs else _DEFAULT_BASES:
+        text = _committed_lanes(top, base)
+        if text is None:
             continue
         try:
             configs.append(lanes_mod.loads(text))
@@ -1318,7 +1599,7 @@ def start_background(top: Path, out=sys.stdout) -> bool:
     repo = store.find_repo(top)
     if repo is None:
         return False
-    if not _declares_trunk(top):
+    if not _declares_trunk(top, out):
         return False
     _kick(repo)
     if runner_live(repo):

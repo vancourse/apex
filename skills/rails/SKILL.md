@@ -32,7 +32,9 @@ One line of work = one claim, one worktree, one branch, one PR, many commits.
    is recorded with `--accept "<why>"`; `rails ship` puts the reason in the PR body.
 8. **`rails ship --closes <n>`** opens one Ready PR from the intent (and imports #n's Done-when lines), arms auto-squash, and posts the
    `rails/<lane>` statuses CI verifies. Then bind the monitor and run `rails work monitor-bound`.
-   After a later push: `rails check --post`.
+   After a later push: `rails check --post`. A finding the PR leaves open is its own issue: each bullet
+   under a section like "Findings left for later" carries `#N`, or `no-issue: <reason>` for an answer
+   that is not a finding, or ship refuses (`ship_findings`).
 9. **Walk** the named target: `rails walk`. An item closes only when its `step:` id passes:
    `rails work done <id>`.
 10. **Stop** only with the work done or a recorded reason:
