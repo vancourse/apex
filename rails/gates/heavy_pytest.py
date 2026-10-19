@@ -65,7 +65,7 @@ from typing import Callable
 
 from rails.gates.destructive import command_name, command_words, pipeline_stages
 from rails.hookio import Deny, Event
-from rails.shell import scrubbed_segments, spans, words
+from rails.shell import scrub, scrubbed_segments, spans, words
 
 NAME = "heavy_pytest"
 
@@ -154,10 +154,14 @@ _LEADING_ASSIGNMENTS = re.compile(r"""^\s*(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\
 #: the scrubbed statement; and the .NET call, whose quoted name scrubbing would hide.
 _FORGE_PS_ENV = re.compile(r"\$env:RAILS_LOCKS_HELD\s*=(?!=)", re.IGNORECASE)
 _FORGE_PS_ITEM = re.compile(r"(?:Set|New)-Item\s+(?:-Path\s+)?Env:\\?RAILS_LOCKS_HELD\b", re.IGNORECASE)
-_FORGE_CALL = re.compile(
-    r"SetEnvironmentVariable\s*\(\s*['\"]RAILS_LOCKS_HELD['\"]\s*,\s*(?!\$null\b|''|\"\")",
-    re.IGNORECASE,
+#: The .NET call: found on the scrubbed text (code, not a quoted mention); its quoted name
+#: and value are read from the original at that offset.
+_FORGE_CALL = re.compile(r"SetEnvironmentVariable\s*\(", re.IGNORECASE)
+_FORGE_CALL_ARGS = re.compile(
+    r"""\s*['"]RAILS_LOCKS_HELD['"]\s*,(?!\s*(?:\$null\b|''|""|\)))""", re.IGNORECASE
 )
+#: `cd` to the repo's top, the worktree idiom.
+_TOPLEVEL = re.compile(r"""\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)|`\s*git\s+rev-parse\s+--show-toplevel\s*`""")
 
 
 # --- where the shell is, and what a path means there -------------------------------------
@@ -629,6 +633,14 @@ def suite_lock_declared(where: Path) -> bool:
 # --- the verdict -----------------------------------------------------------------------
 
 
+def _toplevel(base: Path) -> Path:
+    """What `git rev-parse --show-toplevel` prints from ``base``: its worktree's top."""
+    from rails import store
+
+    repo = store.find_repo(base)
+    return repo.top if repo is not None else base
+
+
 def _cd_target(tokens: list[str]) -> str | None:
     """Where `cd` / `pushd` / `Set-Location` goes: its first word that is no option and no
     redirection (`pushd apps > /dev/null`)."""
@@ -666,7 +678,7 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
         # one that ends a word).
         stages = [[t for t in stage if t.strip()] for stage in pipeline_stages(words(segment, shell))]
         stages = [stage for stage in stages if stage]
-        opened, closed = _subshell_edges(stages, len(subshells))
+        opened, closed = _subshell_edges(segment, shell, stages, len(subshells))
         subshells.extend([base] * opened)
         for stage in stages:
             local: str | None = None
@@ -705,7 +717,10 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
                 if target:
                     if name in ("pushd", "push-location"):
                         pushed.append(base)
-                    base = resolve(base, target, variables)
+                    if _TOPLEVEL.search(segment):  # `cd "$(git rev-parse --show-toplevel)"`
+                        base = _toplevel(base)
+                    else:
+                        base = resolve(base, target, variables)
                 continue
             if name in ("popd", "pop-location"):
                 base = pushed.pop() if pushed else base
@@ -727,10 +742,14 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
     return None
 
 
-def _subshell_edges(stages: list[list[str]], open_before: int) -> tuple[int, int]:
-    """How many subshells this statement opens (`(` leading its first word) and closes (`)`
-    ending its last word, never more than are open), with those parens stripped in place."""
-    opened = closed = 0
+def _subshell_edges(
+    segment: str, shell: str, stages: list[list[str]], open_before: int
+) -> tuple[int, int]:
+    """How many subshells this statement opens (`(` leading its first word) and closes, with
+    those parens stripped from the words in place. A closing `)` is one the statement's code
+    does not balance (quoted text and `$(...)` balance their own), wherever it sits: before a
+    redirection, a pipe or `&` as well as last. Never more close than are open."""
+    opened = 0
     first = stages[0] if stages else []
     while first and first[0].startswith("("):
         word = first[0]
@@ -740,17 +759,25 @@ def _subshell_edges(stages: list[list[str]], open_before: int) -> tuple[int, int
             first[0] = bare
             break
         first.pop(0)
-    last = stages[-1] if stages else []
-    while last and last[-1].endswith(")") and open_before + opened > closed:
-        word = last[-1]
-        bare = word.rstrip(")")
-        count = min(len(word) - len(bare), open_before + opened - closed)
-        closed += count
-        word = word[: len(word) - count]
-        if word:
-            last[-1] = word
-            break
-        last.pop()
+    code = scrub(segment, shell)
+    unmatched = code.count(")") - (code.count("(") - opened)
+    closed = max(0, min(unmatched, open_before + opened))
+    left = closed
+    for stage in stages:  # from the start: the subshell closes before a pipe's later stages
+        j = 0
+        while j < len(stage) and left:
+            word = stage[j]
+            extra = word.count(")") - word.count("(")
+            if extra > 0 and word.endswith(")"):
+                count = min(extra, left, len(word) - len(word.rstrip(")")))
+                left -= count
+                word = word[: len(word) - count]
+                if word:
+                    stage[j] = word
+                else:
+                    del stage[j]
+                    continue
+            j += 1
     return opened, closed
 
 
@@ -832,16 +859,25 @@ def forges_held_lock(command: str, shell: str) -> bool:
     clearing, or naming it in an argument or quoted text is not setting it."""
     if "RAILS_LOCKS_HELD" not in command:
         return False
-    if _FORGE_CALL.search(command):
-        return True
+
+    def a_value(text: str) -> bool:
+        text = text.strip()
+        return bool(text) and not text.lower().startswith("$null") and not text.startswith(("''", '""'))
+
     for original, scrubbed in scrubbed_segments(command, shell):
-        if shell == "powershell":
-            if _FORGE_PS_ITEM.search(scrubbed):
+        # The name (or the call) is code on the scrubbed text; a value, often quoted, is read
+        # from the original at the same offset.
+        for found in _FORGE_CALL.finditer(scrubbed):
+            if _FORGE_CALL_ARGS.match(original, found.end()):
                 return True
-            # The name is code on the scrubbed text; its value, often quoted, is read whole.
+        if shell == "powershell":
+            for found in _FORGE_PS_ITEM.finditer(scrubbed):
+                rest = original[found.end() :].strip()
+                rest = re.sub(r"^-Value\s+", "", rest, flags=re.IGNORECASE)
+                if a_value(rest.split(";")[0]):
+                    return True
             for found in _FORGE_PS_ENV.finditer(scrubbed):
-                value = original[found.end() :].strip()
-                if value and not value.lower().startswith("$null") and not value.startswith(("''", '""')):
+                if a_value(original[found.end() :]):
                     return True
         for stage in pipeline_stages(words(original, shell)):
             stage = [t for t in stage if t.strip()]
@@ -850,9 +886,14 @@ def forges_held_lock(command: str, shell: str) -> bool:
                 if _sets_marker(stage[i]):
                     return True
                 i += 1
-            if i < len(stage) and command_name(stage[i]) in ("export", "env", "set", "setx"):
-                if any(_sets_marker(word) for word in stage[i + 1 :] if _ASSIGN.match(word)):
-                    return True
+            if i < len(stage) and command_name(stage[i]) in ("export", "env", "set", "setx", "declare", "typeset"):
+                # Its own assignments only, up to the command it runs.
+                for word in stage[i + 1 :]:
+                    if _ASSIGN.match(word):
+                        if _sets_marker(word):
+                            return True
+                    elif not word.startswith("-"):
+                        break
     return False
 
 
