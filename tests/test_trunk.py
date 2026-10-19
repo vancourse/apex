@@ -1642,3 +1642,33 @@ def test_pruning_a_tip_directory_does_not_crash_the_file_pass(tmp_path):
     left = sorted(p.name for p in logs.iterdir() if p.is_dir())
     assert len(left) == trunk._KEEP_LOG_DIRS and f"{0:012x}" not in left
     assert revert.exists()
+
+
+def test_an_entry_that_cannot_be_stated_does_not_stop_its_group_pruning(tmp_path, monkeypatch):
+    """One revert log whose stat fails (removed from outside, a dangling link) is kept;
+    the others over the keep count are still pruned."""
+    import errno
+    import os
+    import time
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    now = time.time()
+    for i in range(trunk._KEEP_LOG_DIRS + 2):
+        log = logs / f"revert-{i}.log"
+        log.write_text("x", encoding="utf-8")
+        os.utime(log, (now - 1000 + i, now - 1000 + i))
+    stuck = logs / "revert-5.log"
+    real_stat = Path.stat
+
+    def stat(self, *a, **kw):
+        if self == stuck:
+            raise FileNotFoundError(errno.ENOENT, "gone", str(self))
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    trunk._prune_logs(logs)
+    monkeypatch.undo()
+    left = {p.name for p in logs.iterdir()}
+    assert stuck.name in left and len(left) == trunk._KEEP_LOG_DIRS
+    assert "revert-0.log" not in left and "revert-1.log" not in left

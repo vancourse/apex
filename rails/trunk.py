@@ -1298,6 +1298,15 @@ def _remember_flakes(state: dict[str, Any], tip: str, ids: list[str]) -> None:
     del rows[:-50]
 
 
+def _mtime_or_newest(path: Path) -> float:
+    """An entry that cannot be stat'ed (removed from outside, a dangling link) sorts newest,
+    so it is kept rather than stopping the rest of its group from being pruned."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("inf")
+
+
 def _prune_logs(logs: Path) -> None:
     """Keep the newest `_KEEP_LOG_DIRS` tips' log directories and as many revert logs."""
     try:
@@ -1308,10 +1317,7 @@ def _prune_logs(logs: Path) -> None:
     # deleted is no directory to `is_dir()`, and the file pass then stat'ed it (#60).
     groups = {kind: [p for p in entries if p.is_dir() is kind] for kind in (True, False)}
     for kind, members in groups.items():
-        try:
-            group = sorted(members, key=lambda p: p.stat().st_mtime)
-        except OSError:  # another runner pruned one first: next pass
-            continue
+        group = sorted(members, key=_mtime_or_newest)
         for old in group[:-_KEEP_LOG_DIRS]:
             if kind:
                 shutil.rmtree(old, ignore_errors=True)

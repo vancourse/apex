@@ -241,8 +241,8 @@ def test_git_hook_wrapper_runs_end_to_end(repo, commit, git, monkeypatch):
     )
     gates = [f["gate"] for f in store.read_jsonl(rid.dir / "firings.jsonl")]
     assert "prepush_marker" in gates, done.stderr
-    # Both push gates left shadow on 2026-10-13: a quick marker no longer carries a push
-    # that may reach an open PR, and the tree needs a clean review.
+    # `prepush_marker` left shadow on 2026-10-13 and the review gates on 2026-10-15:
+    # a push that may reach an open PR needs a full marker and a clean review.
     receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
     _clean_review(repo)
     done = subprocess.run(

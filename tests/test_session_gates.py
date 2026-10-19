@@ -538,7 +538,7 @@ def _ship_fixture(repo, git, commit, monkeypatch):
     import rails.check as check_mod
 
     monkeypatch.setattr(check_mod, "post", lambda top, out=None: 0)
-    # `ship_review` left shadow on 2026-10-13: a code diff arms only behind a clean review.
+    # `ship_review` left shadow on 2026-10-15 (hooks/gates.toml): a code diff arms only behind a clean review.
     _clean_review(repo)
     return rid, sha, calls
 
