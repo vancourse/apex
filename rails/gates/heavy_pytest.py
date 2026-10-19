@@ -661,8 +661,9 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
     """``(why, start, end)`` for the first heavy pytest run in ``command`` (the offsets of its
     statement), else None."""
     base = cwd
-    subshells: list[Path] = []  # the directory each open `(` will return to
-    pushed: list[Path] = []  # pushd's stack
+    lost = False  # after a `cd` it could not resolve: where the shell is, it cannot tell
+    subshells: list[tuple[Path, bool]] = []  # where each open `(` will return to
+    pushed: list[tuple[Path, bool]] = []  # pushd's stack
     variables: dict[str, str] = {}
     persistent = os.environ.get("PYTEST_ADDOPTS")  # what the shell inherits
     for start, end in spans(command, shell):
@@ -679,7 +680,7 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
         stages = [[t for t in stage if t.strip()] for stage in pipeline_stages(words(segment, shell))]
         stages = [stage for stage in stages if stage]
         opened, closed = _subshell_edges(segment, shell, stages, len(subshells))
-        subshells.extend([base] * opened)
+        subshells.extend([(base, lost)] * opened)
         for stage in stages:
             local: str | None = None
             for tok in stage:
@@ -716,17 +717,24 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
                 target = _cd_target(tokens)
                 if target:
                     if name in ("pushd", "push-location"):
-                        pushed.append(base)
-                    if _TOPLEVEL.search(segment):  # `cd "$(git rev-parse --show-toplevel)"`
-                        base = _toplevel(base)
-                    else:
+                        pushed.append((base, lost))
+                    # `cd "$(git rev-parse --show-toplevel)/pkg"`: the worktree's top, then the rest.
+                    top = _toplevel(base).as_posix()
+                    if _TOPLEVEL.search(target):
+                        target = _TOPLEVEL.sub(lambda _m: top, target)
+                    elif _TOPLEVEL.search(segment):  # unquoted: the substitution split into words
+                        target = top
+                    # A directory it cannot resolve (`cd "$DIR"`, DIR set out of its sight)
+                    # leaves the shell where it cannot follow: what runs there is not judged.
+                    lost = _unresolved(local_path(target, variables))
+                    if not lost:
                         base = resolve(base, target, variables)
                 continue
             if name in ("popd", "pop-location"):
-                base = pushed.pop() if pushed else base
+                base, lost = pushed.pop() if pushed else (base, lost)
                 continue
             found = invocation(tokens)
-            if found is None:
+            if found is None or lost:
                 continue
             _, args, directory = found
             if any(a in _NO_RUN for a in args):
@@ -738,7 +746,7 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
                 return why, start, end
         for _ in range(closed):
             # A subshell's `cd` ends with it: later statements run where it started.
-            base = subshells.pop()
+            base, lost = subshells.pop()
     return None
 
 
@@ -751,14 +759,17 @@ def _subshell_edges(
     redirection, a pipe or `&` as well as last. Never more close than are open."""
     opened = 0
     first = stages[0] if stages else []
-    while first and first[0].startswith("("):
-        word = first[0]
+    at = 0  # past prefix words: `time (`, `if (`, `! (`
+    while at < len(first) and not first[at].startswith("(") and command_name(first[at]) in _PASS_THROUGH:
+        at += 1
+    while at < len(first) and first[at].startswith("("):
+        word = first[at]
         bare = word.lstrip("(")
         opened += len(word) - len(bare)
         if bare:
-            first[0] = bare
+            first[at] = bare
             break
-        first.pop(0)
+        del first[at]
     code = scrub(segment, shell)
     unmatched = code.count(")") - (code.count("(") - opened)
     closed = max(0, min(unmatched, open_before + opened))
@@ -768,10 +779,13 @@ def _subshell_edges(
         while j < len(stage) and left:
             word = stage[j]
             extra = word.count(")") - word.count("(")
-            if extra > 0 and word.endswith(")"):
-                count = min(extra, left, len(word) - len(word.rstrip(")")))
+            # The parens end the word, or come just before an operator glued on (`4)&`,
+            # `4)>log`, `4)|tail`): that operator and what follows are the shell's.
+            tail = re.search(r"(\)+)([&|<>].*)?$", word)
+            if extra > 0 and tail:
+                count = min(extra, left, len(tail.group(1)))
                 left -= count
-                word = word[: len(word) - count]
+                word = word[: tail.start()] + tail.group(1)[count:]
                 if word:
                     stage[j] = word
                 else:

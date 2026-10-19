@@ -153,6 +153,10 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         "(cd pkg && echo hi) > /dev/null && uv run pytest apps/ -q",
         "(cd apps && X=$(pwd) && uv run pytest big)",
         'cd "$(git rev-parse --show-toplevel)" && uv run pytest apps/',
+        'cd "$(git rev-parse --show-toplevel)/apps" && uv run pytest big',
+        "time (cd apps && uv run pytest big)",
+        "if (cd apps && uv run pytest big); then echo ok; fi",
+        "(cd pkg && uv run pytest tests -n 4)&",
     ],
 )
 def test_a_heavy_suite_is_refused(verdict, repo, command):
@@ -206,6 +210,10 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         # An unknown flag before a directory that is there: the directory is the target.
         "uv run pytest --runslow tests",
         "{ cd pkg; uv run pytest; }",
+        # The top, then the rest: pkg's own serial config.
+        'cd "$(git rev-parse --show-toplevel)/pkg" && uv run pytest',
+        # A directory it cannot resolve: where the shell is, it cannot tell.
+        'cd "$SOME_DIR_SET_ELSEWHERE" && uv run pytest apps/',
     ],
 )
 def test_a_narrow_queued_or_non_test_command_passes(repo, command):
