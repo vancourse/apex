@@ -1304,8 +1304,14 @@ def _prune_logs(logs: Path) -> None:
         entries = list(logs.iterdir())
     except OSError:
         return
-    for kind in (True, False):
-        group = sorted((p for p in entries if p.is_dir() is kind), key=lambda p: p.stat().st_mtime)
+    # Both groups are read before anything is removed: a directory the first pass
+    # deleted is no directory to `is_dir()`, and the file pass then stat'ed it (#60).
+    groups = {kind: [p for p in entries if p.is_dir() is kind] for kind in (True, False)}
+    for kind, members in groups.items():
+        try:
+            group = sorted(members, key=lambda p: p.stat().st_mtime)
+        except OSError:  # another runner pruned one first: next pass
+            continue
         for old in group[:-_KEEP_LOG_DIRS]:
             if kind:
                 shutil.rmtree(old, ignore_errors=True)
