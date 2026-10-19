@@ -1619,3 +1619,56 @@ def test_a_load_phrase_in_an_id_or_the_command_is_not_load(tmp_path):
     lane = lanes_mod.Lane(name="s", command=["x"], trunk_command=["x"], trunk_rerun=[PY, str(script)])
     answer, _ = trunk._run_ids(lane, tmp_path, ["t.py::test_a[too many clients]"], tmp_path / "r.log")
     assert answer.failed == {"t.py::test_a[too many clients]"}
+
+
+def test_pruning_a_tip_directory_does_not_crash_the_file_pass(tmp_path):
+    """One tip over the keep count: the directory pass removes the oldest, and the
+    revert-log pass must not then stat it from the same listing. It did, so every pass
+    that found 21 tip directories crashed with FileNotFoundError before any lane ran
+    (vancourse/apex#60)."""
+    import os
+    import time
+
+    logs = tmp_path / "logs"
+    now = time.time()
+    for i in range(trunk._KEEP_LOG_DIRS + 1):
+        tip = logs / f"{i:012x}"
+        tip.mkdir(parents=True)
+        (tip / "suite.log").write_text("x", encoding="utf-8")
+        os.utime(tip, (now - 1000 + i, now - 1000 + i))
+    revert = logs / "revert-7.log"
+    revert.write_text("x", encoding="utf-8")
+    trunk._prune_logs(logs)
+    left = sorted(p.name for p in logs.iterdir() if p.is_dir())
+    assert len(left) == trunk._KEEP_LOG_DIRS and f"{0:012x}" not in left
+    assert revert.exists()
+
+
+def test_an_entry_that_cannot_be_stated_does_not_stop_its_group_pruning(tmp_path, monkeypatch):
+    """One revert log whose stat fails (removed from outside, a dangling link) is kept;
+    the others over the keep count are still pruned."""
+    import errno
+    import os
+    import time
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    now = time.time()
+    for i in range(trunk._KEEP_LOG_DIRS + 2):
+        log = logs / f"revert-{i}.log"
+        log.write_text("x", encoding="utf-8")
+        os.utime(log, (now - 1000 + i, now - 1000 + i))
+    stuck = logs / "revert-5.log"
+    real_stat = Path.stat
+
+    def stat(self, *a, **kw):
+        if self == stuck:
+            raise FileNotFoundError(errno.ENOENT, "gone", str(self))
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    trunk._prune_logs(logs)
+    monkeypatch.undo()
+    left = {p.name for p in logs.iterdir()}
+    assert stuck.name in left and len(left) == trunk._KEEP_LOG_DIRS
+    assert "revert-0.log" not in left and "revert-1.log" not in left

@@ -4,6 +4,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **A trunk pass no longer crashes pruning its log directories** (#60). With one tip directory
+  over the keep count, the directory pass removed the oldest and the revert-log pass, reading
+  the same listing, found it no directory and stat'ed it: `FileNotFoundError` before any lane
+  ran, on every other pass on jarvis since 2026-10-12. Both groups are read before anything
+  is removed.
+
 ## [1.5.2] — 2026-10-11
 
 ### Fixed

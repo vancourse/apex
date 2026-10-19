@@ -241,7 +241,10 @@ def test_git_hook_wrapper_runs_end_to_end(repo, commit, git, monkeypatch):
     )
     gates = [f["gate"] for f in store.read_jsonl(rid.dir / "firings.jsonl")]
     assert "prepush_marker" in gates, done.stderr
-    receipts.write_marker(rid, sha, "t", ["checks"], quick=True)
+    # `prepush_marker` left shadow on 2026-10-13 and the review gates on 2026-10-15:
+    # a push that may reach an open PR needs a full marker and a clean review.
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    _clean_review(repo)
     done = subprocess.run(
         ["git", "push", "-q", "origin", "work"],
         cwd=repo,
@@ -250,3 +253,15 @@ def test_git_hook_wrapper_runs_end_to_end(repo, commit, git, monkeypatch):
         env=env,
     )
     assert done.returncode == 0, done.stderr
+
+
+def _clean_review(repo):
+    """A review receipt with no open items for HEAD's tree."""
+    from rails import review
+
+    clean = '{"reviewed_sha": "abc", "must_fix": [], "consider": []}\n' + "y" * 220
+    coop, adversary = repo.parent / "coop.md", repo.parent / "adversary.md"
+    coop.write_text("Steelman.\n" + clean, encoding="utf-8")
+    adversary.write_text(clean, encoding="utf-8")
+    code, text = review.record(repo, coop, adversary)
+    assert code == 0, text
