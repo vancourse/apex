@@ -633,6 +633,14 @@ def suite_lock_declared(where: Path) -> bool:
 # --- the verdict -----------------------------------------------------------------------
 
 
+def _continued(word: str) -> str:
+    """A word without the `\\`-newline continuation that ends it. A statement trimmed at its
+    newline keeps the backslash (`cd apps\\` then `&& ...`): Windows reads `apps\\` as `apps`,
+    Linux as a directory named `apps\\` (hook-tests, ubuntu)."""
+    word = word.strip()
+    return word[:-1].rstrip() if word.endswith("\\") else word
+
+
 def _toplevel(base: Path) -> Path:
     """What `git rev-parse --show-toplevel` prints from ``base``: its worktree's top."""
     from rails import store
@@ -675,9 +683,10 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
             assigned = _PS_ASSIGN.match(segment)
             if assigned:
                 variables[assigned.group(1)] = local_path(assigned.group(2), variables)
-        # A `\`-newline continuation is a word of its own (`targets` and `invocation` strip
-        # one that ends a word).
-        stages = [[t for t in stage if t.strip()] for stage in pipeline_stages(words(segment, shell))]
+        stages = [
+            [w for w in (_continued(t) for t in stage) if w]
+            for stage in pipeline_stages(words(segment, shell))
+        ]
         stages = [stage for stage in stages if stage]
         opened, closed = _subshell_edges(segment, shell, stages, len(subshells))
         subshells.extend([(base, lost)] * opened)
