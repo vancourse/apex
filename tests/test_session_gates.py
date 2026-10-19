@@ -538,7 +538,21 @@ def _ship_fixture(repo, git, commit, monkeypatch):
     import rails.check as check_mod
 
     monkeypatch.setattr(check_mod, "post", lambda top, out=None: 0)
+    # `ship_review` left shadow on 2026-10-13: a code diff arms only behind a clean review.
+    _clean_review(repo)
     return rid, sha, calls
+
+
+def _clean_review(repo):
+    """A review receipt with no open items for HEAD's tree, so arming is down to ship alone."""
+    from rails import review
+
+    clean = '{"reviewed_sha": "abc", "must_fix": [], "consider": []}\n' + "y" * 220
+    coop, adversary = repo.parent / "coop.md", repo.parent / "adversary.md"
+    coop.write_text("Steelman.\n" + clean, encoding="utf-8")
+    adversary.write_text(clean, encoding="utf-8")
+    code, text = review.record(repo, coop, adversary)
+    assert code == 0, text
 
 
 def test_ship_opens_one_pr_through_the_api_and_arms_it(repo, git, commit, monkeypatch):
