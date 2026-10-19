@@ -4,7 +4,32 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
-## [Unreleased]
+## [1.6.0] — 2026-10-19
+
+### Added
+- **A suite an agent starts itself waits its turn too** (`heavy_pytest`, enforced from merge).
+  `rails check` ran a repo's suite lanes one at a time (`lock = "suite"`, 1.4.0), but a suite
+  started by hand took no lock and ran beside them. In jarvis on 2026-10-18, four `pytest -n 4`
+  suites ran at once (a `rails check` lane, the trunk pass, and two an agent started through bash)
+  with Windows commit at 43.7 of 46.4 GB, and Docker Desktop's engine died twice that day of the
+  commit limit. The gate refuses an agent's pytest that runs more than one xdist worker over more
+  than 30 test files, or over the whole tree, in a repo whose lanes name a `suite` lock. The
+  refusal names the same command queued: `rails lock suite -- <command>`.
+  - The worker count is the one pytest would use: the last `-n` on the command line, else
+    `PYTEST_ADDOPTS`, else `-o addopts`, else the `addopts` of the config file pytest itself
+    picks (from the targets' common ancestor upward). That last step is how a repo-wide
+    `addopts = "-n auto"` makes a bare `uv run pytest ci/` sixteen workers.
+  - Not refused: up to 30 test files, `-n 0`/`-n 1`/`-p no:xdist`, `--co` and the other options
+    that run no test, a run under `rails lock suite`, pytest in a container, and any repo whose
+    lanes name no `suite` lock. Pytest inside a quoted `bash -c "..."` is not seen.
+  - Measured by replaying jarvis's agent transcripts through the module: 2026-10-05..18, 104 of
+    1,699 distinct pytest commands refused; 30 sampled by hand were all over more than 30 test
+    files. The 5 refused with `-k` over a directory are the counted false positives.
+- **`rails lock <name> -- <command...>`** runs a command holding the machine lock `<name>`, the
+  one `rails check` takes for a lane that names it. While it waits it prints who holds the lock
+  to stderr, as `rails check` does. The command's output and exit code are its own. Ctrl+C stops
+  the command's whole process tree before the lock is released. It refuses to wrap `rails`,
+  which takes its lanes' locks itself and would wait for its own parent.
 
 ### Fixed
 - **A trunk pass no longer crashes pruning its log directories** (#60). With one tip directory

@@ -18,6 +18,7 @@ rails metrics                               the four numbers before/since the cu
 rails history retire <tip> | status         refuse pushes of history the repo rewrote away
 rails sync [--now]                          fast-forward the main checkout to trunk, when it is safe
 rails receipt -- <command...>               run a command, record a sealed receipt of what it printed
+rails lock <name> -- <command...>           run a command holding a lane's machine-wide lock (waits for it)
 rails whereis <term>                        search code, branches, PRs and issues before "we'd need to build X"
 rails state                                 what SessionStart prints
 rails new <app> [--dest DIR]                the starter kit
@@ -32,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -345,6 +347,101 @@ def cmd_receipt(argv: list[str]) -> int:
     return done.returncode
 
 
+#: `rails <cmd>` takes its lanes' locks itself; under `rails lock` of the same lock it would
+#: wait forever for its own parent.
+_SELF_LOCKING = re.compile(r"(^|[/\\])rails(\.py)?$", re.IGNORECASE)
+#: Words before the program a command runs: `uv run python ci/rails.py` runs ci/rails.py.
+_LAUNCHERS = frozenset({"uv", "uvx", "run", "python", "python3", "py", "-m", "&"})
+
+
+def _program(command: list[str]) -> str:
+    for word in command:
+        name = word.replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
+        if name not in _LAUNCHERS and not word.startswith("--"):
+            return word
+    return ""
+
+
+def cmd_lock(argv: list[str]) -> int:
+    """Run a command while holding the machine lock `name`: the one `rails check` takes for
+    a lane that names it (`lock = "suite"`), so a suite started by hand queues with the
+    lanes instead of loading the box beside them (the `heavy_pytest` gate's remedy).
+
+    The wait has no timeout and is printed, with who holds the lock, to stderr; the
+    command's own output and exit code are passed through. Ctrl+C stops the command's
+    whole process tree before the lock is released.
+    """
+    from rails import check
+    from rails.lanes import valid_lock_name
+
+    usage = "rails lock <name> -- <command...>   e.g. rails lock suite -- uv run pytest apps/ -q"
+    if not argv or argv[0] in ("-h", "--help"):
+        print(usage)
+        return 2
+    name, command = argv[0], argv[1:]
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        print(usage)
+        return 2
+    if not valid_lock_name(name):
+        print(f"rails lock: {name!r} is not a lock name (a plain word, as in `lock = \"suite\"`)")
+        return 2
+    if _SELF_LOCKING.search(_program(command)):
+        print(
+            "rails lock: `rails` takes its lanes' locks itself, and under this lock it would "
+            "wait for its own parent forever. Run it directly."
+        )
+        return 2
+    repo = store.find_repo(Path.cwd())
+    sha = ""
+    if repo is not None:
+        done = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo.top), capture_output=True, text=True
+        )
+        sha = done.stdout.strip() if done.returncode == 0 else ""
+    shown = " ".join(command)
+    holder = {
+        "repo": str(repo.main) if repo else str(Path.cwd()),
+        "leaf": repo.leaf if repo else Path.cwd().name,
+        "lane": f"rails lock: {shown[:80]}",
+        "sha": sha,
+    }
+
+    def note(who: object, waited: float) -> None:
+        text = "another process"
+        if isinstance(who, dict):
+            since = "?"
+            stamp = who.get("since")
+            if isinstance(stamp, (int, float)):
+                since = time.strftime("%H:%M", time.localtime(stamp))
+            text = (
+                f"{who.get('leaf', '?')} ({who.get('lane', '?')} at "
+                f"{str(who.get('sha', ''))[:12]}) since {since}"
+            )
+        print(
+            f"rails lock: wait  lock {name!r} held by {text}; waited {waited / 60:.0f} min",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    with store.machine_lock(name, holder, on_wait=note) as waited:
+        if waited >= 1:
+            print(f"rails lock: took {name!r} after {waited / 60:.0f} min", file=sys.stderr, flush=True)
+        try:
+            proc = subprocess.Popen(check._resolve(command))
+        except OSError as exc:
+            print(f"rails lock: could not start {command[0]!r}: {exc}", file=sys.stderr)
+            return 127
+        try:
+            return proc.wait()
+        except BaseException:
+            # The lock goes when this block exits: whatever the command started must not
+            # run on without it.
+            check._kill_tree(proc)
+            raise
+
+
 def cmd_whereis(argv: list[str]) -> int:
     if not argv:
         print("rails whereis <term>")
@@ -565,6 +662,8 @@ def main(argv: list[str]) -> int:
         return mainsync.main(rest)
     if cmd == "receipt":
         return cmd_receipt(rest)
+    if cmd == "lock":
+        return cmd_lock(rest)
     if cmd == "whereis":
         return cmd_whereis(rest)
     if cmd == "state":
