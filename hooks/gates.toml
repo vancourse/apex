@@ -405,7 +405,7 @@ shadow_until = ""
 cites = ["jarvis 2026-10-18 14:44: four `pytest -n 4` suites at once (a `rails check` lane, the trunk pass, two an agent started) at 43.7 of 46.4 GB Windows commit; Docker Desktop's engine died twice that day (errno 1455)", "jarvis 2026-10-09: concurrent full suites took 63-76 min instead of ~23 and ran the box out of ports (22 of 38 suite runs failed), the reason for `lock = \"suite\"`"]
 planted = "tests/gates/test_heavy_pytest.py::test_the_planted_suite_is_refused_by_the_real_dispatcher"
 fp_count = 5
-fp_measured_on = "replay of jarvis agent transcripts through this module, windows: 2026-10-05..18, 1,699 distinct pytest commands, 104 refused; 30 sampled by hand, 30 of them over more than 30 test files. The 5 refused with `-k` over a directory count as false positives (they collect the directory on every worker but run a few tests). 2026-07-19..10-18: 11,362 commands, 1,851 refused, 63 with `-k`"
+fp_measured_on = "replay of jarvis agent transcripts through this module, windows: 2026-10-05..18, 1,699 distinct pytest commands, 104 refused; 30 sampled by hand, 30 of them over more than 30 test files. The 5 refused with `-k` over a directory count as false positives (they collect the directory on every worker but run a few tests). 2026-07-19..10-18: 11,362 commands, 1,855 refused, 63 with `-k`"
 
 [[gate]]
 name = "allow_edit"

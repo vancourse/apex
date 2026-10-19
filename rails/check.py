@@ -335,6 +335,10 @@ def run_lane(lane: lanes_mod.Lane, top: Path, log_path: Path) -> tuple[int, floa
     env = dict(os.environ)
     env.update(lane.env)
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    if lane.lock:
+        # The lane runs while this process holds its lock (`_lane_lock`): a `rails lock` of
+        # the same name inside it re-enters instead of waiting for its own parent.
+        env[store.HELD_ENV] = store.held_env([lane.lock], env)
     started = time.monotonic()
     with open(log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log:
         log.write(f"$ {' '.join(lane.command)}\n")

@@ -38,6 +38,10 @@ to read); a repo whose lanes name no ``suite`` lock (there is no queue to send i
 Quoted spans are data (``rails.shell``): pytest inside ``bash -c "..."`` is not seen, nor
 is ``ci/local_lanes.py suite`` run by hand (no pytest word; morphyxAI/jarvis follow-up).
 
+**Also refused:** a statement that sets ``RAILS_LOCKS_HELD`` itself. `rails lock` sets it for
+the command it runs, so a `rails check` under it re-enters the lock it holds (`rails.store`);
+set by hand, it would let a suite skip the queue.
+
 The remedy is the queue, not an override: the same command with
 ``rails lock suite --`` in front of the pytest statement, which waits for the running suite
 and then runs it (in the background: the wait can be long), or a narrower run. The
@@ -55,7 +59,7 @@ from pathlib import Path
 
 from rails.gates.destructive import command_name, command_words, pipeline_stages
 from rails.hookio import Deny, Event
-from rails.shell import segments, words
+from rails.shell import scrubbed_segments, spans, words
 
 NAME = "heavy_pytest"
 
@@ -68,8 +72,8 @@ _PYTEST = ("pytest", "py.test")
 _MENTION = re.compile(r"py\.?test", re.IGNORECASE)
 _CD = ("cd", "set-location", "sl", "pushd", "push-location", "chdir")
 #: Words that run the rest of the statement as a command: shell keywords and plain prefixes.
-_PASS_THROUGH = frozenset({"do", "then", "else", "{", "(", "!", "time", "nohup", "exec",
-                           "command", "builtin", "sudo", "&"})
+_PASS_THROUGH = frozenset({"do", "then", "else", "elif", "if", "while", "until", "{", "(", "!",
+                           "time", "nohup", "exec", "command", "builtin", "sudo", "&"})
 #: Runners whose subcommand runs a command (`uv run X`), and that subcommand.
 _RUN_SUBCOMMAND = {"uv": "run", "poetry": "run", "pdm": "run", "hatch": "run", "rye": "run",
                    "pipenv": "run", "pipx": "run"}
@@ -97,6 +101,23 @@ _VALUED = frozenset({
     "--hypothesis-seed", "--hypothesis-profile", "--last-failed-no-failures", "--lfnf",
     "--config-file", "--inifile",
 })
+#: pytest's (and the common plugins') long options that take no value. Any other long option
+#: followed by a word that does not look like a path is read as taking that word as its value,
+#: so an unlisted valued option's value never stands in for a target.
+_FLAGS = frozenset({
+    "--lf", "--last-failed", "--ff", "--failed-first", "--nf", "--new-first", "--sw",
+    "--stepwise", "--sw-skip", "--stepwise-skip", "--exitfirst", "--pdb", "--trace",
+    "--no-header", "--no-summary", "--strict-markers", "--strict-config", "--strict",
+    "--runxfail", "--disable-warnings", "--disable-pytest-warnings", "--showlocals",
+    "--cache-clear", "--setup-show", "--setup-only", "--verbose", "--quiet", "--full-trace",
+    "--doctest-modules", "--doctest-continue-on-failure", "--cov-append", "--no-cov",
+    "--looponfail", "--forked", "--keep-duplicates", "--noconftest",
+    "--continue-on-collection-errors", "--pyargs", "--debug", "--trace-config", "--version",
+    "--help", "--co", "--collect-only", "--collectonly", "--fixtures", "--markers",
+    "--fixtures-per-test", "--cache-show", "--setup-plan", "--locked",
+    "--frozen", "--no-sync", "--isolated", "--offline", "--no-project", "--active",
+    "--exact", "--inexact", "--all-extras", "--no-dev", "--dev", "--quiet", "--no-progress",
+})
 #: Options that collect or report but run no test.
 _NO_RUN = frozenset({"--co", "--collect-only", "--collectonly", "--version", "-V", "--help",
                      "-h", "--fixtures", "--funcargs", "--markers", "--fixtures-per-test",
@@ -123,6 +144,12 @@ _PS_ADDOPTS = re.compile(
     re.IGNORECASE,
 )
 _LEADING_ASSIGNMENTS = re.compile(r"""^\s*(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+)*""")
+#: A statement that sets RAILS_LOCKS_HELD: an assignment, `export`, `env`, `$env:`, `Set-Item`.
+_FORGE = re.compile(
+    r"(?:^|[\s;&|(])(?:(?:export|set|setx)\s+)?(?:\$env:)?RAILS_LOCKS_HELD\s*="
+    r"|(?:Set|New)-Item\s+(?:-Path\s+)?Env:\\?RAILS_LOCKS_HELD\b",
+    re.IGNORECASE,
+)
 
 
 # --- where the shell is, and what a path means there -------------------------------------
@@ -162,12 +189,37 @@ def _unresolved(text: str) -> bool:
 # --- what runs: pytest, in command position ------------------------------------------------
 
 
-def _strip_prefix(tokens: list[str]) -> list[str]:
-    """The command a prefix runs: `timeout 600 X`, `nice -n 5 X`, `env A=1 X`, `do X`."""
+def _looks_like_path(word: str) -> bool:
+    return any(mark in word for mark in ("/", "\\", ".py", "::", "*")) or word in (".", "..")
+
+
+def _is_command(word: str) -> bool:
+    """A word that starts a command this gate reads (pytest, python, a runner, rails)."""
+    name = command_name(word)
+    return (
+        name in _PYTEST
+        or name in _RUN_SUBCOMMAND
+        or name in ("uvx", "coverage", "rails", "rails.py", "py")
+        or name.startswith("python")
+    )
+
+
+def _strip_prefix(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
+    """The command a prefix runs (`timeout 600 X`, `nice -n 5 X`, `env A=1 X`, `do X`,
+    `(cd X`), and the variables the prefix sets for it."""
+    tokens = list(tokens)
+    assigned: dict[str, str] = {}
     i = 0
     while i < len(tokens):
         word, name = tokens[i], command_name(tokens[i])
-        if name in _PASS_THROUGH or _ASSIGN.match(word):
+        if len(word) > 1 and word[0] in "({":
+            tokens[i] = word[1:]  # `(cd`: a subshell or group opened on the word
+            continue
+        found = _ASSIGN.match(word)
+        if found:
+            assigned[found.group(1)] = found.group(2)
+            i += 1
+        elif name in _PASS_THROUGH:
             i += 1
         elif name == "timeout":
             i += 1
@@ -183,6 +235,9 @@ def _strip_prefix(tokens: list[str]) -> list[str]:
         elif name == "env":
             i += 1
             while i < len(tokens) and (tokens[i].startswith("-") or _ASSIGN.match(tokens[i])):
+                found = _ASSIGN.match(tokens[i])
+                if found:
+                    assigned[found.group(1)] = found.group(2)
                 i += 2 if tokens[i] in ("-u", "--unset", "-C", "--chdir") else 1
         elif name in ("xvfb-run", "stdbuf"):
             i += 1
@@ -190,11 +245,13 @@ def _strip_prefix(tokens: list[str]) -> list[str]:
                 i += 1
         else:
             break
-    return tokens[i:]
+    return tokens[i:], assigned
 
 
 def _skip_options(words_: list[str]) -> tuple[list[str], str | None]:
-    """A runner's own options, skipped: the words after them, and `--directory`'s value."""
+    """A runner's own options, skipped: the words after them, and `--directory`'s value. A
+    long option it does not know takes the next word as its value unless that word starts a
+    command (`uv run --no-extra gpu pytest`, but `uv run --locked pytest`)."""
     directory = None
     j = 0
     while j < len(words_) and words_[j].startswith("-"):
@@ -205,8 +262,36 @@ def _skip_options(words_: list[str]) -> tuple[list[str], str | None]:
             directory = words_[j + 1]
         elif word.startswith("--directory="):
             directory = word.split("=", 1)[1]
-        j += 2 if word in _RUNNER_VALUED else 1
+        if word in _RUNNER_VALUED:
+            j += 2
+        elif (
+            word.startswith("--")
+            and "=" not in word
+            and word not in _FLAGS
+            and j + 1 < len(words_)
+            and not words_[j + 1].startswith("-")
+            and not _is_command(words_[j + 1])
+            and words_[j + 1] not in _RUN_SUBCOMMAND.values()
+            and words_[j + 1] != "tool"
+        ):
+            j += 2
+        else:
+            j += 1
     return words_[j:], directory
+
+
+def _coverage(words_: list[str]) -> tuple[str, list[str], str | None] | None:
+    """`coverage run [its options] -m pytest ...` (or a pytest script)."""
+    if words_[:1] != ["run"]:
+        return None
+    rest = words_[1:]
+    for j, word in enumerate(rest):
+        if word == "-m":
+            target = rest[j + 1] if j + 1 < len(rest) else ""
+            return ("pytest", rest[j + 2 :], None) if target in _PYTEST else None
+        if not word.startswith("-") and command_name(word) in _PYTEST:
+            return "pytest", rest[j + 1 :], None
+    return None
 
 
 def _after_rails(words_: list[str]) -> tuple[str, list[str], str | None] | None:
@@ -226,6 +311,8 @@ def _python_module(words_: list[str]) -> tuple[str, list[str], str | None] | Non
         word = words_[j]
         if word == "-m":
             target = words_[j + 1] if j + 1 < len(words_) else ""
+            if target == "coverage":
+                return _coverage(words_[j + 2 :])
             return ("pytest", words_[j + 2 :], None) if target in _PYTEST else None
         if word.startswith("-m") and len(word) > 2:
             return ("pytest", words_[j + 1 :], None) if word[2:] in _PYTEST else None
@@ -251,7 +338,7 @@ def invocation(tokens: list[str]) -> tuple[str, list[str], str | None] | None:
     None. ``directory`` is a runner's `--directory`, if any. A container runner (`docker`,
     `podman`, `kubectl`, `wsl`) is not one of the runners read here: its pytest reads a
     config and a tree this hook cannot see."""
-    tokens = _strip_prefix([t for t in tokens if t.strip()])
+    tokens, _ = _strip_prefix([t.strip() for t in tokens if t.strip()])
     if not tokens:
         return None
     name = command_name(tokens[0])
@@ -267,7 +354,7 @@ def invocation(tokens: list[str]) -> tuple[str, list[str], str | None] | None:
             return "pytest", rest[1:], directory
         return None
     if name == "coverage":
-        return _python_module(tokens[2:]) if tokens[1:2] == ["run"] else None
+        return _coverage(tokens[1:])
     sub = _RUN_SUBCOMMAND.get(name)
     if sub is None:
         return None
@@ -343,10 +430,11 @@ def _addopts_override(args: list[str]) -> str | None:
 def targets(args: list[str]) -> list[str]:
     """The paths and node ids pytest is given: not options, their values, or redirections."""
     found: list[str] = []
+    args = [a.strip().rstrip(")").rstrip("}") if a.strip() not in (")", "}") else "" for a in args]
     i = 0
     while i < len(args):
         tok = args[i]
-        if not tok.strip() or tok == "&":
+        if not tok or tok == "&":
             i += 1
         elif _REDIRECT_DUP.match(tok):
             i += 1
@@ -367,8 +455,20 @@ def targets(args: list[str]) -> list[str]:
                     found.append(word)
                 j += 1
             break
+        elif tok in _VALUED:
+            i += 2
+        elif (
+            tok.startswith("--")
+            and "=" not in tok
+            and tok not in _FLAGS
+            and i + 1 < len(args)
+            and args[i + 1]
+            and not args[i + 1].startswith("-")
+            and not _looks_like_path(args[i + 1])
+        ):
+            i += 2  # an option it does not know, with a value that is no path
         elif tok.startswith("-"):
-            i += 2 if tok in _VALUED else 1
+            i += 1
         else:
             found.append(tok)
             i += 1
@@ -386,7 +486,9 @@ def _read_toml(path: Path) -> dict | None:
 
 
 def _pytest_table(path: Path) -> dict | None:
-    """The pytest settings a config file holds, or None when it is not a pytest config."""
+    """The pytest settings a config file holds, or None when it is not a pytest config. Read
+    by kind, as pytest reads a `-c` file of any name: `.toml` (the `[pytest]` table of a
+    pytest.toml, else `[tool.pytest]`), `.cfg` (`[tool:pytest]`), anything else as ini."""
     try:
         if not path.is_file():
             return None
@@ -396,7 +498,7 @@ def _pytest_table(path: Path) -> dict | None:
         data = _read_toml(path)
         table = data.get("pytest", {}) if data else {}
         return table if isinstance(table, dict) else {}  # always pytest's config, even empty
-    if path.name == "pyproject.toml":
+    if path.suffix == ".toml":
         data = _read_toml(path)
         tool = (data or {}).get("tool", {}).get("pytest")
         if not isinstance(tool, dict):
@@ -411,7 +513,7 @@ def _pytest_table(path: Path) -> dict | None:
         parser.read(path, encoding="utf-8")
     except Exception:  # noqa: BLE001 - a file pytest cannot read either
         return None
-    section = "tool:pytest" if path.name == "setup.cfg" else "pytest"
+    section = "tool:pytest" if path.suffix == ".cfg" else "pytest"
     if parser.has_section(section):
         return dict(parser.items(section))
     return {} if path.name in ("pytest.ini", ".pytest.ini") else None
@@ -473,7 +575,9 @@ def count_test_files(paths: list[Path], limit: int, ignored: list[Path] | None =
         if str(path).endswith(".py") or path.is_file():
             files.add(norm)
         elif path.is_dir():
-            for root, dirs, names in os.walk(path):
+            # Walked resolved, as `--ignore` paths are: a cwd reached through a junction or a
+            # symlink must still match them.
+            for root, dirs, names in os.walk(path.resolve()):
                 dirs[:] = [
                     d for d in dirs
                     if d not in _SKIP_DIRS and not d.startswith(".")
@@ -514,12 +618,30 @@ def suite_lock_declared(where: Path) -> bool:
 # --- the verdict -----------------------------------------------------------------------
 
 
-def judge(command: str, shell: str, cwd: Path) -> tuple[str, str] | None:
-    """``(why, statement)`` for the first heavy pytest run in ``command``, else None."""
+def _cd_target(tokens: list[str]) -> str | None:
+    """Where `cd` / `pushd` / `Set-Location` goes: its first word that is no option and no
+    redirection (`pushd apps > /dev/null`)."""
+    i = 1
+    while i < len(tokens):
+        word = tokens[i]
+        if _REDIRECT_OP.match(word):
+            i += 2
+            continue
+        if word in ("-", "-Path", "-LiteralPath") or word.startswith("-") or _REDIRECT_JOINED.match(word):
+            i += 1
+            continue
+        return word.rstrip(")")
+    return None
+
+
+def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
+    """``(why, start, end)`` for the first heavy pytest run in ``command`` (the offsets of its
+    statement), else None."""
     base = cwd
     variables: dict[str, str] = {}
     persistent = os.environ.get("PYTEST_ADDOPTS")  # what the shell inherits
-    for segment in segments(command, shell):
+    for start, end in spans(command, shell):
+        segment = command[start:end]
         if shell == "powershell":
             found = _PS_ADDOPTS.search(segment)
             if found:
@@ -528,7 +650,9 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, str] | None:
             if assigned:
                 variables[assigned.group(1)] = local_path(assigned.group(2), variables)
         for stage in pipeline_stages(words(segment, shell)):
-            stage = [t for t in stage if t.strip()]  # a `\`-newline continuation is a token
+            # A `\`-newline continuation is a word of its own (`targets` and `invocation`
+            # strip one that ends a word).
+            stage = [t for t in stage if t.strip()]
             local: str | None = None
             for tok in stage:
                 assigned = _ASSIGN.match(tok)
@@ -539,8 +663,14 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, str] | None:
                     local = assigned.group(2)
             tokens = command_words(stage)
             if not tokens:
-                if local is not None:
+                # A plain shell variable reaches pytest only when it is already exported.
+                if local is not None and persistent is not None:
                     persistent = local
+                continue
+            tokens, prefixed = _strip_prefix(tokens)
+            if "PYTEST_ADDOPTS" in prefixed:  # `env PYTEST_ADDOPTS=... X`, `do A=1 X`
+                local = prefixed["PYTEST_ADDOPTS"]
+            if not tokens:
                 continue
             name = command_name(tokens[0])
             if name == "export":
@@ -555,8 +685,9 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, str] | None:
                 persistent = None
                 continue
             if name in _CD:
-                if len(tokens) > 1 and tokens[-1] not in ("-", "-Path", "-LiteralPath"):
-                    base = resolve(base, tokens[-1], variables)
+                target = _cd_target(tokens)
+                if target:
+                    base = resolve(base, target, variables)
                 continue
             found = invocation(tokens)
             if found is None:
@@ -568,7 +699,7 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, str] | None:
             env_addopts = local if local is not None else persistent
             why = _heavy(args, here, variables, env_addopts)
             if why:
-                return why, segment
+                return why, start, end
     return None
 
 
@@ -594,7 +725,7 @@ def _heavy(args: list[str], here: Path, variables: dict[str, str], env_addopts: 
             named = _option_values(args, "-c", "--config-file", "--inifile")
             if named:
                 config = resolve(here, named[-1], variables)
-                table = _pytest_table(config) if config.name in _CONFIG_NAMES else None
+                table = _pytest_table(config)  # pytest reads a `-c` file of any name
                 found = (config, table if table is not None else {})
             else:
                 found = find_config(here, paths)
@@ -621,26 +752,43 @@ def _expand(here: Path, raw: str, variables: dict[str, str]) -> list[Path]:
     return [path]
 
 
-def queued(command: str, statement: str, shell: str) -> str:
-    """The command as typed, with `rails lock suite --` in front of the pytest statement's
-    command (after its `VAR=value` prefixes), or a placeholder when that cannot be shown."""
+def queued(command: str, start: int, end: int, shell: str) -> str:
+    """The command as typed, with `rails lock suite --` in front of the command of the
+    statement at ``command[start:end]`` (after its `VAR=value` prefixes), or a placeholder
+    when that cannot be shown."""
+    statement = command[start:end]
     lead = _LEADING_ASSIGNMENTS.match(statement).end() if shell == "bash" else 0  # type: ignore[union-attr]
     body = statement[lead:].lstrip()
     placeholder = f"rails lock {LOCK} -- <this pytest command>"
-    if not body or command_name(body.split()[0]) in _PASS_THROUGH:
+    if not body or body[0] in "({" or command_name(body.split()[0]) in _PASS_THROUGH:
         return placeholder
     rewritten = f"{statement[:lead]}rails lock {LOCK} -- {body}".strip()
-    whole = command.replace(statement, rewritten, 1).strip()
+    whole = f"{command[:start]}{rewritten}{command[end:]}".strip()
     for text in (whole, rewritten):
         if len(text) <= 300 and "\n" not in text:
             return text
     return placeholder
 
 
+def forges_held_lock(command: str, shell: str) -> bool:
+    """Whether a statement sets `RAILS_LOCKS_HELD` itself (quoted text is data)."""
+    if "RAILS_LOCKS_HELD" not in command:
+        return False
+    return any(_FORGE.search(scrubbed) for _, scrubbed in scrubbed_segments(command, shell))
+
+
 def check(evt: Event):
     shell = evt.shell
     command = evt.command or ""
-    if shell is None or not _MENTION.search(command):
+    if shell is None:
+        return None
+    if forges_held_lock(command, shell):
+        return Deny(
+            "rails: `RAILS_LOCKS_HELD` is how `rails lock` tells the command it runs that the "
+            "lock is already held; set by hand, it lets a suite skip the queue for every lock it "
+            f"names. Run the command as `rails lock {LOCK} -- <command>`, which sets it."
+        )
+    if not _MENTION.search(command):
         return None
     try:
         found = judge(command, shell, evt.cwd)
@@ -648,12 +796,12 @@ def check(evt: Event):
         return None
     if found is None:
         return None
-    why, statement = found
+    why, start, end = found
     return Deny(
         f"rails: this pytest runs {why}: a heavy suite that no lock on this machine sees. "
         f"`rails check` runs suites one at a time (lock `{LOCK}`), and a suite started beside "
         "them is how four ran at once and Windows hit its commit limit (2026-10-18). Queue it: "
-        f"`{queued(command, statement, shell)}` (run it in the background; it waits for the "
+        f"`{queued(command, start, end, shell)}` (run it in the background; it waits for the "
         f"suite that is running). Or make it light: name up to {MAX_NARROW_FILES} test files, "
         "or add `-n 0`."
     )

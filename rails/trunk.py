@@ -813,7 +813,17 @@ def _attribution_locks(
             raise
         break
     with stack:
-        yield
+        # The reruns start from this process's environment: a `rails lock` of a held name
+        # inside one re-enters instead of waiting for this runner.
+        before = os.environ.get(store.HELD_ENV)
+        os.environ[store.HELD_ENV] = store.held_env(names)
+        try:
+            yield
+        finally:
+            if before is None:
+                os.environ.pop(store.HELD_ENV, None)
+            else:
+                os.environ[store.HELD_ENV] = before
 
 
 def _run(

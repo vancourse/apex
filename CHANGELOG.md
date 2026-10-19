@@ -16,22 +16,25 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   than 30 test files, or over the whole tree, in a repo whose lanes name a `suite` lock. The
   refusal names the same command queued: `rails lock suite -- <command>`.
   - pytest counts only where it runs: `pytest`, `python -m pytest`, or the command after
-    `uv run` / `uvx` / `poetry run` / `coverage run -m`, behind `timeout`, `nice`, `env` and
-    loop keywords. `uv pip install pytest` is not a test run.
+    `uv run` / `uvx` / `poetry run` / `coverage run -m` / `python -m coverage run -m`, behind
+    `timeout`, `nice`, `env`, a subshell's `(`, and `if`/`do`/`then`. `uv pip install pytest`
+    is not a test run.
   - The worker count is the one pytest would use: the last `-n` on the command line, else
-    `PYTEST_ADDOPTS` (a prefix on that statement, else set earlier in the command, else
-    inherited), else `-o addopts`, else the `addopts` of the config file pytest 9 itself picks
-    (from the targets' common ancestor upward, `pytest.toml` and `[tool.pytest]` included).
-    That last step is how a repo-wide `addopts = "-n auto"` makes a bare `uv run pytest ci/`
-    sixteen workers.
+    `PYTEST_ADDOPTS` (a prefix on that statement, `env` included; else exported or set earlier
+    in the command; else inherited), else `-o addopts`, else the `addopts` of the config file
+    pytest 9 itself picks (from the targets' common ancestor upward, `pytest.toml` and
+    `[tool.pytest]` included), or of a `-c` file of any name. That is how a repo-wide
+    `addopts = "-n auto"` makes a bare `uv run pytest ci/` sixteen workers.
   - Files are counted as pytest collects them: distinct files (node ids in one file count
-    once), outside dot directories, `node_modules` and `--ignore`; redirections and a trailing
-    `&` are the shell's, not targets.
+    once), outside dot directories, `node_modules` and `--ignore`. Redirections, a trailing
+    `&` and the value of an option it does not know are not targets.
   - Not refused: up to 30 test files, `-n 0`/`-n 1`/`-p no:xdist`, `--co` and the other options
     that run no test, a run under `rails lock suite`, pytest in a container, a run whose only
     targets are variables the hook never saw set, and any repo whose lanes name no `suite`
     lock. Pytest inside a quoted `bash -c "..."` is not seen, nor is a lane's own command run
     by hand (`ci/local_lanes.py suite`: no pytest word).
+  - Also refused: a statement that sets `RAILS_LOCKS_HELD` by hand, which would let a suite
+    skip the queue (below).
   - Measured by replaying jarvis's agent transcripts through the module: 2026-10-05..18, 104 of
     1,699 distinct pytest commands refused; 30 sampled by hand were all over more than 30 test
     files. The 5 refused with `-k` over a directory are the counted false positives.
@@ -39,11 +42,17 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   one `rails check` takes for a lane that names it. While it waits it prints who holds the lock
   to stderr, as `rails check` does. The command's output and exit code are its own.
   - The command cannot outlive the lock. Ctrl+C stops its process tree (the wait is taken in
-    half-second slices, so Windows delivers it), and on Windows a job object kills the tree
-    when `rails lock` dies any other way, as when a harness stops a background task.
+    half-second slices, so Windows delivers it). On Windows the command starts suspended, is
+    put in a kill-on-close job object, then resumes, so the job kills everything it started
+    when `rails lock` dies any other way, as when a harness stops a background task. Joining
+    the job and letting the command inherit it was not enough: under the Microsoft Store
+    Python a joined process's children were outside it. No job holds a Store-packaged
+    interpreter the command starts (a venv built on the Store Python); Windows activates it
+    outside any job. A venv on a python.org or uv interpreter, jarvis's included, is held.
   - A lock taken again under it re-enters instead of waiting for its own parent: the command
-    runs with `RAILS_LOCKS_HELD=<name>:<pid>`, and `machine_lock` re-enters only when that pid
-    is the one the lock's holder record names. So `rails lock suite -- rails check` runs.
+    runs with `RAILS_LOCKS_HELD=<name>:<pid>`, and `machine_lock` re-enters when any entry's
+    pid is the one the lock's holder record names. `rails check` sets the same for a locked
+    lane, and the trunk for its reruns, so a `rails lock` inside one re-enters too.
 
 ### Fixed
 - **A trunk pass no longer crashes pruning its log directories** (#60). With one tip directory

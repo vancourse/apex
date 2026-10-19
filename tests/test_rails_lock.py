@@ -3,6 +3,7 @@ names the same lock, as the `heavy_pytest` gate tells an agent to run it."""
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -162,6 +163,36 @@ def test_a_lock_taken_again_under_rails_lock_re_enters_instead_of_waiting(tmp_pa
     assert nested.returncode == 6
 
 
+def test_a_stale_entry_ahead_of_the_holder_does_not_hide_it(tmp_path):
+    """A leftover `suite:<dead pid>` first in the variable must not stop the live entry
+    rails lock appends after it from re-entering."""
+    env = {**os.environ, "RAILS_LOCKS_HELD": "suite:1"}
+    proc = _rails("lock", "suite", "--", sys.executable, "-c", _NESTED, str(ROOT), cwd=tmp_path, env=env)
+    out, err = _finish(proc, 30)
+    assert proc.returncode == 4, err
+    assert "re-entered after 0.0" in out
+
+
+def test_a_locked_lane_and_a_trunk_rerun_advertise_the_lock_they_hold(tmp_path, monkeypatch):
+    """`rails check` and the trunk hold their lanes' locks too: a `rails lock` of the same
+    name inside a lane or a rerun re-enters instead of waiting for its own parent."""
+    from rails import check, lanes, store, trunk
+
+    monkeypatch.delenv("RAILS_LOCKS_HELD", raising=False)
+    show = [sys.executable, "-c", "import os; print('held=' + os.environ.get('RAILS_LOCKS_HELD', ''))"]
+    log = tmp_path / "lane.log"
+    check.run_lane(lanes.Lane(name="suite", command=show, lock="suite", timeout_min=1), tmp_path, log)
+    assert f"held=suite:{os.getpid()}" in log.read_text(encoding="utf-8")
+    check.run_lane(lanes.Lane(name="lint", command=show, timeout_min=1), tmp_path, log)
+    assert "held=\n" in log.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    repo = store.RepoId(main=tmp_path, top=tmp_path, key="k", leaf="l")
+    lane = lanes.Lane(name="suite", command=show, lock="suite", trunk_command=show, trunk_rerun=show)
+    with trunk._attribution_locks(repo, [lane], "abc123", io.StringIO()):
+        assert os.environ["RAILS_LOCKS_HELD"] == f"suite:{os.getpid()}"
+    assert "RAILS_LOCKS_HELD" not in os.environ
+
+
 def test_a_lock_named_in_the_environment_is_not_re_entered_without_its_holder(holder, tmp_path):
     """RAILS_LOCKS_HELD re-enters only when the pid it names holds the lock: a stale or
     copied value queues like anything else."""
@@ -204,12 +235,33 @@ time.sleep(120)
 """
 
 
+def _venv_python(tmp_path: Path) -> str:
+    """A venv's python.exe: on Windows a launcher that starts the real interpreter as its
+    child within a millisecond, as `.venv/Scripts/python.exe -m pytest` does. A venv on the
+    Microsoft Store Python cannot be held: its base interpreter is a packaged app, which
+    Windows activates outside any job (measured 2026-10-19; a python.org or uv interpreter's
+    tree is held)."""
+    if "WindowsApps" in sys.base_prefix:
+        pytest.skip("the base interpreter is a Store package, activated outside any job")
+    venv = tmp_path / "venv"
+    done = subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv)], capture_output=True, timeout=180
+    )
+    python = venv / "Scripts" / "python.exe"
+    if done.returncode != 0 or not python.is_file():
+        pytest.skip(f"no venv here: {done.stderr[-200:]!r}")
+    return str(python)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="the job object is Windows-only")
-def test_a_killed_rails_lock_takes_its_command_tree_with_it(tmp_path):
+@pytest.mark.parametrize("launcher", ["interpreter", "venv"])
+def test_a_killed_rails_lock_takes_its_command_tree_with_it(tmp_path, launcher):
     """The OS frees the lock when `rails lock` dies; the suite must not run on without it.
-    TerminateProcess, as a harness stopping a background task does, is not Ctrl+C."""
+    TerminateProcess, as a harness stopping a background task does, is not Ctrl+C. Through a
+    launcher the interpreter is a grandchild, born before a late job assignment could land."""
+    python = sys.executable if launcher == "interpreter" else _venv_python(tmp_path)
     pidfile = tmp_path / "worker.pid"
-    proc = _rails("lock", "suite", "--", sys.executable, "-c", _SPAWNS, str(pidfile), cwd=tmp_path)
+    proc = _rails("lock", "suite", "--", python, "-c", _SPAWNS, str(pidfile), cwd=tmp_path)
     deadline = time.monotonic() + 30
     while not pidfile.exists() or not pidfile.read_text():
         assert proc.poll() is None, proc.communicate()

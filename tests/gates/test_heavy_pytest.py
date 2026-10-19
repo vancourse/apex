@@ -130,6 +130,18 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         "rails lock docker -- uv run pytest apps/",
         "uv run pytest apps/ -n 0 -n 4",
         "uv run pytest apps/ --ignore=apps/small",
+        "(cd apps && uv run pytest big)",
+        "( cd apps && uv run pytest big )",
+        "pushd apps > /dev/null && uv run pytest big",
+        "if uv run pytest apps/ -q; then echo ok; fi",
+        "python -m coverage run -m pytest apps/",
+        "uv run python -m coverage run -m pytest apps/",
+        "coverage run --source apps -m pytest apps/",
+        "uv run --no-extra gpu pytest apps/",
+        'env PYTEST_ADDOPTS="-n 4" uv run pytest pkg/tests',
+        "uv run pytest --random-order-seed 1",
+        "uv run pytest apps/\\\n  -q",
+        "cd apps\\\n  && uv run pytest big",
     ],
 )
 def test_a_heavy_suite_is_refused(verdict, repo, command):
@@ -174,6 +186,12 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         "python -m pip install -U pytest",
         "pip install pytest-xdist",
         "tox -e pytest",
+        "uv run pip install pytest",
+        "env PYTEST_ADDOPTS=-n0 uv run pytest apps/",
+        # Not exported, so pytest never sees it: the package config's serial run stands.
+        'PYTEST_ADDOPTS="-n 4"; uv run pytest pkg/tests',
+        "uv run pytest --lf tests/test_one.py",
+        "(cd pkg && uv run pytest)",
     ],
 )
 def test_a_narrow_queued_or_non_test_command_passes(repo, command):
@@ -193,10 +211,67 @@ def test_the_refusal_names_the_queued_command(reason, repo):
         ("UV_CACHE_DIR=/c/uv uv run pytest apps/ -q", "UV_CACHE_DIR=/c/uv rails lock suite -- uv run pytest apps/ -q"),
         ("cd apps && uv run pytest big", "cd apps && rails lock suite -- uv run pytest big"),
         ("for i in 1 2; do uv run pytest apps/ -q; done", "rails lock suite -- <this pytest command>"),
+        # The heavy statement is queued, not an earlier one its text begins.
+        (
+            "uv run pytest apps/big/tests/test_b1.py && uv run pytest apps/",
+            "uv run pytest apps/big/tests/test_b1.py && rails lock suite -- uv run pytest apps/",
+        ),
+        ("uv run pytest apps/ -n 0; uv run pytest apps/", "uv run pytest apps/ -n 0; rails lock suite -- uv run pytest apps/"),
     ],
 )
 def test_the_suggestion_is_the_whole_command_queued(reason, repo, command, suggested):
     assert f"`{suggested}`" in reason(heavy_pytest, command, cwd=repo)
+
+
+@pytest.mark.parametrize(
+    ("command", "tool"),
+    [
+        ("RAILS_LOCKS_HELD=suite:1 rails check", "Bash"),
+        ("export RAILS_LOCKS_HELD=suite:1; uv run python ci/rails.py check", "Bash"),
+        ("env RAILS_LOCKS_HELD=suite:1 rails check", "Bash"),
+        ('$env:RAILS_LOCKS_HELD = "suite:1"; rails check', "PowerShell"),
+        ("Set-Item Env:RAILS_LOCKS_HELD suite:1", "PowerShell"),
+    ],
+)
+def test_setting_the_held_lock_marker_by_hand_is_refused(verdict, reason, repo, command, tool):
+    """`rails lock` sets RAILS_LOCKS_HELD for the command it runs; set by hand it would let a
+    suite skip the queue."""
+    assert verdict(heavy_pytest, command, tool=tool, cwd=repo) == "deny"
+    assert "RAILS_LOCKS_HELD" in reason(heavy_pytest, command, tool=tool, cwd=repo)
+
+
+@pytest.mark.parametrize(
+    ("command", "tool"),
+    [
+        ("echo $RAILS_LOCKS_HELD", "Bash"),
+        ('git commit -m "rails lock sets RAILS_LOCKS_HELD=suite:<pid>"', "Bash"),
+        ("Write-Output $env:RAILS_LOCKS_HELD", "PowerShell"),
+    ],
+)
+def test_reading_or_quoting_the_marker_passes(verdict, repo, command, tool):
+    assert verdict(heavy_pytest, command, tool=tool, cwd=repo) == "allow"
+
+
+def test_a_c_config_of_any_name_is_read(repo):
+    _write(repo / "ci" / "fast.ini", "[pytest]\naddopts = -n 8\n")
+    assert _judge("uv run pytest -c ci/fast.ini pkg/tests", repo) is not None
+    _write(repo / "ci" / "fast.ini", "[pytest]\naddopts = -q\n")
+    assert _judge("uv run pytest -c ci/fast.ini apps/", repo) is None
+
+
+def test_ignore_matches_from_a_cwd_reached_through_a_link(repo, tmp_path):
+    link = tmp_path / "linked"
+    try:
+        if os.name == "nt":
+            import _winapi
+
+            _winapi.CreateJunction(str(repo), str(link))
+        else:
+            link.symlink_to(repo, target_is_directory=True)
+    except (OSError, AttributeError) as exc:
+        pytest.skip(f"cannot make a directory link here: {exc}")
+    assert _judge("uv run pytest apps/big --ignore=apps/big/tests", link) is None
+    assert _judge("uv run pytest apps/big", link) is not None
 
 
 def test_powershell_spellings(verdict, reason, repo):

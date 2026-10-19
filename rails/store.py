@@ -31,7 +31,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 
 def data_root() -> Path:
@@ -200,12 +200,22 @@ def _held_for_us(name: str, holder_path: Path) -> bool:
     """Whether an ancestor holds ``name`` for this process: the variable names the lock and
     the pid that holds it, and the holder's record carries that pid. A pid that does not
     hold the lock now re-enters nothing."""
+    record: Any = None
     for entry in os.environ.get(HELD_ENV, "").split(","):
         held, _, pid = entry.strip().partition(":")
         if held == name and pid.isdigit():
-            record = read_json(holder_path, None)
-            return isinstance(record, dict) and record.get("pid") == int(pid)
+            if record is None:
+                record = read_json(holder_path, None)
+            if isinstance(record, dict) and record.get("pid") == int(pid):
+                return True  # any entry: a stale one ahead of it must not hide it
     return False
+
+
+def held_env(names: list[str], environ: Mapping[str, str] | None = None) -> str:
+    """``HELD_ENV``'s value for a child of this process while it holds ``names``."""
+    environ = os.environ if environ is None else environ
+    entries = [e for e in environ.get(HELD_ENV, "").split(",") if e.strip()]
+    return ",".join([*entries, *(f"{name}:{os.getpid()}" for name in names)])
 
 
 class LockBusy(Exception):
