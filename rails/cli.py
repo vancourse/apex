@@ -485,8 +485,11 @@ def cmd_lock(argv: list[str]) -> int:
     with store.machine_lock(name, holder, on_wait=note) as waited:
         if waited >= 1:
             print(f"rails lock: took {name!r} after {waited / 60:.0f} min", file=sys.stderr, flush=True)
-        record = store.read_json(store.data_root() / "locks" / f"{name}.holder.json", None)
-        if not (isinstance(record, dict) and record.get("pid") == os.getpid()):
+        holder_path = store.data_root() / "locks" / f"{name}.holder.json"
+        record = store.read_json(holder_path, None)
+        mine = isinstance(record, dict) and record.get("pid") == os.getpid()
+        # Re-entered (nested under a holder that named it): the record is the holder's.
+        if not mine and not store._held_for_us(name, holder_path):
             print(
                 f"rails lock: could not write the holder record for {name!r}; a `rails check` "
                 "or `rails lock` under this command will wait for it instead of re-entering",

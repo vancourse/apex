@@ -142,6 +142,11 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         "uv run pytest --random-order-seed 1",
         "uv run pytest apps/\\\n  -q",
         "cd apps\\\n  && uv run pytest big",
+        "(cd apps && uv run pytest)",
+        "(cd pkg && uv run pytest tests -n 4)",
+        # A subshell's cd ends with it: the later pytest runs at the root.
+        "(cd pkg && echo hi) && uv run pytest apps/ -q",
+        "pushd apps > /dev/null && uv run pytest small/tests && popd > /dev/null && uv run pytest apps/ -q",
     ],
 )
 def test_a_heavy_suite_is_refused(verdict, repo, command):
@@ -192,6 +197,9 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         'PYTEST_ADDOPTS="-n 4"; uv run pytest pkg/tests',
         "uv run pytest --lf tests/test_one.py",
         "(cd pkg && uv run pytest)",
+        # An unknown flag before a directory that is there: the directory is the target.
+        "uv run pytest --runslow tests",
+        "{ cd pkg; uv run pytest; }",
     ],
 )
 def test_a_narrow_queued_or_non_test_command_passes(repo, command):
@@ -231,6 +239,7 @@ def test_the_suggestion_is_the_whole_command_queued(reason, repo, command, sugge
         ("env RAILS_LOCKS_HELD=suite:1 rails check", "Bash"),
         ('$env:RAILS_LOCKS_HELD = "suite:1"; rails check', "PowerShell"),
         ("Set-Item Env:RAILS_LOCKS_HELD suite:1", "PowerShell"),
+        ("[Environment]::SetEnvironmentVariable('RAILS_LOCKS_HELD', 'suite:1')", "PowerShell"),
     ],
 )
 def test_setting_the_held_lock_marker_by_hand_is_refused(verdict, reason, repo, command, tool):
@@ -244,8 +253,13 @@ def test_setting_the_held_lock_marker_by_hand_is_refused(verdict, reason, repo, 
     ("command", "tool"),
     [
         ("echo $RAILS_LOCKS_HELD", "Bash"),
+        ("echo RAILS_LOCKS_HELD=$RAILS_LOCKS_HELD", "Bash"),
+        ("grep -rn RAILS_LOCKS_HELD= rails/", "Bash"),
+        ("RAILS_LOCKS_HELD= rails check", "Bash"),
         ('git commit -m "rails lock sets RAILS_LOCKS_HELD=suite:<pid>"', "Bash"),
         ("Write-Output $env:RAILS_LOCKS_HELD", "PowerShell"),
+        ("$env:RAILS_LOCKS_HELD = $null", "PowerShell"),
+        ("git commit -m '$env:RAILS_LOCKS_HELD = 1'", "PowerShell"),
     ],
 )
 def test_reading_or_quoting_the_marker_passes(verdict, repo, command, tool):

@@ -159,8 +159,9 @@ def test_a_lock_taken_again_under_rails_lock_re_enters_instead_of_waiting(tmp_pa
         "lock", "suite", "--", *RAILS, "lock", "suite", "--", sys.executable, "-c", "import sys; sys.exit(6)",
         cwd=tmp_path,
     )
-    _finish(nested, 30)
+    _, err = _finish(nested, 30)
     assert nested.returncode == 6
+    assert "could not write the holder record" not in err, "a re-entered lock warned falsely"
 
 
 def test_a_stale_entry_ahead_of_the_holder_does_not_hide_it(tmp_path):

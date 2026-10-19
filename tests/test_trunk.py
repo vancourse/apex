@@ -66,6 +66,9 @@ if probe.exists():
     name, home = probe.read_text().split("|")
     sys.path.insert(0, home)
     from rails import store
+    import os
+    # Looked at from outside: a rerun re-enters the lock its runner holds (RAILS_LOCKS_HELD).
+    os.environ.pop("RAILS_LOCKS_HELD", None)
     try:
         with store.machine_lock(name, {}, wait=False):
             seen = "full free"
@@ -104,6 +107,9 @@ if probe.exists():
     name, home = probe.read_text().split("|")
     sys.path.insert(0, home)
     from rails import store
+    import os
+    # Looked at from outside: a rerun re-enters the lock its runner holds (RAILS_LOCKS_HELD).
+    os.environ.pop("RAILS_LOCKS_HELD", None)
     try:
         with store.machine_lock(name, {}, wait=False):
             seen = "rerun free"
@@ -1672,3 +1678,13 @@ def test_an_entry_that_cannot_be_stated_does_not_stop_its_group_pruning(tmp_path
     left = {p.name for p in logs.iterdir()}
     assert stuck.name in left and len(left) == trunk._KEEP_LOG_DIRS
     assert "revert-0.log" not in left and "revert-1.log" not in left
+
+
+def test_the_detached_runner_does_not_inherit_the_locks_its_starter_holds(site, monkeypatch):
+    """`rails lock suite -- rails ship`: the watcher it starts outlives that lock, so it must
+    not carry RAILS_LOCKS_HELD (a later holder reusing the pid would let it re-enter)."""
+    envs: list[dict] = []
+    monkeypatch.setattr(trunk, "_spawn", lambda argv, **kwargs: envs.append(kwargs.get("env") or {}))
+    monkeypatch.setenv("RAILS_LOCKS_HELD", "suite:1234")
+    assert trunk.start_background(site.app, out=io.StringIO()) is True and len(envs) == 1
+    assert "RAILS_LOCKS_HELD" not in envs[0]

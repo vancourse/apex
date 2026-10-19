@@ -33,8 +33,10 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     targets are variables the hook never saw set, and any repo whose lanes name no `suite`
     lock. Pytest inside a quoted `bash -c "..."` is not seen, nor is a lane's own command run
     by hand (`ci/local_lanes.py suite`: no pytest word).
-  - Also refused: a statement that sets `RAILS_LOCKS_HELD` by hand, which would let a suite
-    skip the queue (below).
+  - The working directory is followed through `cd`, `pushd`/`popd`, `uv run --directory` and
+    subshells, whose `cd` ends with them.
+  - Also refused: a statement that sets `RAILS_LOCKS_HELD` to a value by hand, which would let
+    a suite skip the queue (below). Reading, clearing or naming it in an argument is not.
   - Measured by replaying jarvis's agent transcripts through the module: 2026-10-05..18, 104 of
     1,699 distinct pytest commands refused; 30 sampled by hand were all over more than 30 test
     files. The 5 refused with `-k` over a directory are the counted false positives.

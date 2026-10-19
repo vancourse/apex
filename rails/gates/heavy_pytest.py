@@ -38,9 +38,14 @@ to read); a repo whose lanes name no ``suite`` lock (there is no queue to send i
 Quoted spans are data (``rails.shell``): pytest inside ``bash -c "..."`` is not seen, nor
 is ``ci/local_lanes.py suite`` run by hand (no pytest word; morphyxAI/jarvis follow-up).
 
-**Also refused:** a statement that sets ``RAILS_LOCKS_HELD`` itself. `rails lock` sets it for
-the command it runs, so a `rails check` under it re-enters the lock it holds (`rails.store`);
-set by hand, it would let a suite skip the queue.
+**Also refused:** a statement that sets ``RAILS_LOCKS_HELD`` to a value itself (a prefix,
+``export``, ``env``, ``$env:``, ``Set-Item Env:``, ``SetEnvironmentVariable``). `rails lock`
+sets it for the command it runs, so a `rails check` under it re-enters the lock it holds
+(`rails.store`); set by hand, it would let a suite skip the queue. Reading, clearing or
+naming it in an argument is not setting it.
+
+The working directory is followed through ``cd`` / ``Set-Location``, ``pushd`` / ``popd``,
+``uv run --directory`` and subshells, whose ``cd`` ends with them.
 
 The remedy is the queue, not an override: the same command with
 ``rails lock suite --`` in front of the pytest statement, which waits for the running suite
@@ -56,6 +61,7 @@ import re
 import tomllib
 from configparser import ConfigParser
 from pathlib import Path
+from typing import Callable
 
 from rails.gates.destructive import command_name, command_words, pipeline_stages
 from rails.hookio import Deny, Event
@@ -70,7 +76,7 @@ MAX_NARROW_FILES = 30
 
 _PYTEST = ("pytest", "py.test")
 _MENTION = re.compile(r"py\.?test", re.IGNORECASE)
-_CD = ("cd", "set-location", "sl", "pushd", "push-location", "chdir")
+_CD = ("cd", "set-location", "sl", "pushd", "push-location", "chdir")  # popd: judge()
 #: Words that run the rest of the statement as a command: shell keywords and plain prefixes.
 _PASS_THROUGH = frozenset({"do", "then", "else", "elif", "if", "while", "until", "{", "(", "!",
                            "time", "nohup", "exec", "command", "builtin", "sudo", "&"})
@@ -144,10 +150,12 @@ _PS_ADDOPTS = re.compile(
     re.IGNORECASE,
 )
 _LEADING_ASSIGNMENTS = re.compile(r"""^\s*(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+)*""")
-#: A statement that sets RAILS_LOCKS_HELD: an assignment, `export`, `env`, `$env:`, `Set-Item`.
-_FORGE = re.compile(
-    r"(?:^|[\s;&|(])(?:(?:export|set|setx)\s+)?(?:\$env:)?RAILS_LOCKS_HELD\s*="
-    r"|(?:Set|New)-Item\s+(?:-Path\s+)?Env:\\?RAILS_LOCKS_HELD\b",
+#: PowerShell setting RAILS_LOCKS_HELD to a value (`$env:X = v`, `Set-Item Env:X v`), read on
+#: the scrubbed statement; and the .NET call, whose quoted name scrubbing would hide.
+_FORGE_PS_ENV = re.compile(r"\$env:RAILS_LOCKS_HELD\s*=(?!=)", re.IGNORECASE)
+_FORGE_PS_ITEM = re.compile(r"(?:Set|New)-Item\s+(?:-Path\s+)?Env:\\?RAILS_LOCKS_HELD\b", re.IGNORECASE)
+_FORGE_CALL = re.compile(
+    r"SetEnvironmentVariable\s*\(\s*['\"]RAILS_LOCKS_HELD['\"]\s*,\s*(?!\$null\b|''|\"\")",
     re.IGNORECASE,
 )
 
@@ -427,10 +435,12 @@ def _addopts_override(args: list[str]) -> str | None:
     return None
 
 
-def targets(args: list[str]) -> list[str]:
-    """The paths and node ids pytest is given: not options, their values, or redirections."""
+def targets(args: list[str], exists: Callable[[str], bool] | None = None) -> list[str]:
+    """The paths and node ids pytest is given: not options, their values, or redirections.
+    A word after a long option it does not know is that option's value, unless ``exists``
+    says it is on disk (`--runslow tests`)."""
     found: list[str] = []
-    args = [a.strip().rstrip(")").rstrip("}") if a.strip() not in (")", "}") else "" for a in args]
+    args = ["" if a.strip() in (")", "}") else a.strip() for a in args]
     i = 0
     while i < len(args):
         tok = args[i]
@@ -465,6 +475,7 @@ def targets(args: list[str]) -> list[str]:
             and args[i + 1]
             and not args[i + 1].startswith("-")
             and not _looks_like_path(args[i + 1])
+            and not (exists is not None and exists(args[i + 1]))
         ):
             i += 2  # an option it does not know, with a value that is no path
         elif tok.startswith("-"):
@@ -638,6 +649,8 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
     """``(why, start, end)`` for the first heavy pytest run in ``command`` (the offsets of its
     statement), else None."""
     base = cwd
+    subshells: list[Path] = []  # the directory each open `(` will return to
+    pushed: list[Path] = []  # pushd's stack
     variables: dict[str, str] = {}
     persistent = os.environ.get("PYTEST_ADDOPTS")  # what the shell inherits
     for start, end in spans(command, shell):
@@ -649,10 +662,13 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
             assigned = _PS_ASSIGN.match(segment)
             if assigned:
                 variables[assigned.group(1)] = local_path(assigned.group(2), variables)
-        for stage in pipeline_stages(words(segment, shell)):
-            # A `\`-newline continuation is a word of its own (`targets` and `invocation`
-            # strip one that ends a word).
-            stage = [t for t in stage if t.strip()]
+        # A `\`-newline continuation is a word of its own (`targets` and `invocation` strip
+        # one that ends a word).
+        stages = [[t for t in stage if t.strip()] for stage in pipeline_stages(words(segment, shell))]
+        stages = [stage for stage in stages if stage]
+        opened, closed = _subshell_edges(stages, len(subshells))
+        subshells.extend([base] * opened)
+        for stage in stages:
             local: str | None = None
             for tok in stage:
                 assigned = _ASSIGN.match(tok)
@@ -687,7 +703,12 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
             if name in _CD:
                 target = _cd_target(tokens)
                 if target:
+                    if name in ("pushd", "push-location"):
+                        pushed.append(base)
                     base = resolve(base, target, variables)
+                continue
+            if name in ("popd", "pop-location"):
+                base = pushed.pop() if pushed else base
                 continue
             found = invocation(tokens)
             if found is None:
@@ -700,13 +721,43 @@ def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
             why = _heavy(args, here, variables, env_addopts)
             if why:
                 return why, start, end
+        for _ in range(closed):
+            # A subshell's `cd` ends with it: later statements run where it started.
+            base = subshells.pop()
     return None
+
+
+def _subshell_edges(stages: list[list[str]], open_before: int) -> tuple[int, int]:
+    """How many subshells this statement opens (`(` leading its first word) and closes (`)`
+    ending its last word, never more than are open), with those parens stripped in place."""
+    opened = closed = 0
+    first = stages[0] if stages else []
+    while first and first[0].startswith("("):
+        word = first[0]
+        bare = word.lstrip("(")
+        opened += len(word) - len(bare)
+        if bare:
+            first[0] = bare
+            break
+        first.pop(0)
+    last = stages[-1] if stages else []
+    while last and last[-1].endswith(")") and open_before + opened > closed:
+        word = last[-1]
+        bare = word.rstrip(")")
+        count = min(len(word) - len(bare), open_before + opened - closed)
+        closed += count
+        word = word[: len(word) - count]
+        if word:
+            last[-1] = word
+            break
+        last.pop()
+    return opened, closed
 
 
 def _heavy(args: list[str], here: Path, variables: dict[str, str], env_addopts: str | None) -> str | None:
     if not suite_lock_declared(here):
         return None
-    raw_targets = targets(args)
+    raw_targets = targets(args, lambda word: resolve(here, word, variables).exists())
     resolved = [t for t in raw_targets if not _unresolved(local_path(t.split("::", 1)[0], variables))]
     if raw_targets and not resolved:
         return None  # only targets it cannot read: not judged
@@ -770,11 +821,39 @@ def queued(command: str, start: int, end: int, shell: str) -> str:
     return placeholder
 
 
+def _sets_marker(word: str) -> bool:
+    found = _ASSIGN.match(word)
+    return bool(found and found.group(1) == "RAILS_LOCKS_HELD" and found.group(2).strip())
+
+
 def forges_held_lock(command: str, shell: str) -> bool:
-    """Whether a statement sets `RAILS_LOCKS_HELD` itself (quoted text is data)."""
+    """Whether a statement sets `RAILS_LOCKS_HELD` to a value itself: as a command's prefix,
+    through `export` / `env`, `$env:`, `Set-Item Env:` or `SetEnvironmentVariable`. Reading,
+    clearing, or naming it in an argument or quoted text is not setting it."""
     if "RAILS_LOCKS_HELD" not in command:
         return False
-    return any(_FORGE.search(scrubbed) for _, scrubbed in scrubbed_segments(command, shell))
+    if _FORGE_CALL.search(command):
+        return True
+    for original, scrubbed in scrubbed_segments(command, shell):
+        if shell == "powershell":
+            if _FORGE_PS_ITEM.search(scrubbed):
+                return True
+            # The name is code on the scrubbed text; its value, often quoted, is read whole.
+            for found in _FORGE_PS_ENV.finditer(scrubbed):
+                value = original[found.end() :].strip()
+                if value and not value.lower().startswith("$null") and not value.startswith(("''", '""')):
+                    return True
+        for stage in pipeline_stages(words(original, shell)):
+            stage = [t for t in stage if t.strip()]
+            i = 0
+            while i < len(stage) and _ASSIGN.match(stage[i]):
+                if _sets_marker(stage[i]):
+                    return True
+                i += 1
+            if i < len(stage) and command_name(stage[i]) in ("export", "env", "set", "setx"):
+                if any(_sets_marker(word) for word in stage[i + 1 :] if _ASSIGN.match(word)):
+                    return True
+    return False
 
 
 def check(evt: Event):
