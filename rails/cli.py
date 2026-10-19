@@ -33,7 +33,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -347,19 +346,60 @@ def cmd_receipt(argv: list[str]) -> int:
     return done.returncode
 
 
-#: `rails <cmd>` takes its lanes' locks itself; under `rails lock` of the same lock it would
-#: wait forever for its own parent.
-_SELF_LOCKING = re.compile(r"(^|[/\\])rails(\.py)?$", re.IGNORECASE)
-#: Words before the program a command runs: `uv run python ci/rails.py` runs ci/rails.py.
-_LAUNCHERS = frozenset({"uv", "uvx", "run", "python", "python3", "py", "-m", "&"})
+def _tie_to_this_process(proc: subprocess.Popen) -> int | None:
+    """Windows: put ``proc`` in a job object that the OS closes when this process exits,
+    however it exits, killing the command and everything it started. The OS also frees the
+    machine lock then, and a suite must not run on without it. Returns the job's handle,
+    kept open for this process's life; None elsewhere or when Windows refuses. A process
+    the command starts before the assignment (microseconds after it starts) is outside it.
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
 
+    class _Basic(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
 
-def _program(command: list[str]) -> str:
-    for word in command:
-        name = word.replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
-        if name not in _LAUNCHERS and not word.startswith("--"):
-            return word
-    return ""
+    class _Extended(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _Basic),
+            ("IoInfo", ctypes.c_ulonglong * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+    ]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = _Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if kernel32.SetInformationJobObject(
+        job, 9, ctypes.byref(info), ctypes.sizeof(info)  # JobObjectExtendedLimitInformation
+    ) and kernel32.AssignProcessToJobObject(job, int(proc._handle)):  # type: ignore[attr-defined]
+        return job
+    kernel32.CloseHandle(job)
+    return None
 
 
 def cmd_lock(argv: list[str]) -> int:
@@ -368,8 +408,11 @@ def cmd_lock(argv: list[str]) -> int:
     lanes instead of loading the box beside them (the `heavy_pytest` gate's remedy).
 
     The wait has no timeout and is printed, with who holds the lock, to stderr; the
-    command's own output and exit code are passed through. Ctrl+C stops the command's
-    whole process tree before the lock is released.
+    command's own output and exit code are passed through. The command runs with
+    ``RAILS_LOCKS_HELD`` naming the lock and this process, so a `rails check` or `rails lock`
+    under it re-enters the lock instead of waiting for its own parent. It cannot outlive the
+    lock: Ctrl+C stops its process tree, and on Windows a job object kills the tree when
+    this process dies any other way (the OS frees the lock then too).
     """
     from rails import check
     from rails.lanes import valid_lock_name
@@ -386,12 +429,6 @@ def cmd_lock(argv: list[str]) -> int:
         return 2
     if not valid_lock_name(name):
         print(f"rails lock: {name!r} is not a lock name (a plain word, as in `lock = \"suite\"`)")
-        return 2
-    if _SELF_LOCKING.search(_program(command)):
-        print(
-            "rails lock: `rails` takes its lanes' locks itself, and under this lock it would "
-            "wait for its own parent forever. Run it directly."
-        )
         return 2
     repo = store.find_repo(Path.cwd())
     sha = ""
@@ -428,13 +465,22 @@ def cmd_lock(argv: list[str]) -> int:
     with store.machine_lock(name, holder, on_wait=note) as waited:
         if waited >= 1:
             print(f"rails lock: took {name!r} after {waited / 60:.0f} min", file=sys.stderr, flush=True)
+        child_env = dict(os.environ)
+        held = [e for e in child_env.get(store.HELD_ENV, "").split(",") if e.strip()]
+        child_env[store.HELD_ENV] = ",".join([*held, f"{name}:{os.getpid()}"])
         try:
-            proc = subprocess.Popen(check._resolve(command))
+            proc = subprocess.Popen(check._resolve(command), env=child_env)
         except OSError as exc:
             print(f"rails lock: could not start {command[0]!r}: {exc}", file=sys.stderr)
             return 127
+        job = _tie_to_this_process(proc)  # noqa: F841 - held open until this process exits
         try:
-            return proc.wait()
+            while True:
+                # In slices: Windows does not interrupt an infinite wait for Ctrl+C.
+                try:
+                    return proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    continue
         except BaseException:
             # The lock goes when this block exits: whatever the command started must not
             # run on without it.

@@ -1,8 +1,9 @@
 """heavy_pytest: an agent's suite goes through the `suite` lock, a narrow run does not.
 
-Both edges are pinned. Too loud queues a two-file check behind a half-hour suite; too mute
-lets a sixteen-worker run start beside `rails check` again, which is what ran Windows out
-of commit on 2026-10-18.
+Both edges are pinned. Too loud queues a two-file check (or a `pip install pytest`) behind
+a half-hour suite; too mute lets a sixteen-worker run start beside `rails check` again,
+which is what ran Windows out of commit on 2026-10-18. The allowed cases call `judge`
+directly: `check` fails open on an exception, so an allow through it proves nothing.
 """
 
 from __future__ import annotations
@@ -37,14 +38,20 @@ ROOT_CONFIG = '[tool.pytest.ini_options]\naddopts = "--import-mode=importlib -n 
 PACKAGE_CONFIG = '[project]\nname = "pkg"\n[tool.pytest.ini_options]\naddopts = "-q"\n'
 
 
+@pytest.fixture(autouse=True)
+def no_inherited_addopts(monkeypatch):
+    """The gate reads PYTEST_ADDOPTS from its own environment, as the shell inherits it."""
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+
+
 def _write(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _make_repo(top: Path, lanes: str | None = SUITE_LANES) -> Path:
-    """A repo shaped like jarvis: root addopts `-n auto`, a 33-file `apps/`, a package
-    with its own config (so it runs serially), and the suite lanes under a lock."""
+    """A repo shaped like jarvis: root addopts `-n auto`, a 33-file `apps/`, a package with
+    its own config (so it runs serially), and the suite lanes under a lock."""
     top.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", str(top)], check=True, timeout=60)
     _write(top / "pyproject.toml", ROOT_CONFIG)
@@ -80,29 +87,49 @@ def _msys(path: Path) -> str:
     return f"/{text[0].lower()}{text[2:]}" if os.name == "nt" and text[1] == ":" else text
 
 
+def _judge(command: str, cwd: Path, shell: str = "bash"):
+    return heavy_pytest.judge(command, shell, cwd)
+
+
 @pytest.mark.parametrize(
     "command",
     [
         "uv run pytest apps/ -q",
         "uv run pytest -q",
         "pytest apps/big/tests",
+        "py.test apps/",
         "python -m pytest apps",
+        "python -X utf8 -m pytest apps",
         ".venv/Scripts/python.exe -m pytest apps/big",
         "uv run --locked pytest apps/big/tests -x",
+        "uv run --with pytest-timeout pytest apps/",
+        "uv run --with pytest python -m pytest -q",
+        "uvx pytest apps/",
+        "coverage run -m pytest apps/",
         "uv run pytest -n 4 apps/big/tests",
         "uv run pytest apps/big/tests -n4",
         "uv run pytest --numprocesses=6 apps/big/tests",
         "uv run pytest pkg/tests -n 8",
         'PYTEST_ADDOPTS="-n 4" uv run pytest pkg/tests',
         'export PYTEST_ADDOPTS="-n 4"; uv run pytest pkg/tests -q',
+        "PYTEST_ADDOPTS=-n0 uv run pytest tests/test_one.py; uv run pytest apps/",
         'uv run pytest pkg/tests -o addopts="-n 4"',
         "cd apps && uv run pytest big",
-        "uv run pytest 'apps/*/tests'",
+        "uv run pytest apps/*/tests",
         "uv run pytest apps/small/tests apps/big/tests",
         "timeout 1800 uv run pytest apps/ -q > out.txt 2>&1",
+        "uv run pytest -q > out.txt 2>&1 &",
+        "uv run pytest &",
+        "nohup uv run pytest apps/ -q &>> log.txt &",
+        "DATABASE_URL=postgresql://x \\\n  uv run pytest apps/ -q",
+        "uv run pytest \\\n  -q",
+        'A=1 \\\n  PYTEST_ADDOPTS="-n 4" uv run pytest pkg/tests',
+        "for i in 1 2; do uv run pytest apps/ -q; done",
         'uv run pytest -k "totals" apps/',
         "uv run python ci/rails.py lock docker -- uv run pytest apps/",
+        "rails lock docker -- uv run pytest apps/",
         "uv run pytest apps/ -n 0 -n 4",
+        "uv run pytest apps/ --ignore=apps/small",
     ],
 )
 def test_a_heavy_suite_is_refused(verdict, repo, command):
@@ -114,9 +141,12 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
     [
         "uv run pytest tests/test_one.py",
         "uv run pytest tests/test_one.py::test_x -n 4",
+        " ".join(["uv run pytest"] + [f"apps/big/tests/test_b1.py::test_{n}" for n in range(40)]),
         "uv run pytest apps/small/tests",
         "uv run pytest apps/small",
         "uv run pytest apps/big/tests/test_b1.py apps/big/tests/test_b2.py apps/big/tests/test_b3.py",
+        "uv run pytest apps/big --ignore=apps/big/tests",
+        "uv run pytest -d tests/test_one.py",
         "uv run pytest apps/ -n 0",
         "uv run pytest apps/ -n0",
         "uv run pytest apps/ -n 1",
@@ -124,19 +154,30 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         "uv run pytest apps/ -n 4 -n 0",
         "uv run pytest pkg/tests",
         "cd pkg && uv run pytest",
+        'PYTEST_ADDOPTS="-n 4" uv run pytest tests/test_one.py; uv run pytest pkg/tests',
         "uv run pytest apps/ --co -q",
         "uv run pytest --version",
         'uv run pytest apps/ -o addopts=""',
+        "uv run pytest $CHANGED_TESTS",
         "rails lock suite -- uv run pytest apps/ -q",
         "uv run python ci/rails.py lock suite -- uv run pytest apps/ -q",
         "docker compose exec app python -m pytest -n 4",
+        "timeout 600 docker compose exec app pytest -n 4",
         'git commit -m "uv run pytest apps/ -q took Docker down"',
         "cat pytest.ini",
         "uv run python ci/local_lanes.py suite",
+        "uv pip install pytest",
+        "uv pip show pytest",
+        "uv add --dev pytest",
+        "uv lock --upgrade-package pytest",
+        "uv tree --package pytest",
+        "python -m pip install -U pytest",
+        "pip install pytest-xdist",
+        "tox -e pytest",
     ],
 )
-def test_a_narrow_or_queued_run_passes(verdict, repo, command):
-    assert verdict(heavy_pytest, command, cwd=repo) == "allow"
+def test_a_narrow_queued_or_non_test_command_passes(repo, command):
+    assert _judge(command, repo) is None
 
 
 def test_the_refusal_names_the_queued_command(reason, repo):
@@ -146,49 +187,87 @@ def test_the_refusal_names_the_queued_command(reason, repo):
     assert "-n 0" in text
 
 
-def test_a_redirect_is_not_a_target(verdict, repo, tmp_path):
-    """A redirect's file is the shell's: read as a target that exists, it would move pytest's
-    config search off the repo and let a sixteen-worker run through."""
-    log = tmp_path / "logs" / "out.txt"
-    _write(log, "an earlier run's output")
-    command = f"uv run pytest apps/ -q > {_posix(log)} 2>&1"
-    assert verdict(heavy_pytest, command, cwd=repo) == "deny"
-    assert verdict(heavy_pytest, f"uv run pytest apps/small/tests 2>&1 > {_posix(log)}", cwd=repo) == "allow"
+@pytest.mark.parametrize(
+    ("command", "suggested"),
+    [
+        ("UV_CACHE_DIR=/c/uv uv run pytest apps/ -q", "UV_CACHE_DIR=/c/uv rails lock suite -- uv run pytest apps/ -q"),
+        ("cd apps && uv run pytest big", "cd apps && rails lock suite -- uv run pytest big"),
+        ("for i in 1 2; do uv run pytest apps/ -q; done", "rails lock suite -- <this pytest command>"),
+    ],
+)
+def test_the_suggestion_is_the_whole_command_queued(reason, repo, command, suggested):
+    assert f"`{suggested}`" in reason(heavy_pytest, command, cwd=repo)
 
 
 def test_powershell_spellings(verdict, reason, repo):
     assert verdict(heavy_pytest, "uv run pytest apps/ -q", tool="PowerShell", cwd=repo) == "deny"
+    assert verdict(heavy_pytest, "uv run pytest -q *> out.txt", tool="PowerShell", cwd=repo) == "deny"
     assert (
         verdict(heavy_pytest, '$env:PYTEST_ADDOPTS="-n 4"; uv run pytest pkg/tests', tool="PowerShell", cwd=repo)
         == "deny"
     )
-    assert verdict(heavy_pytest, "uv run pytest apps/ -n 0", tool="PowerShell", cwd=repo) == "allow"
+    assert verdict(heavy_pytest, "Push-Location apps; uv run pytest big", tool="PowerShell", cwd=repo) == "deny"
+    assert _judge("uv run pytest apps/ -n 0", repo, "powershell") is None
     text = reason(heavy_pytest, "Set-Location apps; uv run pytest big -q", tool="PowerShell", cwd=repo)
-    assert "rails lock suite -- uv run pytest big -q" in text
+    assert "`Set-Location apps; rails lock suite -- uv run pytest big -q`" in text, text
 
 
-def test_a_cd_by_absolute_path_and_variable_is_followed(verdict, repo, tmp_path):
+def test_the_inherited_environment_counts(repo, monkeypatch):
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:xdist")
+    assert _judge("uv run pytest apps/", repo) is None
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n 8")
+    assert _judge("uv run pytest pkg/tests", repo) is not None
+    assert _judge("unset PYTEST_ADDOPTS; uv run pytest pkg/tests", repo) is None
+
+
+def test_a_cd_by_absolute_path_variable_or_home_is_followed(verdict, repo, tmp_path, monkeypatch):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     assert verdict(heavy_pytest, f"cd {_msys(repo)} && uv run pytest apps/", cwd=elsewhere) == "deny"
     assert verdict(heavy_pytest, f'WT={_msys(repo)}\ncd "$WT" && uv run pytest apps/', cwd=elsewhere) == "deny"
     assert verdict(heavy_pytest, f"uv run --directory {_posix(repo)} pytest apps/", cwd=elsewhere) == "deny"
-    assert verdict(heavy_pytest, "uv run pytest apps/", cwd=elsewhere) == "allow"
+    monkeypatch.setenv("HOME", str(repo.parent))
+    assert verdict(heavy_pytest, f"cd $HOME/{repo.name} && uv run pytest apps/", cwd=elsewhere) == "deny"
+    assert _judge("uv run pytest apps/", elsewhere) is None
 
 
-def test_a_repo_that_locks_no_suite_is_left_alone(verdict, tmp_path):
+def test_a_redirect_is_not_a_target(verdict, repo, tmp_path):
+    """A redirect's file is the shell's: read as a target that exists, it would move pytest's
+    config search off the repo and let a sixteen-worker run through."""
+    log = tmp_path / "logs" / "out.txt"
+    _write(log, "an earlier run's output")
+    assert verdict(heavy_pytest, f"uv run pytest apps/ -q > {_posix(log)} 2>&1", cwd=repo) == "deny"
+    assert _judge(f"uv run pytest apps/small/tests 2>&1 > {_posix(log)}", repo) is None
+
+
+def test_pytest_9_config_files_are_read(repo):
+    """jarvis pins pytest 9.1.1, whose search adds pytest.toml / .pytest.toml and a native
+    [tool.pytest] table ahead of the ini forms."""
+    _write(repo / "pkg" / "pytest.toml", '[pytest]\naddopts = ["-n", "auto"]\n')
+    assert _judge("uv run pytest pkg/tests", repo) is not None
+    _write(repo / "pkg" / "pytest.toml", "[pytest]\n")  # always the config, even with no addopts
+    assert _judge("uv run pytest pkg/tests", repo) is None
+    (repo / "pkg" / "pytest.toml").unlink()
+    _write(repo / "pkg" / "pyproject.toml", '[project]\nname = "pkg"\n[tool.pytest]\naddopts = ["-n", "4"]\n')
+    assert _judge("uv run pytest pkg/tests", repo) is not None
+    # Read as pkg's own config, not passed over for the root's `-n auto`.
+    _write(repo / "pkg" / "pyproject.toml", '[project]\nname = "pkg"\n[tool.pytest]\naddopts = ["-q"]\n')
+    assert _judge("uv run pytest pkg/tests", repo) is None
+
+
+def test_a_repo_that_locks_no_suite_is_left_alone(tmp_path):
     unlocked = _make_repo(tmp_path / "unlocked", lanes=UNLOCKED_LANES)
     bare = _make_repo(tmp_path / "bare", lanes=None)
     for top in (unlocked, bare):
-        assert verdict(heavy_pytest, "uv run pytest apps/ -q", cwd=top) == "allow"
-        assert verdict(heavy_pytest, "uv run pytest -n 8", cwd=top) == "allow"
+        assert _judge("uv run pytest apps/ -q", top) is None
+        assert _judge("uv run pytest -n 8", top) is None
 
 
 def test_a_broken_config_or_cwd_fails_open(verdict, repo, tmp_path):
-    _write(repo / "pyproject.toml", "[tool.pytest.ini_options\naddopts = = broken")
-    assert verdict(heavy_pytest, "uv run pytest apps/", cwd=repo) == "allow"
+    _write(repo / "pyproject.toml", "[tool.pytest.ini_options]\naddopts = = broken\n")
+    assert _judge("uv run pytest apps/", repo) is None
     assert verdict(heavy_pytest, "uv run pytest apps/ -n 4", cwd=repo) == "deny"
-    assert verdict(heavy_pytest, "uv run pytest apps/ -n 4", cwd=tmp_path / "missing") == "allow"
+    assert _judge("uv run pytest apps/ -n 4", tmp_path / "missing") is None
 
 
 def test_the_planted_suite_is_refused_by_the_real_dispatcher(repo):
