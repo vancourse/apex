@@ -1,8 +1,9 @@
-"""heavy_pytest: an agent's suite goes through the `suite` lock, a narrow run does not.
+"""heavy_pytest: an agent's parallel pytest goes through the `suite` lock; a serial run does not.
 
-Both edges are pinned. Too loud queues a two-file check (or a `pip install pytest`) behind
-a half-hour suite; too mute lets a sixteen-worker run start beside `rails check` again,
-which is what ran Windows out of commit on 2026-10-18. The allowed cases call `judge`
+Both edges are pinned. Too loud queues a serial check (or a `pip install pytest`) behind a
+whole suite; too mute lets a sixteen-worker run start beside `rails check` again, which is
+what ran Windows out of commit on 2026-10-18. Since 2026-10-20 (operator: no two suites
+ever share the box) a parallel run of any size counts. The allowed cases call `judge`
 directly: `check` fails open on an exception, so an allow through it proves nothing.
 """
 
@@ -157,6 +158,19 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         "time (cd apps && uv run pytest big)",
         "if (cd apps && uv run pytest big); then echo ok; fi",
         "(cd pkg && uv run pytest tests -n 4)&",
+        # Any parallel run is a suite, however few its files (operator 2026-10-20):
+        # a two-file run at -n auto is sixteen workers, each with a database.
+        "uv run pytest tests/test_one.py",
+        "uv run pytest tests/test_one.py::test_x -n 4",
+        " ".join(["uv run pytest"] + [f"apps/big/tests/test_b1.py::test_{n}" for n in range(40)]),
+        "uv run pytest apps/small/tests",
+        "uv run pytest apps/small",
+        "uv run pytest apps/big/tests/test_b1.py apps/big/tests/test_b2.py apps/big/tests/test_b3.py",
+        "uv run pytest apps/big --ignore=apps/big/tests",
+        "uv run pytest -d tests/test_one.py",
+        'PYTEST_ADDOPTS="-n 4" uv run pytest tests/test_one.py; uv run pytest pkg/tests',
+        "uv run pytest --lf tests/test_one.py",
+        "uv run pytest --runslow tests",
     ],
 )
 def test_a_heavy_suite_is_refused(verdict, repo, command):
@@ -166,14 +180,6 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
 @pytest.mark.parametrize(
     "command",
     [
-        "uv run pytest tests/test_one.py",
-        "uv run pytest tests/test_one.py::test_x -n 4",
-        " ".join(["uv run pytest"] + [f"apps/big/tests/test_b1.py::test_{n}" for n in range(40)]),
-        "uv run pytest apps/small/tests",
-        "uv run pytest apps/small",
-        "uv run pytest apps/big/tests/test_b1.py apps/big/tests/test_b2.py apps/big/tests/test_b3.py",
-        "uv run pytest apps/big --ignore=apps/big/tests",
-        "uv run pytest -d tests/test_one.py",
         "uv run pytest apps/ -n 0",
         "uv run pytest apps/ -n0",
         "uv run pytest apps/ -n 1",
@@ -181,7 +187,6 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         "uv run pytest apps/ -n 4 -n 0",
         "uv run pytest pkg/tests",
         "cd pkg && uv run pytest",
-        'PYTEST_ADDOPTS="-n 4" uv run pytest tests/test_one.py; uv run pytest pkg/tests',
         "uv run pytest apps/ --co -q",
         "uv run pytest --version",
         'uv run pytest apps/ -o addopts=""',
@@ -205,10 +210,7 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         "env PYTEST_ADDOPTS=-n0 uv run pytest apps/",
         # Not exported, so pytest never sees it: the package config's serial run stands.
         'PYTEST_ADDOPTS="-n 4"; uv run pytest pkg/tests',
-        "uv run pytest --lf tests/test_one.py",
         "(cd pkg && uv run pytest)",
-        # An unknown flag before a directory that is there: the directory is the target.
-        "uv run pytest --runslow tests",
         "{ cd pkg; uv run pytest; }",
         # The top, then the rest: pkg's own serial config.
         'cd "$(git rev-parse --show-toplevel)/pkg" && uv run pytest',
@@ -235,8 +237,8 @@ def test_the_refusal_names_the_queued_command(reason, repo):
         ("for i in 1 2; do uv run pytest apps/ -q; done", "rails lock suite -- <this pytest command>"),
         # The heavy statement is queued, not an earlier one its text begins.
         (
-            "uv run pytest apps/big/tests/test_b1.py && uv run pytest apps/",
-            "uv run pytest apps/big/tests/test_b1.py && rails lock suite -- uv run pytest apps/",
+            "uv run pytest apps/big/tests/test_b1.py -n 0 && uv run pytest apps/",
+            "uv run pytest apps/big/tests/test_b1.py -n 0 && rails lock suite -- uv run pytest apps/",
         ),
         ("uv run pytest apps/ -n 0; uv run pytest apps/", "uv run pytest apps/ -n 0; rails lock suite -- uv run pytest apps/"),
     ],
@@ -293,7 +295,7 @@ def test_a_c_config_of_any_name_is_read(repo):
     assert _judge("uv run pytest -c ci/fast.ini apps/", repo) is None
 
 
-def test_ignore_matches_from_a_cwd_reached_through_a_link(repo, tmp_path):
+def test_a_cwd_reached_through_a_link_still_finds_the_config(repo, tmp_path):
     link = tmp_path / "linked"
     try:
         if os.name == "nt":
@@ -304,7 +306,7 @@ def test_ignore_matches_from_a_cwd_reached_through_a_link(repo, tmp_path):
             link.symlink_to(repo, target_is_directory=True)
     except (OSError, AttributeError) as exc:
         pytest.skip(f"cannot make a directory link here: {exc}")
-    assert _judge("uv run pytest apps/big --ignore=apps/big/tests", link) is None
+    assert _judge("uv run pytest apps/big -n 0", link) is None
     assert _judge("uv run pytest apps/big", link) is not None
 
 
@@ -346,7 +348,7 @@ def test_a_redirect_is_not_a_target(verdict, repo, tmp_path):
     log = tmp_path / "logs" / "out.txt"
     _write(log, "an earlier run's output")
     assert verdict(heavy_pytest, f"uv run pytest apps/ -q > {_posix(log)} 2>&1", cwd=repo) == "deny"
-    assert _judge(f"uv run pytest apps/small/tests 2>&1 > {_posix(log)}", repo) is None
+    assert _judge(f"uv run pytest pkg/tests 2>&1 > {_posix(log)}", repo) is None
 
 
 def test_pytest_9_config_files_are_read(repo):

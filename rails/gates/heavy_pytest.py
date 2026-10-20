@@ -9,8 +9,10 @@ commit limit (errno 1455). The replay behind the registry row (`hooks/gates.toml
 measurement: in that repo's agent transcripts for 2026-10-05..18, 104 of 1,699 distinct
 pytest commands were runs this gate refuses.
 
-**Heavy** = more than one xdist worker over more than ``MAX_NARROW_FILES`` distinct test
-files, or over the whole tree (no target). pytest is recognised in command position only:
+**Heavy** = more than one xdist worker, over any number of test files: each worker is a
+process with a database of its own, so even a two-file run at ``-n auto`` is sixteen of
+them, and no two such runs may share the box (operator 2026-10-20; until then up to 30
+files ran unqueued). pytest is recognised in command position only:
 ``pytest``, ``python -m pytest``, or the command after ``uv run`` / ``uvx`` / ``poetry run``
 / ``coverage run -m`` and the like, behind ``timeout`` / ``nice`` / ``env`` / ``time`` and
 loop keywords; never as a package name (``uv pip install pytest``). The worker count is the
@@ -30,8 +32,8 @@ package's own config and runs serially. A directory counts its ``test_*.py`` /
 on disk counts one; a target the hook cannot resolve (``$VAR`` it never saw assigned)
 counts nothing, and a run whose only targets are unresolved is not judged.
 
-**Not refused:** up to ``MAX_NARROW_FILES`` test files (parallel runs of 2-10 files took a
-median 15-27 s in those transcripts); ``-n 0``, ``-n 1``, ``-p no:xdist``; ``--co`` and the
+**Not refused:** a serial run (``-n 0``, ``-n 1``, ``-p no:xdist``, or a config with no
+``-n``), of any size; ``--co`` and the
 other options that run no test; a run under ``rails lock suite``; pytest in a container
 (``docker``, ``podman``, ``kubectl``, ``wsl``: its config and its tree are not this hook's
 to read); a repo whose lanes name no ``suite`` lock (there is no queue to send it to).
@@ -71,8 +73,6 @@ NAME = "heavy_pytest"
 
 #: The lock `rails check` takes for a repo's suite lanes, and the one this gate queues on.
 LOCK = "suite"
-#: More distinct test files than this, run by more than one worker, is a suite.
-MAX_NARROW_FILES = 30
 
 _PYTEST = ("pytest", "py.test")
 _MENTION = re.compile(r"py\.?test", re.IGNORECASE)
@@ -131,9 +131,6 @@ _NO_RUN = frozenset({"--co", "--collect-only", "--collectonly", "--version", "-V
 #: pytest 9's config file names, in its search order (`_pytest/config/findpaths.py`).
 _CONFIG_NAMES = ("pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "pyproject.toml",
                  "tox.ini", "setup.cfg")
-#: pytest's default `norecursedirs`, as far as a test tree holds them (dot dirs separately).
-_SKIP_DIRS = frozenset({"node_modules", "venv", "build", "dist", "CVS", "_darcs", "{arch}",
-                        "__pycache__", "site-packages"})
 
 #: `2>&1`, `*>&1`: the shell's, alone. `>`, `2>>`, `*>`, `&>`, `<`: a file follows.
 #: `>out`, `2>err`, `&>>log`: the file is joined on.
@@ -567,51 +564,6 @@ def _addopts_words(table: dict) -> list[str]:
     return str(value).split()
 
 
-def _norm(path: Path) -> str:
-    try:
-        path = path.resolve()
-    except OSError:
-        pass
-    return os.path.normcase(str(path))
-
-
-def count_test_files(paths: list[Path], limit: int, ignored: list[Path] | None = None) -> int:
-    """How many distinct test files the targets name, counting no further than ``limit + 1``."""
-    skip = {_norm(p) for p in ignored or []}
-
-    def is_ignored(text: str) -> bool:
-        return any(text == s or text.startswith(s.rstrip("\\/") + os.sep) for s in skip)
-
-    files: set[str] = set()
-    for path in paths:
-        norm = _norm(path)
-        if is_ignored(norm):
-            continue
-        if str(path).endswith(".py") or path.is_file():
-            files.add(norm)
-        elif path.is_dir():
-            # Walked resolved, as `--ignore` paths are: a cwd reached through a junction or a
-            # symlink must still match them.
-            for root, dirs, names in os.walk(path.resolve()):
-                dirs[:] = [
-                    d for d in dirs
-                    if d not in _SKIP_DIRS and not d.startswith(".")
-                    and not is_ignored(os.path.normcase(os.path.join(root, d)))
-                ]
-                for f in names:
-                    if f.endswith(".py") and (f.startswith("test_") or f.endswith("_test.py")):
-                        full = os.path.normcase(os.path.join(root, f))
-                        if not is_ignored(full):
-                            files.add(full)
-                if len(files) > limit:
-                    return len(files)
-        else:
-            files.add(norm)  # not on disk: one unknown target, which pytest refuses anyway
-        if len(files) > limit:
-            return len(files)
-    return len(files)
-
-
 def suite_lock_declared(where: Path) -> bool:
     """Whether the repo at ``where`` runs its suite lanes under the `suite` lock."""
     from rails import lanes, store
@@ -835,10 +787,6 @@ def _heavy(args: list[str], here: Path, variables: dict[str, str], env_addopts: 
                 source = f"from addopts in {found[0].name}"
     if not workers or workers <= 1:
         return None
-    if paths:
-        ignored = [resolve(here, v, variables) for v in _option_values(args, "--ignore")]
-        if count_test_files(paths, MAX_NARROW_FILES, ignored) <= MAX_NARROW_FILES:
-            return None
     scope = " ".join(raw_targets) if raw_targets else "the whole tree"
     return f"{workers} workers ({source}) over {scope[:120]}"
 
@@ -945,6 +893,5 @@ def check(evt: Event):
         f"`rails check` runs suites one at a time (lock `{LOCK}`), and a suite started beside "
         "them is how four ran at once and Windows hit its commit limit (2026-10-18). Queue it: "
         f"`{queued(command, start, end, shell)}` (run it in the background; it waits for the "
-        f"suite that is running). Or make it light: name up to {MAX_NARROW_FILES} test files, "
-        "or add `-n 0`."
+        "suite that is running). Or run it serially: add `-n 0`."
     )
