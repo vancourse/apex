@@ -24,8 +24,9 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **Trusted** means all of:
     - when the PR was armed by hand, the arm named this record's number. `arm_review` stamps
       `armed` onto whatever record exists, so a PR armed by hand after a re-cut rides an older
-      record; it now also writes the number the command named as `armed_pr` (none for a branch
-      name or a GraphQL arm, and then the record is never settled);
+      record; it now also writes the number the command named as `armed_pr` (none for no
+      argument, a branch name or a GraphQL arm, and then the record is never settled; a record
+      stamped by 1.6.0's `arm_review` has no `armed_pr` and is trusted like `rails ship`'s);
     - the record still says OPEN;
     - it names the branch the worktree is on (a record with no branch: the current one);
     - no open PR has that branch as its head.
@@ -34,10 +35,11 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **OPEN, not found, or no answer** (no `gh`, a timeout, an error): it blocks as on 1.6.0.
   - **No lookup** on a turn with nothing to block. In shadow mode the lookup only decides
     whether a would-block is logged; `pr.json` and the items are not written.
-  - `pr.json` is rewritten only if, re-read under the store's lock after the lookup, it still
-    names the same armed PR. If a `rails ship` or an arm by hand recorded another PR meanwhile,
-    nothing is written and the turn blocks. `rails ship` writes without the lock, so this
-    narrows that race rather than closing it.
+  - `pr.json` is rewritten only if, re-read under the store's lock after the lookup, it is the
+    record that was looked up. Anything written meanwhile (a `rails ship`, an arm by hand, a
+    monitor bound) means nothing is written and the turn blocks; the next Stop looks again.
+    `arm_review` now stamps under the same lock; `rails ship` writes without it, so for a ship
+    this narrows the race rather than closing it.
   - Once `pr.json` says MERGED or CLOSED, `second_pr` lets a new `gh pr create` through, and the
     pre-push hook stops trusting the record and asks GitHub. A timeout or a failing `gh` still
     counts as open; with no `gh` on PATH, or output it cannot parse, it does not. Both still

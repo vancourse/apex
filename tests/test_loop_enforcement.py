@@ -454,6 +454,9 @@ def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, gi
         ("gh pr merge https://github.com/o/r/pull/14 --auto", 14),
         ("gh pr merge --auto --squash", None),
         ("gh pr merge feature-branch --auto", None),
+        ("gh pr merge --subject 12 --auto 15", 15),
+        ("gh pr merge -R o/r 16 --auto", 16),
+        ("gh pr merge --body=x 17 --auto", 17),
         ("gh api graphql -f query='mutation { enablePullRequestAutoMerge }'", None),
     ):
         tokens = [t for _, t in arm_review.commands(command, "bash")]

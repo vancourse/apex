@@ -104,10 +104,13 @@ def _arms(tokens: list[str], cwd: Path | None, command: str) -> bool:
 
 #: `gh pr merge 12`, `#12`, or a PR URL; a branch name or nothing names no number.
 _PR_REF = re.compile(r"^(?:#?(\d+)|https?://\S+/pull/(\d+)/?)$")
+#: `gh pr merge` flags whose value is the next word: `--subject 12` names no PR (review of 1.6.2).
+_VALUED = {"-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email",
+           "--match-head-commit", "-R", "--repo"}
 
 
 def armed_number(segments: list[list[str]]) -> int | None:
-    """The PR number a `gh pr merge <n> --auto` names, or None (no number, a branch name, a
+    """The PR number a `gh pr merge <n> --auto` names, or None (no argument, a branch name, a
     GraphQL arm). `turn_end` settles a record only when this matches its number."""
     for tokens in segments:
         if not tokens or command_name(tokens[0]) != "gh":
@@ -115,7 +118,12 @@ def armed_number(segments: list[list[str]]) -> int | None:
         rest = tokens[1:]
         for i in range(len(rest) - 1):
             if rest[i] == "pr" and rest[i + 1] == "merge" and "--auto" in rest[i + 2 :]:
-                args = [t for t in rest[i + 2 :] if not t.startswith("-")]
+                args, words = [], iter(rest[i + 2 :])
+                for word in words:
+                    if word in _VALUED:
+                        next(words, None)
+                    elif not word.startswith("-"):
+                        args.append(word)
                 m = _PR_REF.match(args[0]) if args else None
                 return int(m.group(1) or m.group(2)) if m else None
     return None
@@ -123,13 +131,15 @@ def armed_number(segments: list[list[str]]) -> int | None:
 
 def _stamp_armed(repo: store.RepoId, number: int | None) -> None:
     """Mark the worktree's record armed, with the number the arm named (``armed_pr``): the record's
-    own number may be an older PR's, after a re-cut (review of 1.6.2)."""
+    own number may be an older PR's, after a re-cut. Under the lock `turn_end` settles under, so a
+    stamp cannot land between its compare and its write (review of 1.6.2)."""
     path = repo.leaf_dir / "pr.json"
-    pr = store.read_json(path, None)
-    if isinstance(pr, dict):
-        pr["armed"] = True
-        pr["armed_pr"] = number
-        store.write_json(path, pr)
+    with store.locked(path):
+        pr = store.read_json(path, None)
+        if isinstance(pr, dict):
+            pr["armed"] = True
+            pr["armed_pr"] = number
+            store.write_json(path, pr)
 
 
 def check(evt: Event):

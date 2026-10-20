@@ -70,22 +70,18 @@ def _settled(repo: store.RepoId, pr: dict) -> str | None:
 
 
 def _settle(repo: store.RepoId, pr: dict, settled: str, unproven: list[dict]) -> bool:
-    """Record a finished PR; False when pr.json no longer names it (a `rails ship` or an arm by hand
-    recorded another PR during the lookup), and then the turn blocks as before.
+    """Record a finished PR; False when pr.json changed during the lookup (a `rails ship` or an arm
+    by hand may have recorded another PR), and then the turn blocks as before.
 
     Under pr.json's lock: compare, write the debt, then clear ``armed``. Once ``armed`` is false no
     later Stop looks again, so a debt write that fails leaves pr.json as it was and the next Stop
     tries again (review of 1.6.2)."""
     path = repo.leaf_dir / "pr.json"
     with store.locked(path):
-        record = store.read_json(path, None)
-        same = (
-            isinstance(record, dict)
-            and str(record.get("number")) == str(pr.get("number"))
-            and record.get("armed")
-            and record.get("armed_pr") == pr.get("armed_pr")
-        )
-        if not same:
+        # The whole record: a stamp with no number writes `armed_pr: null`, which a field compare
+        # reads as the missing key (review of 1.6.2). A harmless change (a monitor bound meanwhile)
+        # only defers the settle to the next Stop.
+        if store.read_json(path, None) != pr:
             return False
         if settled == "MERGED":
             closes = {str(c).lstrip("#") for c in pr.get("closes") or []}
@@ -95,7 +91,7 @@ def _settle(repo: store.RepoId, pr: dict, settled: str, unproven: list[dict]) ->
                     for item in fresh.get("items", []):
                         if item.get("status") == "open" and item.get("id") in debt:
                             item["status"] = "unverified"
-        store.write_json(path, {**record, "state": settled, "armed": False})
+        store.write_json(path, {**pr, "state": settled, "armed": False})
     return True
 
 

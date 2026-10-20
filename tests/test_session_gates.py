@@ -458,8 +458,13 @@ def test_a_settled_pr_lets_an_offer_shaped_ending_through_once_its_items_are_deb
     [
         {"number": 6, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"},
         {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound", "armed_pr": 6},
+        {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound", "armed_pr": None},
     ],
-    ids=["rails ship recorded another PR", "an arm by hand named another PR"],
+    ids=[
+        "rails ship recorded another PR",
+        "an arm by hand named another PR",
+        "an arm by hand named no PR",
+    ],
 )
 def test_a_record_rewritten_during_the_lookup_is_not_overwritten(repo, tmp_path, monkeypatch, newer):
     """A record that changed while `gh` answered about the old PR is kept, and the turn blocks
