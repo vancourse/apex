@@ -349,13 +349,17 @@ def _items(rid, *items):
         ]
 
 
-@pytest.mark.parametrize("branch", ["work", None], ids=["recorded branch", "current branch"])
-def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monkeypatch, branch):
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"branch": None}, {"armed_pr": 5}],
+    ids=["recorded branch", "current branch", "armed by hand as this number"],
+)
+def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monkeypatch, fields):
     """Observed 2026-10-20: a PR merged at 16:00 UTC and the Stop hook still blocked "armed with no
     monitor bound", because nothing re-read pr.json's `armed` after the merge. A record with no
     branch is looked up by the worktree's current branch."""
     rid = store.find_repo(repo)
-    _armed(rid, branch=branch)
+    _armed(rid, **fields)
     _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
     evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
     assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
@@ -372,6 +376,8 @@ def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monk
         ({}, "work", [{"number": 5, "state": "MERGED"}, {"number": 6, "state": "OPEN"}]),
         ({"state": "MERGED"}, "work", [{"number": 5, "state": "MERGED"}]),
         ({"branch": "old"}, "old", [{"number": 5, "state": "MERGED"}]),
+        ({"armed_pr": 6}, "work", [{"number": 5, "state": "MERGED"}]),
+        ({"armed_pr": None}, "work", [{"number": 5, "state": "MERGED"}]),
     ],
     ids=[
         "open",
@@ -380,14 +386,16 @@ def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monk
         "a newer PR is open on the branch",
         "re-armed after it was settled",
         "the record names another branch",
+        "armed by hand as another number",
+        "armed by hand naming no number",
     ],
 )
 def test_turn_end_still_holds_an_armed_pr_it_cannot_settle(
     repo, tmp_path, monkeypatch, record, branch, rows
 ):
-    """Blocks as on 1.6.0. The last two are a PR armed by hand after a re-cut: `arm_review` stamps
-    `armed` onto the older record without its number, so that record's merge says nothing about the
-    armed PR (review of 1.6.2)."""
+    """Blocks as on 1.6.0. The last four are a PR armed by hand after a re-cut: `arm_review` stamps
+    `armed` onto the older record, so that record's merge says nothing about the armed PR unless
+    the arm named the record's own number (review of 1.6.2)."""
     rid = store.find_repo(repo)
     _armed(rid, **record)
     before = store.read_json(rid.leaf_dir / "pr.json")
@@ -445,13 +453,21 @@ def test_a_settled_pr_lets_an_offer_shaped_ending_through_once_its_items_are_deb
     assert not dispatch(offer, [_row("turn_end", ["Stop"])]).blocks
 
 
-def test_a_record_rewritten_during_the_lookup_is_not_overwritten(repo, tmp_path, monkeypatch):
-    """A `rails ship` that records a new PR while `gh` answers about the old one keeps its record."""
+@pytest.mark.parametrize(
+    "newer",
+    [
+        {"number": 6, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"},
+        {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound", "armed_pr": 6},
+    ],
+    ids=["rails ship recorded another PR", "an arm by hand named another PR"],
+)
+def test_a_record_rewritten_during_the_lookup_is_not_overwritten(repo, tmp_path, monkeypatch, newer):
+    """A record that changed while `gh` answered about the old PR is kept, and the turn blocks
+    over the PR it now names (review of 1.6.2)."""
     from rails.gates import merged_pr_push
 
     rid = store.find_repo(repo)
     _armed(rid)
-    newer = {"number": 6, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"}
 
     def answer(branch, cwd=None):
         store.write_json(rid.leaf_dir / "pr.json", newer)
@@ -459,7 +475,7 @@ def test_a_record_rewritten_during_the_lookup_is_not_overwritten(repo, tmp_path,
 
     monkeypatch.setattr(merged_pr_push, "pull_requests", answer)
     evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
-    dispatch(evt, [_row("turn_end", ["Stop"])])
+    assert dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
     assert store.read_json(rid.leaf_dir / "pr.json") == newer
 
 

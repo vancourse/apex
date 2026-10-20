@@ -21,19 +21,28 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     issues that PR closes whose step has no walk receipt are written `unverified` at once. That
     is narrower than the give-up, which writes every open closing item. A PR closed unmerged
     closed nothing, so its items stay open.
-  - **Trusted** means the record still says OPEN, names the branch the worktree is on, and no
-    open PR has that branch as its head. `arm_review` stamps `armed` onto whatever record exists
-    without the number it armed, so a PR armed by hand after a re-cut rides an older record.
-    That record's merge says nothing about it, and the turn blocks as before.
+  - **Trusted** means all of:
+    - when the PR was armed by hand, the arm named this record's number. `arm_review` stamps
+      `armed` onto whatever record exists, so a PR armed by hand after a re-cut rides an older
+      record; it now also writes the number the command named as `armed_pr` (none for a branch
+      name or a GraphQL arm, and then the record is never settled);
+    - the record still says OPEN;
+    - it names the branch the worktree is on (a record with no branch: the current one);
+    - no open PR has that branch as its head.
+
+    Otherwise the turn blocks as before.
   - **OPEN, not found, or no answer** (no `gh`, a timeout, an error): it blocks as on 1.6.0.
-  - **No lookup** on a turn the gate would not block. In shadow mode the lookup only decides
+  - **No lookup** on a turn with nothing to block. In shadow mode the lookup only decides
     whether a would-block is logged; `pr.json` and the items are not written.
-  - `pr.json` is rewritten only if it still names the same armed PR, under the store's lock, so
-    a `rails ship` that records a new PR during the lookup keeps its record.
+  - `pr.json` is rewritten only if, re-read under the store's lock after the lookup, it still
+    names the same armed PR. If a `rails ship` or an arm by hand recorded another PR meanwhile,
+    nothing is written and the turn blocks. `rails ship` writes without the lock, so this
+    narrows that race rather than closing it.
   - Once `pr.json` says MERGED or CLOSED, `second_pr` lets a new `gh pr create` through, and the
-    pre-push hook stops trusting the record and asks GitHub; with no answer it still treats the
-    branch as open. Both still trust a stale OPEN anywhere `turn_end` has not looked, and a
-    CLOSED record stays CLOSED if the PR is later reopened.
+    pre-push hook stops trusting the record and asks GitHub. A timeout or a failing `gh` still
+    counts as open; with no `gh` on PATH, or output it cannot parse, it does not. Both still
+    trust a stale OPEN anywhere `turn_end` has not looked, and a CLOSED record stays CLOSED if
+    the PR is later reopened.
   - The Stop hook has 15 s. The lookup is one `git branch` (5 s cap) and one `gh` call (8 s
     cap). If the whole hook runs past 15 s, Claude Code ends the turn without any Stop gate's
     output.

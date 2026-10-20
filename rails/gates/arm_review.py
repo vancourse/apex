@@ -14,7 +14,8 @@ agent told "not arming" could arm by hand. This refuses that arm, and the GraphQ
 It reads the command's words, as ``merge_by_effect`` does (``gh.exe``, ``gh -R o/r pr merge``),
 so a commit message or a grep that mentions the command is not an arm. When it allows an arm
 it stamps the worktree's ``pr.json`` armed, so ``turn_end`` holds the turn to the PR's steps
-as it does after `rails ship`.
+as it does after `rails ship`, with the number the command named as ``armed_pr`` (None when it
+named none), since the record's own number may belong to an older PR.
 
 Scope: it judges the worktree the command runs in (one PR per line of work). A PR number from
 another worktree is judged by this one's tree, and a `gh alias` hides the words - known gaps.
@@ -101,11 +102,33 @@ def _arms(tokens: list[str], cwd: Path | None, command: str) -> bool:
     return False
 
 
-def _stamp_armed(repo: store.RepoId) -> None:
+#: `gh pr merge 12`, `#12`, or a PR URL; a branch name or nothing names no number.
+_PR_REF = re.compile(r"^(?:#?(\d+)|https?://\S+/pull/(\d+)/?)$")
+
+
+def armed_number(segments: list[list[str]]) -> int | None:
+    """The PR number a `gh pr merge <n> --auto` names, or None (no number, a branch name, a
+    GraphQL arm). `turn_end` settles a record only when this matches its number."""
+    for tokens in segments:
+        if not tokens or command_name(tokens[0]) != "gh":
+            continue
+        rest = tokens[1:]
+        for i in range(len(rest) - 1):
+            if rest[i] == "pr" and rest[i + 1] == "merge" and "--auto" in rest[i + 2 :]:
+                args = [t for t in rest[i + 2 :] if not t.startswith("-")]
+                m = _PR_REF.match(args[0]) if args else None
+                return int(m.group(1) or m.group(2)) if m else None
+    return None
+
+
+def _stamp_armed(repo: store.RepoId, number: int | None) -> None:
+    """Mark the worktree's record armed, with the number the arm named (``armed_pr``): the record's
+    own number may be an older PR's, after a re-cut (review of 1.6.2)."""
     path = repo.leaf_dir / "pr.json"
     pr = store.read_json(path, None)
     if isinstance(pr, dict):
         pr["armed"] = True
+        pr["armed_pr"] = number
         store.write_json(path, pr)
 
 
@@ -148,5 +171,9 @@ def check(evt: Event):
                 return Deny(f"rails: not arming auto-merge: {problem}")
     except Exception as exc:  # noqa: BLE001 - an arm it cannot check is refused, like pre-push
         return Deny(f"rails: not arming auto-merge: the review could not be checked ({type(exc).__name__})")
-    _stamp_armed(repo)
+    try:
+        number = armed_number([tokens for _, tokens in commands(command, shell)])
+    except Exception:  # noqa: BLE001 - unknown is None, which turn_end never settles
+        number = None
+    _stamp_armed(repo, number)
     return None

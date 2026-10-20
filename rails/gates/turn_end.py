@@ -14,8 +14,9 @@ hours earlier still held turns in its worktree (jarvis #2796, 2026-10-20). A PR 
 MERGED or CLOSED holds no turn, if the record can be trusted to name it (`_settled`): pr.json
 records that state with ``armed: false``, and for a merge, A's items for the issues that PR closes
 are written ``unverified`` at once. That is narrower than the fourth block, which writes every
-open closing item. An OPEN PR, an untrusted record, or no answer (no `gh`, a timeout, an error)
-blocks as before. Turns with nothing to block run no lookup; in shadow nothing is written.
+open closing item. An OPEN PR, an untrusted record, a record that changed during the lookup, or
+no answer (no `gh`, a timeout, an error) blocks as before. Turns with nothing to block run no
+lookup; in shadow pr.json and the items are not written.
 
 Wording condition, blocking once: the last message is offer-shaped ("want me
 to", "shall I", "say the word") while items are open and no ``stop_reason`` is
@@ -45,10 +46,13 @@ def _settled(repo: store.RepoId, pr: dict) -> str | None:
     still be trusted to name the armed PR. None blocks as before: the PR is open, not found, or
     nothing can answer, or the record may name the wrong PR.
 
-    `arm_review` stamps ``armed`` onto whatever record exists without writing the number it armed,
-    so a PR armed by hand after a re-cut rides an older record (review of 1.6.2). Trusted means
-    the record still says OPEN (an armed record that already says MERGED or CLOSED was re-armed),
-    names the branch this worktree is on, and no open PR has that branch as its head."""
+    A PR armed by hand after a re-cut rides an older record, so trusted means all of:
+    - an arm by hand (`arm_review`, which writes ``armed_pr``) named this record's number;
+    - the record still says OPEN (an armed record that already says MERGED or CLOSED was re-armed);
+    - it names the branch this worktree is on (a record with no branch: the current one);
+    - no open PR has that branch as its head (review of 1.6.2)."""
+    if "armed_pr" in pr and str(pr.get("armed_pr")) != str(pr.get("number")):
+        return None
     if str(pr.get("state") or "OPEN").upper() != "OPEN":
         return None
     current = merged_pr_push.current_branch(repo.top)
@@ -65,22 +69,34 @@ def _settled(repo: store.RepoId, pr: dict) -> str | None:
     return None
 
 
-def _settle(repo: store.RepoId, pr: dict, settled: str, unproven: list[dict]) -> None:
-    """Record a finished PR. The debt goes first: once ``armed`` is false no later Stop looks
-    again. pr.json is rewritten only if it still names the same armed PR, since a `rails ship`
-    may have recorded a new one during the lookup (review of 1.6.2)."""
-    if settled == "MERGED":
-        closes = {str(c).lstrip("#") for c in pr.get("closes") or []}
-        debt = {i.get("id") for i in unproven if str(i.get("closes", "")).lstrip("#") in closes}
-        if debt:
-            with store.updating(work.path(repo), {}) as fresh:
-                for item in fresh.get("items", []):
-                    if item.get("status") == "open" and item.get("id") in debt:
-                        item["status"] = "unverified"
-    with store.updating(repo.leaf_dir / "pr.json", {}) as record:
-        if str(record.get("number")) == str(pr.get("number")) and record.get("armed"):
-            record["state"] = settled
-            record["armed"] = False
+def _settle(repo: store.RepoId, pr: dict, settled: str, unproven: list[dict]) -> bool:
+    """Record a finished PR; False when pr.json no longer names it (a `rails ship` or an arm by hand
+    recorded another PR during the lookup), and then the turn blocks as before.
+
+    Under pr.json's lock: compare, write the debt, then clear ``armed``. Once ``armed`` is false no
+    later Stop looks again, so a debt write that fails leaves pr.json as it was and the next Stop
+    tries again (review of 1.6.2)."""
+    path = repo.leaf_dir / "pr.json"
+    with store.locked(path):
+        record = store.read_json(path, None)
+        same = (
+            isinstance(record, dict)
+            and str(record.get("number")) == str(pr.get("number"))
+            and record.get("armed")
+            and record.get("armed_pr") == pr.get("armed_pr")
+        )
+        if not same:
+            return False
+        if settled == "MERGED":
+            closes = {str(c).lstrip("#") for c in pr.get("closes") or []}
+            debt = {i.get("id") for i in unproven if str(i.get("closes", "")).lstrip("#") in closes}
+            if debt:
+                with store.updating(work.path(repo), {}) as fresh:
+                    for item in fresh.get("items", []):
+                        if item.get("status") == "open" and item.get("id") in debt:
+                            item["status"] = "unverified"
+        store.write_json(path, {**record, "state": settled, "armed": False})
+    return True
 
 
 def check(evt: Event):
@@ -113,10 +129,11 @@ def check(evt: Event):
                 "then `rails work monitor-bound`."
             )
     if problems and (settled := _settled(repo, pr)):
-        if not evt.payload.get("_rails_shadow"):
-            _settle(repo, pr, settled, unproven)
+        if evt.payload.get("_rails_shadow"):
+            problems = []
+        elif _settle(repo, pr, settled, unproven):
             data = work.load(repo)  # the wording check below reads the items as now written
-        problems = []
+            problems = []
     if problems and evt.payload.get("_rails_shadow"):
         return Block(
             "\n".join(problems)
