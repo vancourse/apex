@@ -14,8 +14,9 @@ agent told "not arming" could arm by hand. This refuses that arm, and the GraphQ
 It reads the command's words, as ``merge_by_effect`` does (``gh.exe``, ``gh -R o/r pr merge``),
 so a commit message or a grep that mentions the command is not an arm. When it allows an arm
 it stamps the worktree's ``pr.json`` armed, so ``turn_end`` holds the turn to the PR's steps
-as it does after `rails ship`, with the number the command named as ``armed_pr`` (None when it
-named none), since the record's own number may belong to an older PR.
+as it does after `rails ship`, and writes ``armed_pr``: the record's own number when the
+command named it, None when it named none. It stamps only the record of this branch's PR, and
+only when a named number is that record's (the record's own number may belong to an older PR).
 
 Scope: it judges the worktree the command runs in (one PR per line of work). A PR number from
 another worktree is refused (p3f): this worktree's ``pr.json`` naming it, or GitHub saying this
@@ -193,7 +194,7 @@ def _merge_selectors(tokens: list[str]) -> list[str]:
     """For each `gh pr merge ... --auto` in one command's words, its selector: the first
     argument that is not a flag or a flag's value (`--subject 12 --auto 15` selects 15; a PR
     URL in `--body` names nothing), or "" when it names none. One reader for `_pr_numbers`,
-    `_branch_selectors` and `armed_number`."""
+    and `_branch_selectors`."""
     out: list[str] = []
     if not tokens or command_name(tokens[0]) != "gh":
         return out
@@ -222,17 +223,6 @@ def _pr_numbers(command: str, shell: str) -> list[str]:
             if number:
                 out.append(number)
     return out
-
-
-def armed_number(segments: list[list[str]]) -> int | None:
-    """The PR number the first `gh pr merge <n> --auto` names, or None (no argument, a branch
-    name, a GraphQL arm). `turn_end` settles a record only when this matches its number."""
-    for tokens in segments:
-        selectors = _merge_selectors(tokens)
-        if selectors:
-            number = _selector_number(selectors[0]) if selectors[0] else ""
-            return int(number) if number else None
-    return None
 
 
 def _branch_selectors(command: str, shell: str) -> list[str]:
@@ -326,7 +316,9 @@ def _stamp_armed(repo: store.RepoId, branch: str, numbers: list[str]) -> None:
         ):
             return
         pr["armed"] = True
-        pr["armed_pr"] = int(numbers[0]) if numbers else None
+        # the record's own number when the command named it (the guard above), None when it
+        # named none: `turn_end` settles only a record whose armed_pr is its own number
+        pr["armed_pr"] = int(pr["number"]) if numbers else None
         pr.pop("disarmed_by", None)  # armed past every check: a review covers it now
         store.write_json(path, pr)
     from rails.githooks import release_pr_hold

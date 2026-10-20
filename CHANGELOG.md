@@ -99,8 +99,9 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   selector, as this worktree's PR. An arm after `cd <worktree>` (a Git Bash `/c/...` path too) is
   judged for that worktree, and a branch selector naming another branch is refused.
 - **`pr.json` follows the PR (p3g).** Any `rails` command re-reads an OPEN record's state (at most
-  once a minute); a merged or closed PR stops reading OPEN, and `armed` is cleared. A `gh` that
-  hangs (10 s) or fails is remembered for the minute too.
+  once a minute); a merged or closed PR stops reading OPEN, and `armed` is cleared as `turn_end`
+  would settle it (see "With 1.6.2's `armed_pr`" below). A `gh` that hangs (10 s) or fails is
+  remembered for the minute too.
 - **A GraphQL read is judged by the body it reads (p3h).** An `--input` file that exists, also after a
   `cd`, is read; a body that cannot be read is refused naming the path, instead of being judged an arm
   (and stamping the PR armed). A body in a heredoc or piped from `echo` is read from the command; a
@@ -149,9 +150,12 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   inside a single-quoted query reads nothing more.
 
 - **With 1.6.2's `armed_pr`.** A hand arm stamps the record of the PR it armed only (this branch's,
-  and the number it named, read by the same selector reader `armed_number` uses), writing
-  `armed_pr`, under the lock `turn_end` settles under. The pr.json refresh (p3g) clears `armed`
-  only when `armed_pr` is absent or the record's own number, as `turn_end` settles it.
+  and the number it named), writing `armed_pr` (that number, or None when it named none), under
+  the lock `turn_end` settles under. `armed_number` is gone: one selector reader serves the stamp,
+  `_pr_numbers` and `_branch_selectors`. The pr.json refresh (p3g) settles a merge the way
+  `turn_end` does: only a record still naming the PR it looked up, `armed` cleared only when
+  `armed_pr` is absent or the record's own number, and a merge records the same debt
+  (`turn_end.record_merge_debt`), so a `rails walk` before the Stop loses none.
 
 Not yet: p3a (marking the shadow week's `would-deny` rows; the week ended 2026-10-15).
 

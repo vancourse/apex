@@ -1502,3 +1502,103 @@ def test_p3g_a_record_armed_for_another_pr_stays_armed_when_its_own_pr_leaves_op
     )
     assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
     assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False
+
+
+# --- review round 8 (2026-10-20): the refresh and 1.6.2's turn_end, body files ---------------
+
+
+def test_r8_a_refresh_after_the_merge_records_the_debt_turn_end_would(repo, tmp_path, monkeypatch):
+    """Any rails command after a merge refreshes pr.json before the Stop (`rails walk`, `rails
+    work monitor-bound`): it records the same debt turn_end._settle writes, or none is ever
+    written (review of #52 round 8)."""
+    from rails import cli, gitutil
+
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"), ("a2", "", "#9"), ("b1", "b1", "#10"))
+    _armed(rid, monitor="bound", closes=["9"])
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "MERGED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {
+        "a1": "unverified", "a2": "open", "b1": "open",
+    }
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    # a PR closed unmerged closed no item: no debt
+    _items(rid, ("a1", "a1", "#9"))
+    _armed(rid, monitor="bound", closes=["9"])
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "CLOSED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "CLOSED"
+    assert work.load(rid)["items"][0]["status"] == "open"
+
+
+def test_r8_a_refresh_writes_nothing_onto_a_record_rewritten_during_its_lookup(repo, monkeypatch):
+    from rails import cli, gitutil
+
+    rid = store.find_repo(repo)
+    path = rid.leaf_dir / "pr.json"
+    store.write_json(path, {"number": 5, "state": "OPEN", "armed": True})
+
+    def gh_while_shipping_another(*a, **k):
+        store.write_json(path, {"number": 9, "state": "OPEN", "armed": True})
+        return '{"state": "MERGED"}'
+
+    monkeypatch.setattr(gitutil, "gh", gh_while_shipping_another)
+    cli.refresh_pr_state(repo, now=10**10)
+    record = store.read_json(path)
+    assert (record["number"], record["state"], record["armed"]) == (9, "OPEN", True)
+
+
+def test_r8_a_variable_that_starts_with_the_path_still_expands(repo):
+    _leaky_repo(repo)
+    (repo / "notes.txt").write_text("total 1234.56\n", encoding="utf-8")
+    ps = '$out = "body.md"; $output = (Get-Content notes.txt -Raw); "Notes:`n$output" | Out-File $out; gh pr comment 5 --body-file $out'
+    assert _leak(repo, "PowerShell", ps)
+    assert _leak(repo, "Bash", 'echo "$body" > body && gh pr create --title x --body-file body')
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'test -f body.md || echo "draft" > body.md; gh pr create --title x --body-file body.md', id="bash-or"),
+        pytest.param(
+            "PowerShell",
+            "if (-not (Test-Path body.md)) { 'Summary' | Out-File body.md }; gh pr create --title x --body-file body.md",
+            id="ps-if",
+        ),
+    ],
+)
+def test_r8_a_writer_that_may_not_run_leaves_the_disk_copy_read(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "body.md").write_text("total 1234.56\n", encoding="utf-8")
+    assert _leak(repo, shell, command), command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ac body.md 'total 1234.56'; gh pr create --title x --body-file body.md",
+        "sc body.md 'total 1234.56'; gh pr create --title x --body-file body.md",
+        "New-Item -Path body.md -Value 'total 1234.56'; gh pr create --title x --body-file body.md",
+    ],
+    ids=["ac", "sc", "new-item"],
+)
+def test_r8_powershell_aliases_and_new_item_are_writers(repo, command):
+    _leaky_repo(repo)
+    (repo / "body.md").write_text("hello\n", encoding="utf-8")
+    assert _leak(repo, "PowerShell", command), command
+
+
+def test_r8_a_file_read_into_part_of_a_text_flag_is_read(repo):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    assert _leak(repo, "Bash", 'gh pr comment 5 --body "Tests: $(tail -20 log.txt)"')
+    assert _leak(repo, "PowerShell", 'gh pr comment 5 --body "Tests: $(Get-Content log.txt -Tail 20)"')
+    assert not _leak(repo, "Bash", 'git commit -m "release $(date +%F)"')
+
+
+def test_r8_a_line_count_in_a_read_is_not_a_file(repo):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("all green\n", encoding="utf-8")
+    assert not _leak(repo, "Bash", 'gh pr comment 5 --body "Tests: $(tail -n 20 log.txt)"')
+    assert not _leak(repo, "PowerShell", 'gh pr comment 5 --body "Tests: $(Get-Content log.txt -Tail 20)"')

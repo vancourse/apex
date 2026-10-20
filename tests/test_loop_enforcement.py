@@ -459,8 +459,8 @@ def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, gi
         ("gh pr merge --body=x 17 --auto", 17),
         ("gh api graphql -f query='mutation { enablePullRequestAutoMerge }'", None),
     ):
-        tokens = [t for _, t in arm_review.commands(command, "bash")]
-        assert arm_review.armed_number(tokens) == number, command
+        numbers = arm_review._pr_numbers(command, "bash")
+        assert (int(numbers[0]) if numbers else None) == number, command
 
 
 def test_arm_review_reads_words_and_judges_the_pushed_head(repo, commit, git, tmp_path):
@@ -3095,3 +3095,50 @@ def test_r7_flags_after_a_quoted_brace_are_still_read(shell):
     assert destructive.before_block_end(command, shell) == command
     assert destructive.before_block_end("gh pr merge --auto } else { x }", shell) == "gh pr merge --auto "
     assert "--auto" in destructive.commands(command, shell)[0][1]
+
+
+# --- review round 8 (2026-10-20): what follows a block's `}` ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", '{ echo "A=1"; echo "B=2"; } > .env', id="bash-group-redirect"),
+        pytest.param(
+            "PowerShell",
+            "(Get-Content .env) | ForEach-Object {\n  $_ -replace 'A=1','A=2'\n} | Set-Content .env",
+            id="ps-block-piped-on",
+        ),
+    ],
+)
+def test_r8_a_redirect_or_pipe_after_a_block_is_judged(shell, command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt(shell, {"command": command})) is not None, command
+
+
+def test_r8_a_hashtable_piped_into_gh_api_is_judged(repo, commit, git):
+    from rails.gates import status_forge
+
+    command = "@{state='success'; context='rails/suite'} | ConvertTo-Json | gh api repos/o/r/statuses/abc123 --input -"
+    assert status_forge.check(_evt("PowerShell", {"command": command})) is not None
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    arm = (
+        "@{query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_x\"}) { clientMutationId } }'; "
+        "variables=@{}} | ConvertTo-Json | gh api graphql --input -"
+    )
+    deny = arm_review.check(_evt("PowerShell", {"command": arm}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason
+
+
+def test_r8_armed_pr_is_the_record_s_own_number(repo, commit, git, tmp_path, monkeypatch):
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 5, "branch": "work", "armed": False})
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "work"}))
+    command = "gh pr merge 6 --auto --squash; gh pr merge 5 --auto --squash"
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+    record = store.read_json(rid.leaf_dir / "pr.json")
+    assert (record["armed"], record["armed_pr"]) == (True, 5)

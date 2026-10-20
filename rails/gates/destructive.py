@@ -212,11 +212,12 @@ def _syntax_stripped(tokens: list[str], shell: str) -> list[str]:
     return [tok for tok in out if tok]
 
 
-def before_block_end(text: str, shell: str) -> str:
-    """``text`` up to the first `}` that closes a block opened before it, read on the
-    quote-blanked text. A `;` inside `if ($?) { git push; gh pr merge --auto } else { ... }`
-    leaves `gh pr merge --auto } else { ... }`: its command ends at the block's `}`, and what
-    follows (`else { ... }`) is a block `blocks` opens and judges on its own."""
+def split_at_block_end(text: str, shell: str) -> tuple[str, str]:
+    """``text`` split at the first `}` that closes a block opened before it, read on the
+    quote-blanked text: (before it, after it). A `;` inside `if ($?) { git push; gh pr merge
+    --auto } else { ... }` leaves `gh pr merge --auto } else { ... }`: the command ends at the
+    block's `}`. What follows it runs too and is judged as its own statement: `else { ... }`,
+    `} > .env` (a group's redirect), `} | ConvertTo-Json | gh api ...` (a pipe on)."""
     from rails.shell import scrub
 
     visible = scrub(text, shell, comments=True)
@@ -227,8 +228,13 @@ def before_block_end(text: str, shell: str) -> str:
         elif c == "}":
             depth -= 1
             if depth < 0:
-                return text[:i]
-    return text
+                return text[:i], text[i + 1 :]
+    return text, ""
+
+
+def before_block_end(text: str, shell: str) -> str:
+    """``text`` up to the first `}` that closes a block opened before it (`split_at_block_end`)."""
+    return split_at_block_end(text, shell)[0]
 
 
 def pipeline_stages(tokens: list[str]) -> list[list[str]]:
@@ -266,7 +272,12 @@ def commands(command: str, shell: str, _depth: int = 0) -> list[tuple[str, list[
 
             for inner in blocks(segment) + groups(segment):
                 found.extend(commands(inner, shell, _depth + 1))
-        for stage in pipeline_stages(words(before_block_end(segment, shell), shell)):
+        head, after = split_at_block_end(segment, shell)
+        if _depth < 8 and after.strip():
+            # `} > .env`, `} | Set-Content f`, `} else { ... }`: judged as a statement of its own
+            # (a leading `|` only makes an empty first pipeline stage, which is dropped).
+            found.extend(commands(after, shell, _depth + 1))
+        for stage in pipeline_stages(words(head, shell)):
             # The command once shell syntax is set aside (`then gh ...`, `(cd x`, `$r = gh
             # ...`). When that leaves nothing, the statement's own words are judged instead
             # (`$env:CLAUDECODE=''`), or the bare assignment itself (`CLAUDECODE=0`):

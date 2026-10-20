@@ -702,10 +702,13 @@ def refresh_pr_state(cwd: Path, now: float | None = None) -> str | None:
     if not state:
         # Remembered, so a hung or offline gh costs one wait a minute, not one per command.
         with store.updating(path, {}) as record:
-            record["state_checked_at"] = now
+            if record.get("number") == pr.get("number"):
+                record["state_checked_at"] = now
         return None
     # `store.updating` holds the lock `arm_review._stamp_armed` and `turn_end` take.
     with store.updating(path, {}) as record:
+        if record.get("number") != pr.get("number"):
+            return None  # rewritten during the lookup (a `rails ship` of another PR): not ours
         record["state_checked_at"] = now
         if state != "OPEN":
             record["state"] = state
@@ -713,6 +716,11 @@ def refresh_pr_state(cwd: Path, now: float | None = None) -> str | None:
             # `armed_pr`), as `turn_end._settled` reads it: a hand arm of #6 stamped onto #5's
             # record stays armed after #5 leaves OPEN.
             if "armed_pr" not in record or str(record.get("armed_pr")) == str(record.get("number")):
+                if state == "MERGED" and record.get("armed"):
+                    # Settled here, so the Stop finds nothing armed: write the debt it would.
+                    from rails.gates.turn_end import record_merge_debt
+
+                    record_merge_debt(repo, record)
                 record["armed"] = False
                 record.pop("disarmed_by", None)
             from rails.githooks import release_pr_hold

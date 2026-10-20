@@ -40,6 +40,11 @@ _READ_INTO = re.compile(
     r"\$?\(\s*(?:cat|<|Get-Content|gc|type)\s+['\"]?([^'\"\s)]+)['\"]?(?:\s+-Raw)?\s*\)",
     re.IGNORECASE,
 )
+#: A substitution inside a text flag that reads files: `$(tail -20 log.txt)`, `$(< f)`,
+#: PowerShell `$(Get-Content log.txt -Tail 20)`. Its file arguments are read.
+_READ_PART = re.compile(
+    r"\$\(\s*(?:cat|tail|head|Get-Content|gc|type|<)(?:\s+|(?<=<))([^)]*)\)", re.IGNORECASE
+)
 _TEXT_FLAGS = {"--body", "-b", "--title", "-t", "--message", "-m", "--notes", "-n"}
 _FILE_FLAGS = {"--body-file", "--input", "--notes-file", "--file"}
 _FIELD_FLAGS = {"-f", "-F", "--field", "--raw-field"}
@@ -139,7 +144,11 @@ def _statements(command: str, shell: str, depth: int = 0) -> list[tuple[str, lis
 #: The commands whose own words are what they write.
 _LITERAL_COMMANDS = frozenset({"echo", "printf", "write-output"})
 #: The commands that write a file they name: PowerShell cmdlets and `tee`.
-_FILE_WRITERS = frozenset({"out-file", "set-content", "add-content", "tee", "tee-object"})
+_FILE_WRITERS = frozenset(
+    {"out-file", "set-content", "sc", "add-content", "ac", "new-item", "ni", "tee", "tee-object"}
+)
+#: The writers whose text is a `-Value` (or a positional literal after the path).
+_VALUE_WRITERS = frozenset({"set-content", "sc", "add-content", "ac", "new-item", "ni"})
 #: A redirect and its target: `> body.md`, `>> "body.md"`, `2> log.txt`, `*> out.txt`.
 _REDIRECT_TO = re.compile(r"(?:\d|\*|&)?(>>?)\s*(?P<target>'[^']*'|\"[^\"]*\"|[^\s;&|)}]+)")
 
@@ -223,7 +232,7 @@ def _stage_writes(stage: str, path: str, shell: str) -> tuple[str, bool] | None:
         return None
     lowered = [w.lower() for w in words[1:]]
     appends = (
-        first == "add-content"
+        first in ("add-content", "ac")
         or (first in ("out-file", "tee-object") and "-append" in lowered)
         or (first == "tee" and any(w in ("-a", "--append") for w in lowered))
     )
@@ -266,9 +275,10 @@ def _literal_writer(statement: str, k: int, path: str, command: str, shell: str)
         ok = k == 0 and literal_source(stage)
     elif k == 0:
         ok = (
-            (first in ("set-content", "add-content") and bool(
+            (first in _VALUE_WRITERS and bool(
                 re.search(r"-Value\s+@?['\"]", stage, re.IGNORECASE)
                 or re.match(r"\s*\S+\s+(?:-\w+\s+)?\S+\s+@?['\"]", stage)
+                or (first in ("new-item", "ni") and not re.search(r"-Value\b", stage, re.IGNORECASE))
             ))
             or first == "out-file"
             or (first == "tee" and "<<" in stage)
@@ -279,7 +289,7 @@ def _literal_writer(statement: str, k: int, path: str, command: str, shell: str)
         return False
     # The target path is not the text written: `Out-File $env:TEMP\body.md` expands nothing
     # that leaves.
-    checked = statement.replace(path, " " * len(path))
+    checked = re.sub(rf"(?<![\w$]){re.escape(path)}(?![\w])", lambda m: " " * len(m.group(0)), statement)
     visible = expanding(checked, shell)
     if shell == "powershell":
         # a variable or subexpression expands; a group outside quotes runs a command
@@ -308,14 +318,12 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
             if writers:
                 # The command writes it before sending it. Every writer must be the command's
                 # own text, and that text is read; one program among them and the file is
-                # refused unread. An append keeps what is on disk, so unless the first writer
-                # replaces the file, the copy on disk is read too (a missing file adds nothing).
+                # refused unread. The copy on disk is read too (a missing file adds nothing): an
+                # append keeps it, and a writer may not run (`test -f f || echo x > f`).
                 if not all(_literal_writer(s, k, path, command, shell) for s, k, _ in writers):
                     unreadable.append(path)
                     return ""
                 written.extend(s for s, _, _ in writers if s not in written)
-                if not writers[0][2]:
-                    return ""
                 return _read(path, cwd) or ""
         text = _read(path, cwd)
         if text is None:
@@ -367,6 +375,11 @@ def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out) 
                 out.append((f"{flag} {read.group(1)}", read_file(read.group(1))))  # `--body "$(cat f)"`
             elif "$" in value:
                 out.append((flag, command))  # `-m $m`: the text was set elsewhere in the command
+                # `--body "Tests: $(tail -20 log.txt)"`: the file a substitution reads is read
+                for args in _READ_PART.findall(value):
+                    for name in args.split():
+                        if not name.startswith("-") and not name.isdigit():
+                            out.append((f"{flag} {name}", read_file(name)))
             i += step
             continue
         if w == "<<<" or (w.startswith("<<<") and len(w) > 3):
