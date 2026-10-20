@@ -18,20 +18,23 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     reminder tag left after them, is judged on the text that follows them
     (`intent.operator_text`). `prompt_words` reads that text for `hold`, `release`, `used`,
     `approve`, the ack-or-correction and the ceremony log, so a "rather than" in a side session's
-    report cannot make the operator's reply a correction. Any text there is read as the
-    operator's, which is new: on 1.6.0 everything behind a reminder was a machine message.
+    report cannot make the operator's reply a correction. Text there is read as the operator's
+    unless it starts with a machine prefix (below), which is new: on 1.6.0 everything behind a
+    reminder was a machine message.
   - **Every other prompt is judged as on 1.6.0**, whole, except a spawned session's brief that
     carries its header (below). A reply followed by a reminder is read with the reminder's words:
     it acks unless they read as a correction.
   - **Machine messages, never an ack:**
     - a prompt that is only reminders;
-    - one whose text after the reminders starts with `<` (a `<task-notification>`);
+    - one whose text after the reminders starts with a machine prefix, as a prompt with nothing
+      in front of it would on 1.6.0: `<` (a `<task-notification>`), `[`, `{`, `Caveat:` or
+      `This session is being continued`;
     - a spawned session's first prompt when it carries the header "Background (from the session
       that started this one): …" (the parent agent's brief), which is new: it is a machine
       message by that header, with or without a reminder in front. A brief without the header
       is judged like any other prompt: whole when nothing is in front of it, as on 1.6.0, and on
       the text after a leading reminder, which is new, so it can ack. In the local transcripts
-      the header appears on 4 user lines, each behind a reminder.
+      the header opens 4 user lines, each behind a reminder.
   - **A leading reminder that cannot be taken off cleanly** stays a machine message, as on 1.6.0:
     one that never closes (unless it quotes a closing tag: Known limits), or one that leaves a
     reminder tag after it. Agent text inside a reminder (a background agent's result, a side
