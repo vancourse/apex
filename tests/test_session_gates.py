@@ -1690,3 +1690,69 @@ def test_r9_a_shadowed_stop_leaves_a_pending_debt_pending(repo, tmp_path, monkey
     dispatch(evt, [_row("turn_end", ["Stop"], shadow=True)])
     assert work.load(rid)["items"][0]["status"] == "open"
     assert store.read_json(rid.leaf_dir / "pr.json")["pending_debt"] is True
+
+
+# --- review round 10 (2026-10-20): the files a sending statement's substitutions read ---------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "gh pr comment 5 --body \"Here's the log: $(tail -20 log.txt)\"", id="apostrophe"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Re #12: $(tail -20 log.txt)"', id="hash"),
+        pytest.param("PowerShell", "gh pr comment 5 --body \"Today's run: $(Get-Content log.txt -Tail 20)\"", id="ps-apostrophe"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "Fixes #12: $(Get-Content log.txt -Raw)"', id="ps-hash"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(cat < log.txt)"', id="input-redirect"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(head -5 <log.txt)"', id="glued-input-redirect"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(sort < log.txt)"', id="any-command-s-input"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(cat -n log.txt)"', id="cat-n-is-a-switch"),
+        pytest.param("PowerShell", "gh pr create --title x --body (Get-Content -Raw log.txt)", id="ps-group"),
+        pytest.param("PowerShell", "gh pr create --title x --body (Get-Content log.txt -Raw -Encoding utf8)", id="ps-group-flags"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$((Get-Content log.txt -Raw).Trim())"', id="ps-nested-group"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: `cat log.txt`"', id="backticks"),
+        pytest.param("Bash", 'gh api repos/o/r/issues/5/comments -f body="$(cat log.txt)"', id="a-field-value"),
+    ],
+)
+def test_r10_a_file_a_substitution_reads_is_read_wherever_it_sits(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    assert _leak(repo, shell, command), command
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'gh pr comment 5 --body "Tests: $(tail -5 log.txt 2>/dev/null || echo none)"', id="or-list"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(cat log.txt; echo)"', id="semicolon"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(cat log.txt && echo ok)"', id="and-list"),
+        pytest.param(
+            "PowerShell", 'gh pr comment 5 --body "Tests: $(Get-Content log.txt -Raw -ErrorAction SilentlyContinue)"', id="ps-erroraction"
+        ),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content log.txt -ea SilentlyContinue -OutVariable x)"', id="ps-common"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Encoding utf8 log.txt)"', id="ps-valued-before-the-path"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Tail 20 log.txt)"', id="ps-tail-before-the-path"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Built with $(type -P gh)"', id="bash-type-is-not-a-reader"),
+        pytest.param("Bash", "git commit -m 'docs: show $(cat notes.txt) in the example'", id="single-quoted-literal"),
+        pytest.param("Bash", 'git commit -m "docs: show \\$(cat notes.txt) in the example"', id="escaped"),
+        pytest.param("PowerShell", "git commit -m 'docs: show $(Get-Content notes.txt) in the example'", id="ps-single-quoted"),
+    ],
+)
+def test_r10_only_a_reader_s_files_are_read(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("all green\n", encoding="utf-8")
+    assert not _leak(repo, shell, command), command
+
+
+def test_r10_a_pr_closed_unmerged_leaves_no_pending_debt(repo, tmp_path, monkeypatch):
+    from rails import cli, gitutil
+
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"))
+    _armed(rid, monitor="bound", closes=["9"])
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "CLOSED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "CLOSED"
+    assert "pending_debt" not in store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "CLOSED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    dispatch(evt, [_row("turn_end", ["Stop"])])
+    assert work.load(rid)["items"][0]["status"] == "open"

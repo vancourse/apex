@@ -159,10 +159,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   `rails ship`, whichever comes first, against the walk receipts as they stand then. So a
   `rails walk` between the merge and the Stop counts, and no debt is lost.
 
-- **A file read inside a text flag is read.** `--body "Tests: $(tail -20 log.txt)"` reads `log.txt`:
-  only a reader command (`cat`, `tail`, `head`, `Get-Content`, `type`, `< f`) in the
-  substitution's first pipeline stage, and only its file arguments; redirects, heredoc operators
-  (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file), flags and their values are not files.
+- **A file a substitution in a sending statement reads is read.** `--body "Here's the log: $(tail -20
+  log.txt)"`, `-f body="$(cat f)"`, PowerShell `--body (Get-Content -Raw f)` read the file. The
+  substitutions are found in the raw statement with its own quoting (a single-quoted or escaped
+  `$(cat f)` reads nothing) and split into their statements (`$(tail f || echo none)`); in each
+  first pipeline stage, a reader's files are read: bash `cat`'s words, `tail`/`head`'s after
+  `-n`/`-c` values, any command's `<` input; PowerShell `Get-Content`/`gc`/`type`/`cat`'s `-Path`
+  or first positional (every other parameter but a switch takes a value). Redirects, heredoc
+  operators (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file) and flags are not files.
+  In PowerShell `$((...))` is a subexpression, not arithmetic.
 
 Not yet: p3a (marking the shadow week's `would-deny` rows; the week ended 2026-10-15).
 

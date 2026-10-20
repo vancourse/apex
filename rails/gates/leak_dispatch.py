@@ -40,46 +40,98 @@ _READ_INTO = re.compile(
     r"\$?\(\s*(?:cat|<|Get-Content|gc|type)\s+['\"]?([^'\"\s)]+)['\"]?(?:\s+-Raw)?\s*\)",
     re.IGNORECASE,
 )
-#: The commands that read the files they name, and the flags among theirs that take a value.
-_READERS = frozenset({"cat", "tail", "head", "get-content", "gc", "type"})
-_READER_VALUED = frozenset(
-    {"-n", "-c", "--lines", "--bytes", "-tail", "-totalcount", "-head", "-first", "-last",
-     "-encoding", "-delimiter", "-readcount"}
-)
+#: PowerShell's file readers (`type` and `cat` are Get-Content's aliases there), and the switches
+#: among their parameters: every other parameter takes the next word as its value.
+_PS_READERS = frozenset({"get-content", "gc", "type", "cat"})
+_PS_SWITCHES = frozenset({"raw", "force", "wait", "asbytestream", "verbose", "debug", "whatif", "confirm"})
+_PS_PATH = frozenset({"path", "literalpath", "lp", "pspath"})
+#: bash's file readers, and the flags among theirs that take a value (`cat` takes none: `-n`
+#: numbers its lines). `type` in bash describes commands, so it reads no file.
+_BASH_READERS = {"cat": frozenset(), "tail": frozenset({"-n", "-c", "--lines", "--bytes"}),
+                 "head": frozenset({"-n", "-c", "--lines", "--bytes"})}
 
 
-def _files_read_in(value: str, shell: str) -> list[str]:
-    """The files a substitution inside a text flag reads, read the shell's way: `$(tail -20
-    log.txt)`, `$(cat log.txt | head -5)`, `$(< f)`, PowerShell `$(Get-Content log.txt -Raw)`. Only
-    a reader command in the substitution's first pipeline stage counts, and only its file
-    arguments: redirects, heredoc operators (`cat <<'EOF'` reads no file; its body is read as a
-    body), flags and their values are not files."""
-    from rails.gates.destructive import _substitutions, command_name, pipeline_stages
+def _reader_files(stage: list[str], shell: str) -> list[str]:
+    """The files one pipeline stage reads: a reader command's file arguments, and in bash any
+    command's input redirect (`sort < f`, `head -5 <f`). Redirects, heredoc operators (`cat
+    <<'EOF'` reads no file; its body is read as a body), flags and their values are not files."""
+    from rails.gates.destructive import command_name
     from rails.shell import is_redirect, takes_target
 
-    names: list[str] = []
-    for inner in _substitutions(value, shell):
-        words = _words(inner, shell)
-        if words and words[0].startswith("<") and not words[0].startswith("<<"):
-            target = words[1] if words[0] == "<" and len(words) > 1 else words[0][1:]
-            if target:
-                names.append(target)
-            continue
-        stages = pipeline_stages(words)
-        if not stages or command_name(stages[0][0]).lower() not in _READERS:
-            continue
-        args, i = stages[0][1:], 0
+    if not stage:
+        return []
+    name, args, files = command_name(stage[0]).lower(), stage[1:], []
+    if shell != "powershell":
+        for i, tok in enumerate(args):
+            if tok == "<" and i + 1 < len(args):
+                files.append(args[i + 1])
+            elif tok.startswith("<") and not tok.startswith(("<<", "<&", "<>")) and len(tok) > 1:
+                files.append(tok[1:])
+    if shell == "powershell":
+        if name not in _PS_READERS:
+            return files
+        positional, i = [], 0
         while i < len(args):
             tok = args[i]
-            if tok.lower() in _READER_VALUED:
-                i += 2
-            elif is_redirect(tok):
+            if tok.startswith("-") and len(tok) > 1:
+                key, colon, glued = tok[1:].partition(":")
+                if key.lower() in _PS_PATH:
+                    value = glued if colon else (args[i + 1] if i + 1 < len(args) else "")
+                    files.extend(value.split(","))
+                    i += 1 if colon else 2
+                elif colon or key.lower() in _PS_SWITCHES:
+                    i += 1
+                else:
+                    i += 2
+                continue
+            if is_redirect(tok):
                 i += 2 if takes_target(tok) else 1
-            else:
-                if not (tok.startswith(("-", "+")) or tok.isdigit()):
-                    names.append(tok)
-                i += 1
-    return names
+                continue
+            positional.append(tok)
+            i += 1
+        if positional:
+            files.extend(positional[0].split(","))
+        return [f for f in files if f]
+    valued = _BASH_READERS.get(name)
+    if valued is None:
+        return files
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in valued:
+            i += 2
+        elif is_redirect(tok):
+            i += 2 if takes_target(tok) else 1
+        else:
+            if not (tok.startswith(("-", "+")) or tok.isdigit()):
+                files.append(tok)
+            i += 1
+    return [f for f in files if f]
+
+
+def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
+    """The files the substitutions in a RAW sending statement read, wherever they sit (a text
+    flag, `-f body=$(...)`, a title): `--body "Here's the log: $(tail -20 log.txt)"`, `$(cat < f)`,
+    PowerShell `--body (Get-Content -Raw f)`. Found with the statement's own quoting, so a
+    single-quoted or escaped `$(cat f)` reads nothing; each substitution is split into its
+    statements (`$(tail f || echo none)`), and only the first stage of each is a reader."""
+    from rails.gates.destructive import _substitutions, pipeline_stages
+    from rails.shell import segments
+
+    texts = list(_substitutions(statement, shell))
+    if shell == "powershell":
+        from rails.shell.powershell import groups
+
+        texts += groups(statement)
+    files: list[str] = []
+    for text in texts:
+        for seg in segments(text, shell):
+            stages = pipeline_stages(_words(seg, shell))
+            if stages:
+                files.extend(_reader_files(stages[0], shell))
+            if depth < 4:
+                files.extend(_files_read(seg, shell, depth + 1))  # `$((Get-Content f -Raw).Trim())`
+    return files
 
 
 _TEXT_FLAGS = {"--body", "-b", "--title", "-t", "--message", "-m", "--notes", "-n"}
@@ -384,6 +436,10 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
             continue
         is_gh_pr_create = bool(re.search(r"\bgh\s+(pr|issue)\s+(create|edit|comment)\b", visible))
         _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, shell)
+        # `--body "Here's the log: $(tail -20 log.txt)"`, `-f body="$(cat f)"`: a file a
+        # substitution in this statement reads is part of what it sends
+        for name in dict.fromkeys(_files_read(statement, shell)):
+            out.append((f"read by a substitution: {name}", read_file(name)))
     # `-m "$(cat <<'EOF' ...)"`, `--body-file - <<'EOF'`, PowerShell `$body = @'...'@` or
     # `@'...'@ | gh ... --body-file -`: the body is the text that leaves
     out.extend(("heredoc body", body) for body in _bodies(command, shell))
@@ -412,9 +468,6 @@ def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, 
                 out.append((f"{flag} {read.group(1)}", read_file(read.group(1))))  # `--body "$(cat f)"`
             elif "$" in value:
                 out.append((flag, command))  # `-m $m`: the text was set elsewhere in the command
-                # `--body "Tests: $(tail -20 log.txt)"`: the file a substitution reads is read
-                for name in _files_read_in(value, shell):
-                    out.append((f"{flag} {name}", read_file(name)))
             i += step
             continue
         if w == "<<<" or (w.startswith("<<<") and len(w) > 3):

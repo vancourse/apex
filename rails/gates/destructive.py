@@ -159,7 +159,8 @@ def _substitutions(segment: str, shell: str) -> list[str]:
         if visible[i] == escape:
             i += 2
             continue
-        if visible.startswith("$(", i) and not visible.startswith("$((", i):
+        # `$((` is bash arithmetic; in PowerShell it is a subexpression holding a group
+        if visible.startswith("$(", i) and (powershell or not visible.startswith("$((", i)):
             if powershell:
                 from rails.shell.powershell import _skip_group
 
