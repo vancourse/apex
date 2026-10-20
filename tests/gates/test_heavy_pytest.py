@@ -158,6 +158,9 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         "time (cd apps && uv run pytest big)",
         "if (cd apps && uv run pytest big); then echo ok; fi",
         "(cd pkg && uv run pytest tests -n 4)&",
+        # Targets the hook cannot read are judged too: the worker count is not theirs.
+        "uv run pytest $CHANGED_TESTS",
+        "uv run pytest $(git diff --name-only origin/main | grep test_) -q",
         # Any parallel run is a suite, however few its files (operator 2026-10-20):
         # a two-file run at -n auto is sixteen workers, each with a database.
         "uv run pytest tests/test_one.py",
@@ -190,7 +193,6 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
         "uv run pytest apps/ --co -q",
         "uv run pytest --version",
         'uv run pytest apps/ -o addopts=""',
-        "uv run pytest $CHANGED_TESTS",
         "rails lock suite -- uv run pytest apps/ -q",
         "uv run python ci/rails.py lock suite -- uv run pytest apps/ -q",
         "docker compose exec app python -m pytest -n 4",

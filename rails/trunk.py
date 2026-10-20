@@ -839,7 +839,7 @@ def _run(
     revert_check: Callable[[dict[str, Any]], bool],
     out,
 ) -> None:
-    from rails.check import find_lanes_file
+    from rails.check import find_lanes_file, missing_prerequisite
 
     root = trunk_dir(repo)
     tree_path = root / "tree"
@@ -861,9 +861,25 @@ def _run(
         print("rails trunk: no lane declares trunk_command; nothing to run", file=out)
         return
 
+    # A lane that cannot start here is the box, not the tip: said before the lock is waited
+    # for, so a pass with Docker down never queues ahead of every suite just to post `error`
+    # (adversary, review of 7aca8eb).
+    for lane in trunk_lanes:
+        why = missing_prerequisite(lane)
+        if why:
+            result.state, result.note = "error", f"{lane.name}: prerequisite: {why}"
+            _post(forge, tip_config, tip, tree_sha, "error", "error", result.note)
+            _record(repo, state, result, verdict=None)
+            return
+
     with _pass_locks(repo, trunk_lanes, tip, out):
         _judge(repo, top, tip, branch, state, result, forge, revert_check, out,
                tree_path, log_dir, tip_config, trunk_lanes, tree_sha)
+
+
+def _no_revert(made: dict[str, Any]) -> bool:
+    """A revert check that passes nothing: the revert PR stays open for a person."""
+    return False
 
 
 def _judge(
@@ -1051,6 +1067,14 @@ def _judge(
         if sha in found:
             result.culprits.append(Culprit(sha=sha, ids=found[sha], revertable=sha not in unrevertable))
     mode = _policy(top, base_sha)
+    # A revert's own `rails check` re-enters the pass's locks by their holder records. One
+    # this pass could not write would leave that check waiting on the pass forever, holding
+    # the box (adversary, review of 7aca8eb): no revert then, only the report.
+    names = sorted({lane.lock for lane in trunk_lanes if lane.lock})
+    if result.culprits and not all(store.holds_record(name) for name in names):
+        print("  revert check skipped: a lock's holder record is not this pass's", file=out)
+        revert_check = _no_revert
+
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
 

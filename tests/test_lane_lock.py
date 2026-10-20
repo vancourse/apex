@@ -185,6 +185,23 @@ def test_a_priority_waiter_gets_the_lock_before_a_plain_one(hold):
     assert not claim.exists()
 
 
+def test_a_stale_priority_record_names_nobody_next(hold):
+    """A record with no claim behind it (a waiter that crashed, or one Windows would not
+    delete) is not a waiter: the wait line must not say a pass goes next (coop, review of
+    7aca8eb)."""
+    _, release = hold()
+    store.write_json(store.data_root() / "locks" / "t.priority.json", {"leaf": "rails trunk", "pid": 1})
+    notes: list[object] = []
+
+    def on_wait(holder, waited):
+        notes.append(holder)
+        release.write_text("go")
+
+    with store.machine_lock("t", {"leaf": "session"}, poll=0.02, on_wait=on_wait):
+        pass
+    assert notes and "next" not in notes[0], notes
+
+
 def test_a_plain_waiter_is_not_held_up_once_no_priority_waiter_waits(hold):
     """The claim lives only while a priority waiter waits: once it has the lock, or has
     gone, a plain waiter takes the lock at its next try."""

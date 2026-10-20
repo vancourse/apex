@@ -425,6 +425,33 @@ def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(s
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
 
 
+def test_a_pass_that_cannot_start_a_lane_says_so_without_waiting_for_the_lock(site, monkeypatch):
+    """Docker down, Postgres gone: the box, not the tip. The pass posts `error` at once, and
+    never queues ahead of every suite to do it (adversary, review of 7aca8eb)."""
+    from rails import check
+
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    monkeypatch.setattr(check, "missing_prerequisite", lambda lane: "Postgres is not reachable")
+    with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
+        code, text = _in_thread(lambda: _pass(site), 30.0)
+    assert "prerequisite" in site.forge.last()["description"] or "Postgres" in text, text
+    assert "wait" not in text, text
+
+
+def test_a_pass_that_cannot_vouch_for_its_lock_record_skips_the_revert_check(site, monkeypatch):
+    """A revert's own `rails check` re-enters the pass's lock by its holder record; without
+    one it would wait on the pass forever (adversary, review of 7aca8eb). No check then."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    monkeypatch.setattr(store, "holds_record", lambda name: False)
+    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
+    assert "revert check skipped" in text, text
+    assert site.checked == []
+
+
 def _in_thread(fn, seconds: float = 120.0):
     """Run `fn` in a thread; fail (rather than hang the suite) if it does not finish."""
     import threading

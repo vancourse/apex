@@ -26,11 +26,9 @@ the working directory) upward, the first ``pytest.toml`` / ``.pytest.toml`` /
 ``[tool.pytest.ini_options]`` / ``tox.ini`` ``[pytest]`` / ``setup.cfg`` ``[tool:pytest]``.
 That last step is how jarvis's root ``addopts = "... -n auto"`` makes a bare
 ``uv run pytest ci/`` sixteen workers, while ``uv run pytest apps/purser/tests`` reads that
-package's own config and runs serially. A directory counts its ``test_*.py`` /
-``*_test.py`` files outside dot directories, ``node_modules`` and the like (pytest's
-``norecursedirs``) and outside ``--ignore``; node ids count their file once; a target not
-on disk counts one; a target the hook cannot resolve (``$VAR`` it never saw assigned)
-counts nothing, and a run whose only targets are unresolved is not judged.
+package's own config and runs serially. Targets only steer that config search: a target
+the hook cannot resolve (``$VAR`` it never saw assigned, ``$(...)``) is left out of it, and
+a run whose only targets are unresolved reads the working directory's config.
 
 **Not refused:** a serial run (``-n 0``, ``-n 1``, ``-p no:xdist``, or a config with no
 ``-n``), of any size; ``--co`` and the
@@ -761,8 +759,9 @@ def _heavy(args: list[str], here: Path, variables: dict[str, str], env_addopts: 
         return None
     raw_targets = targets(args, lambda word: resolve(here, word, variables).exists())
     resolved = [t for t in raw_targets if not _unresolved(local_path(t.split("::", 1)[0], variables))]
-    if raw_targets and not resolved:
-        return None  # only targets it cannot read: not judged
+    # Targets it cannot read (`$T`, `$(git diff ...)`) are still judged: the worker count
+    # does not depend on them, and the config is then the working directory's (adversary,
+    # review of 7aca8eb).
     paths = [p for raw in resolved for p in _expand(here, raw, variables)]
     workers = explicit_workers(args)
     source = "on the command line"
