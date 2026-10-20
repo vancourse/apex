@@ -163,11 +163,17 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   log.txt)"`, `-f body="$(cat f)"`, PowerShell `--body (Get-Content -Raw f)` read the file. The
   substitutions are found in the raw statement with its own quoting (a single-quoted or escaped
   `$(cat f)` reads nothing) and split into their statements (`$(tail f || echo none)`); in each
-  first pipeline stage, a reader's files are read: bash `cat`'s words, `tail`/`head`'s after
-  `-n`/`-c` values, any command's `<` input; PowerShell `Get-Content`/`gc`/`type`/`cat`'s `-Path`
-  or first positional (every other parameter but a switch takes a value). Redirects, heredoc
-  operators (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file) and flags are not files.
-  In PowerShell `$((...))` is a subexpression, not arithmetic.
+  first pipeline stage (split on the raw text), a reader's files are read: bash `cat`'s words,
+  `tail`/`head`'s after `-n`/`-c` values; PowerShell `Get-Content`/`gc`/`type`/`cat`'s `-Path` or
+  first positional (every other parameter but a switch takes a value). An input redirect, found
+  on the quote-blanked text (`'<details>'` is text, `<(...)` runs a command), is read for a bare
+  `$(< f)` and for the commands whose output is their input (`cat`, `sort`, `grep`, ...; not a
+  count like `wc -l`), and for the sending statement's own stdin (`--body-file - < f`). Redirects,
+  heredoc operators (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file) and flags are not
+  files. Best effort: a file found this way that cannot be read adds nothing (the substitution's
+  text is still read, as on main), so a misread word, a missing fallback (`$(cat VERSION || echo
+  dev)`) or `/dev/null` refuses nothing; a whole-value `--body "$(cat f)"`, `--body-file`, `-F` and
+  `@file` keep their could-not-look refusal. In PowerShell `$((...))` is a subexpression.
 
 Not yet: p3a (marking the shadow week's `would-deny` rows; the week ended 2026-10-15).
 

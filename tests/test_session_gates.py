@@ -1756,3 +1756,65 @@ def test_r10_a_pr_closed_unmerged_leaves_no_pending_debt(repo, tmp_path, monkeyp
     evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
     dispatch(evt, [_row("turn_end", ["Stop"])])
     assert work.load(rid)["items"][0]["status"] == "open"
+
+
+# --- review round 11 (2026-10-20): input redirects on raw text; a derived name it cannot read ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr comment 5 --body \"Tests: $(grep -c '<testcase' junit.xml)\"",
+        "gh pr comment 5 --body \"$(printf '<details>\\n%s\\n</details>' \"$(tail -20 log.txt)\")\"",
+        "gh pr comment 5 --body \"$(echo '<!-- rails -->')\"",
+        'gh pr comment 5 --body "$(diff <(git show HEAD:log.txt) log.txt)"',
+        'gh pr comment 5 --body "Tests: $(tail -30 log.txt|grep -v DEBUG)"',
+        'gh release create v1 --notes "v$(cat VERSION 2>/dev/null || echo dev)"',
+        'gh pr comment 5 --body "Lines: $(wc -l < log.txt)"',
+        'gh pr comment 5 --body "Notes: $(cat notes/missing.md)"',
+    ],
+    ids=["quoted-lt", "quoted-details", "quoted-comment", "process-substitution", "glued-pipe",
+         "missing-fallback", "a-count-of-its-input", "a-derived-name-it-cannot-read"],
+)
+def test_r11_shell_syntax_and_missing_files_refuse_nothing(repo, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n" if "wc -l" in command else "all green\n", encoding="utf-8")
+    assert not _leak(repo, "Bash", command), command
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'gh pr create --title x --body "$(<log.txt)"', id="glued-input"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(< log.txt)"', id="spaced-input"),
+        pytest.param("Bash", 'gh api repos/o/r/issues/5/comments -f body="$(< log.txt)"', id="field-input"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Tests: $(tail -30 log.txt|grep -v DEBUG)"', id="glued-pipe"),
+        pytest.param("Bash", "gh pr create --title x --body-file - < log.txt", id="the-sender-s-own-stdin"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "Tests: $(Get-Content log.txt -Raw -ErrorAction SilentlyContinue)"', id="ps-erroraction"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content log.txt -ea SilentlyContinue -OutVariable x)"', id="ps-common"),
+    ],
+)
+def test_r11_a_file_read_on_stdin_or_after_common_parameters_is_read(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    denies = _leak(repo, shell, command)
+    assert denies and not any("could not read" in d for d in denies), (command, denies)
+
+
+def test_r11_a_found_value_not_a_missing_file_is_why_the_r10_cases_refuse(repo):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    for shell, command in (
+        ("Bash", "gh pr comment 5 --body \"Here's the log: $(tail -20 log.txt)\""),
+        ("PowerShell", "gh pr create --title x --body (Get-Content -Raw log.txt)"),
+        ("Bash", 'gh pr comment 5 --body "Log: `cat log.txt`"'),
+    ):
+        denies = _leak(repo, shell, command)
+        assert denies and not any("could not read" in d for d in denies), (command, denies)
+
+
+def test_r11_a_process_substitution_is_not_an_input_redirect(repo):
+    """`<(...)` runs a command; read as `< (git` it would name a file - here one that exists."""
+    _leaky_repo(repo)
+    (repo / "(git").write_text("total 1234.56\n", encoding="utf-8")
+    assert not _leak(repo, "Bash", 'gh pr comment 5 --body "Diff: $(cat <(git show HEAD:log.txt))"')

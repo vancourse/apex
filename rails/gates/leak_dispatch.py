@@ -52,21 +52,15 @@ _BASH_READERS = {"cat": frozenset(), "tail": frozenset({"-n", "-c", "--lines", "
 
 
 def _reader_files(stage: list[str], shell: str) -> list[str]:
-    """The files one pipeline stage reads: a reader command's file arguments, and in bash any
-    command's input redirect (`sort < f`, `head -5 <f`). Redirects, heredoc operators (`cat
-    <<'EOF'` reads no file; its body is read as a body), flags and their values are not files."""
+    """The files one pipeline stage's reader command names: its file arguments. Redirects (an input
+    redirect is `_input_redirects`'), heredoc operators (`cat <<'EOF'` reads no file; its body is
+    read as a body), flags and their values are not files."""
     from rails.gates.destructive import command_name
     from rails.shell import is_redirect, takes_target
 
     if not stage:
         return []
     name, args, files = command_name(stage[0]).lower(), stage[1:], []
-    if shell != "powershell":
-        for i, tok in enumerate(args):
-            if tok == "<" and i + 1 < len(args):
-                files.append(args[i + 1])
-            elif tok.startswith("<") and not tok.startswith(("<<", "<&", "<>")) and len(tok) > 1:
-                files.append(tok[1:])
     if shell == "powershell":
         if name not in _PS_READERS:
             return files
@@ -109,13 +103,37 @@ def _reader_files(stage: list[str], shell: str) -> list[str]:
     return [f for f in files if f]
 
 
+#: The bash commands whose output is the input they read, so a file fed on stdin is what they
+#: send (`$(sort < f)`); a count (`wc -l < f`) or a program's result is not. "" is a bare `< f`.
+_BASH_INPUT_COMMANDS = frozenset({"", "cat", "tail", "head", "sort", "uniq", "grep", "tr", "sed", "cut"})
+#: An input redirect the shell reads: `<` that is not `<<`, `<&`, `<>` or a process substitution.
+_INPUT_REDIRECT = re.compile(r"(?<![<\w&])<(?![<&>(])\s*")
+
+
+def _input_redirects(raw: str, shell: str) -> list[str]:
+    """The files a bash stage reads on stdin, found on the quote-blanked RAW text (a quoted
+    `'<details>'` is text), with the target as written (`< "my log.txt"`)."""
+    if shell == "powershell":
+        return []
+    from rails.shell import scrub
+
+    visible = scrub(raw, "bash", comments=True)
+    out = []
+    for m in _INPUT_REDIRECT.finditer(visible):
+        target = re.match(r"'[^']*'|\"[^\"]*\"|[^\s;&|)<>]+", raw[m.end() :])
+        if target:
+            out.append(target.group(0).strip("'\""))
+    return out
+
+
 def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
     """The files the substitutions in a RAW sending statement read, wherever they sit (a text
     flag, `-f body=$(...)`, a title): `--body "Here's the log: $(tail -20 log.txt)"`, `$(cat < f)`,
     PowerShell `--body (Get-Content -Raw f)`. Found with the statement's own quoting, so a
     single-quoted or escaped `$(cat f)` reads nothing; each substitution is split into its
-    statements (`$(tail f || echo none)`), and only the first stage of each is a reader."""
-    from rails.gates.destructive import _substitutions, pipeline_stages
+    statements (`$(tail f || echo none)`), and only the first stage of each is a reader. Best
+    effort: a name it finds that cannot be read adds nothing (see `extract_all`)."""
+    from rails.gates.destructive import _substitutions, command_name
     from rails.shell import segments
 
     texts = list(_substitutions(statement, shell))
@@ -126,9 +144,13 @@ def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
     files: list[str] = []
     for text in texts:
         for seg in segments(text, shell):
-            stages = pipeline_stages(_words(seg, shell))
-            if stages:
-                files.extend(_reader_files(stages[0], shell))
+            first = _stages(seg, shell)[0]  # split on the raw text: `tail f|grep x`
+            words = _words(first, shell)
+            command = "" if not words or words[0].startswith("<") else command_name(words[0]).lower()
+            if command in _BASH_INPUT_COMMANDS:
+                files.extend(_input_redirects(first, shell))
+            if words and command:
+                files.extend(_reader_files(words, shell))
             if depth < 4:
                 files.extend(_files_read(seg, shell, depth + 1))  # `$((Get-Content f -Raw).Trim())`
     return files
@@ -167,8 +189,9 @@ def _read(path: str, cwd: Path) -> str | None:
         path = base + path[temp.end() :] if base else path
     p = folder_of(path, cwd) if cwd is not None else Path(path)
     try:
-        return p.read_text(encoding="utf-8", errors="replace")[:2_000_000]
-    except OSError:
+        with open(p, encoding="utf-8", errors="replace") as handle:
+            return handle.read(2_000_000)  # the head only, never the whole of a huge log in memory
+    except (OSError, ValueError):  # ValueError: a NUL in the name
         return None
 
 
@@ -436,10 +459,24 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
             continue
         is_gh_pr_create = bool(re.search(r"\bgh\s+(pr|issue)\s+(create|edit|comment)\b", visible))
         _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, shell)
-        # `--body "Here's the log: $(tail -20 log.txt)"`, `-f body="$(cat f)"`: a file a
-        # substitution in this statement reads is part of what it sends
-        for name in dict.fromkeys(_files_read(statement, shell)):
-            out.append((f"read by a substitution: {name}", read_file(name)))
+        # `--body "Here's the log: $(tail -20 log.txt)"`, `-f body="$(cat f)"`, `--body-file - <
+        # f`: a file a substitution in this statement reads, or its own stdin, is part of what it
+        # sends. Best effort: a name found this way that cannot be read adds nothing (the
+        # substitution's text is still read, as on main), so a misread word, a missing fallback or
+        # `/dev/null` refuses nothing; a crash here degrades to main's reading too. A file the
+        # command writes before sending it is judged by its writers, as any other body file.
+        try:
+            derived = list(dict.fromkeys(_files_read(statement, shell) + _input_redirects(statement, shell)))
+        except Exception:  # noqa: BLE001 - best effort, never a hole in what main reads
+            derived = []
+        for name in derived:
+            label = f"read by a substitution: {name}"
+            if _writers(name, statements[:sending], shell):
+                out.append((label, read_file(name)))
+                continue
+            text = _read(name, cwd)
+            if text is not None:
+                out.append((label, text))
     # `-m "$(cat <<'EOF' ...)"`, `--body-file - <<'EOF'`, PowerShell `$body = @'...'@` or
     # `@'...'@ | gh ... --body-file -`: the body is the text that leaves
     out.extend(("heredoc body", body) for body in _bodies(command, shell))
