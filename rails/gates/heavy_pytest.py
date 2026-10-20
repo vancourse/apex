@@ -615,9 +615,46 @@ def _cd_target(tokens: list[str]) -> str | None:
     return None
 
 
+def blank_substitutions(command: str) -> str:
+    """``command`` with each ``$(...)`` and backtick substitution that holds a ``|``, ``;``,
+    ``&`` or newline made one opaque word of the same length (``$___``): that separator would
+    split the statement and drop the options
+    after it, ``-n 4`` included (adversary, review of 90be54f). Offsets are kept, so a
+    statement found in the result is the same span of the command as typed."""
+    out = list(command)
+    i, n = 0, len(command)
+    while i < n:
+        if command.startswith("$(", i):
+            depth, j = 0, i + 1
+            while j < n:
+                if command[j] == "(":
+                    depth += 1
+                elif command[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            end = min(j, n - 1)
+        elif command[i] == "`":
+            close = command.find("`", i + 1)
+            end = n - 1 if close < 0 else close
+        else:
+            i += 1
+            continue
+        # Only a substitution holding a separator splits the statement. One without, like
+        # `$(git rev-parse --show-toplevel)`, stays readable: a `cd` into it is followed.
+        if any(ch in command[i : end + 1] for ch in "|;&\n"):
+            out[i] = "$"
+            for k in range(i + 1, end + 1):
+                out[k] = "_"
+        i = end + 1
+    return "".join(out)
+
+
 def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
     """``(why, start, end)`` for the first heavy pytest run in ``command`` (the offsets of its
     statement), else None."""
+    command = blank_substitutions(command)
     base = cwd
     lost = False  # after a `cd` it could not resolve: where the shell is, it cannot tell
     subshells: list[tuple[Path, bool]] = []  # where each open `(` will return to

@@ -863,8 +863,11 @@ def _run(
 
     # A lane that cannot start here is the box, not the tip: said before the lock is waited
     # for, so a pass with Docker down never queues ahead of every suite just to post `error`
-    # (adversary, review of 7aca8eb).
-    for lane in trunk_lanes:
+    # (adversary, review of 7aca8eb). Only on an idle box: while a suite holds the lock, a
+    # missing prerequisite may be that suite's load (Postgres out of connection slots, a
+    # Docker engine slow to answer), and the in-lock check decides once it is done (coop,
+    # review of 90be54f).
+    for lane in trunk_lanes if _locks_free(trunk_lanes) else []:
         why = missing_prerequisite(lane)
         if why:
             result.state, result.note = "error", f"{lane.name}: prerequisite: {why}"
@@ -877,9 +880,15 @@ def _run(
                tree_path, log_dir, tip_config, trunk_lanes, tree_sha)
 
 
-def _no_revert(made: dict[str, Any]) -> bool:
-    """A revert check that passes nothing: the revert PR stays open for a person."""
-    return False
+def _locks_free(lanes: list[lanes_mod.Lane]) -> bool:
+    """Whether no one holds any of ``lanes``' machine locks right now (a try, released)."""
+    for name in sorted({lane.lock for lane in lanes if lane.lock}):
+        try:
+            with store.machine_lock(name, {"leaf": "rails trunk", "lane": "probe"}, wait=False):
+                pass
+        except store.LockBusy:
+            return False
+    return True
 
 
 def _judge(
@@ -1072,8 +1081,10 @@ def _judge(
     # the box (adversary, review of 7aca8eb): no revert then, only the report.
     names = sorted({lane.lock for lane in trunk_lanes if lane.lock})
     if result.culprits and not all(store.holds_record(name) for name in names):
-        print("  revert check skipped: a lock's holder record is not this pass's", file=out)
-        revert_check = _no_revert
+        # Reported, as with `trunk_revert = "off"`: no revert is opened that no check could
+        # pass (coop, review of 90be54f: a revert left unchecked read as a red check).
+        print("  revert check skipped: a lock's holder record is not this pass's; reported only", file=out)
+        mode = "off"
 
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)

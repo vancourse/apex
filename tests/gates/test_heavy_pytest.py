@@ -161,6 +161,9 @@ def _judge(command: str, cwd: Path, shell: str = "bash"):
         # Targets the hook cannot read are judged too: the worker count is not theirs.
         "uv run pytest $CHANGED_TESTS",
         "uv run pytest $(git diff --name-only origin/main | grep test_) -q",
+        # A `|` inside the substitution must not cut the options after it off the statement.
+        "cd pkg && uv run pytest $(ls tests | head -2) -n 4",
+        "cd pkg && uv run pytest `ls tests | head -2` -n 4",
         # Any parallel run is a suite, however few its files (operator 2026-10-20):
         # a two-file run at -n auto is sixteen workers, each with a database.
         "uv run pytest tests/test_one.py",
@@ -184,6 +187,7 @@ def test_a_heavy_suite_is_refused(verdict, repo, command):
     "command",
     [
         "uv run pytest apps/ -n 0",
+        "uv run pytest $(git diff --name-only origin/main | grep test_) -n 0",
         "uv run pytest apps/ -n0",
         "uv run pytest apps/ -n 1",
         "uv run pytest apps/ -p no:xdist",

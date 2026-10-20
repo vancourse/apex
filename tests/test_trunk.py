@@ -425,19 +425,59 @@ def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(s
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
 
 
-def test_a_pass_that_cannot_start_a_lane_says_so_without_waiting_for_the_lock(site, monkeypatch):
-    """Docker down, Postgres gone: the box, not the tip. The pass posts `error` at once, and
-    never queues ahead of every suite to do it (adversary, review of 7aca8eb)."""
+def test_a_pass_that_cannot_start_a_lane_on_an_idle_box_says_so_at_once(site, monkeypatch):
+    """Docker down, Postgres gone, and no suite running: the box, not the tip. The pass
+    posts `error` without taking the lock (adversary, review of 7aca8eb)."""
     from rails import check
 
     _relanes(site, needs='lock = "trunklock"')
     _pass(site)
     site.merge("src/a.py", "a = 1\n")
     monkeypatch.setattr(check, "missing_prerequisite", lambda lane: "Postgres is not reachable")
-    with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
-        code, text = _in_thread(lambda: _pass(site), 30.0)
-    assert "prerequisite" in site.forge.last()["description"] or "Postgres" in text, text
-    assert "wait" not in text, text
+    code, text = _in_thread(lambda: _pass(site), 30.0)
+    assert site.forge.last()["state"] == "error", text
+    assert "testing" not in text, text
+
+
+def test_a_prerequisite_a_running_suite_loads_is_checked_after_that_suite(site, monkeypatch):
+    """While a suite holds the lock, Postgres can be out of connection slots because of it.
+    The pass waits that suite out and checks a quiet box (coop, review of 90be54f)."""
+    import threading
+
+    from rails import check
+
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    busy = threading.Event()
+
+    def loaded(lane) -> str | None:
+        return "Postgres is out of connection slots" if busy.is_set() else None
+
+    monkeypatch.setattr(check, "missing_prerequisite", loaded)
+    holding, release = threading.Event(), threading.Event()
+
+    def session() -> None:
+        with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
+            busy.set()
+            holding.set()
+            release.wait(60)
+            busy.clear()
+
+    threading.Thread(target=session, daemon=True).start()
+    assert holding.wait(10)
+    out = io.StringIO()
+    box: dict = {}
+    runner = threading.Thread(target=lambda: box.setdefault("r", _pass(site, out=out)), daemon=True)
+    runner.start()
+    deadline = time.monotonic() + 30
+    while "held by a session" not in out.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "held by a session" in out.getvalue(), out.getvalue()
+    release.set()
+    runner.join(120)
+    code, text = box["r"]
+    assert code == 0 and site.forge.last()["state"] == "success", text
 
 
 def test_a_pass_that_cannot_vouch_for_its_lock_record_skips_the_revert_check(site, monkeypatch):
