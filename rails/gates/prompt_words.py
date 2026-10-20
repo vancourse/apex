@@ -70,8 +70,9 @@ def check(evt: Event):
         return None
     if not intent.is_human(evt.payload, prompt):
         return [Notice(_UNREAD)] if intent.unread_reply(evt.payload, prompt) else None
-    # The words, the ack and the ceremony log read what the operator wrote, never the reminders
-    # the harness put in front of it (a "rather than" in a side session's report is not theirs).
+    # The words, the ack and the ceremony log read what the operator wrote, never the closed
+    # reminders the harness put in front of it (a "rather than" in a side session's report is not
+    # theirs).
     prompt = intent.operator_text(prompt)
     first = prompt.strip().splitlines()[0].strip() if prompt.strip() else ""
     word = first.lower().rstrip(".!")

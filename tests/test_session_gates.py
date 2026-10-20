@@ -306,9 +306,10 @@ _NEVER_THE_OPERATOR = {
     ("prompt", "unread"), list(_NEVER_THE_OPERATOR.values()), ids=list(_NEVER_THE_OPERATOR)
 )
 def test_agent_text_and_untrustworthy_boundaries_are_never_read(repo, prompt, unread):
-    """Each stays a machine message, as on 1.6.0: nothing acked, voided, held or logged. One the
-    operator may have written in says their words were not read, and changes no state, so agent
-    text quoted in a reminder can neither ack an intent nor pass for the operator's correction."""
+    """Each is a machine message (all but the bare brief were on 1.6.0 too): nothing acked, voided,
+    held or logged. One the operator may have written in says their words were not read, and
+    changes no state, so agent text quoted in a reminder can neither ack an intent nor pass for
+    the operator's correction."""
     h = _intent(repo)
     rid = store.find_repo(repo)
     intent.update(rid, hash=h, shown_at=int(time.time()) - 60, blocked_hash=h)
@@ -353,7 +354,7 @@ def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo
 
 def test_known_limit_an_unclosed_reminder_that_quotes_a_closing_tag_reads_what_follows():
     """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.6.1, Known
-    limits). None was seen: the harness closes its own reminders."""
+    limits). The text alone cannot rule it out; a closing tag quoted mid-line was never seen."""
     prompt = "<system-reminder>\nIt reported: \"stops at </system-reminder>\nlooks right"
     assert intent.operator_text(prompt) == "looks right"
 

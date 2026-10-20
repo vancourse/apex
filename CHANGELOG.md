@@ -24,21 +24,21 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **Machine messages, never an ack:**
     - a prompt that is only reminders;
     - one whose text after the reminders starts with `<` (a `<task-notification>`);
-    - a spawned session's first prompt ("Background (from the session that started this one):
-      …", the parent agent's brief), which is new: it is a machine message by its header, with
-      or without a reminder in front.
+    - a spawned session's first prompt when it carries the header "Background (from the session
+      that started this one): …" (the parent agent's brief), which is new: it is a machine
+      message by that header, with or without a reminder in front. A brief without the header
+      reads as the operator's, as on 1.6.0.
   - **A leading reminder that cannot be taken off cleanly** stays a machine message, as on 1.6.0:
     one that never closes (unless it quotes a closing tag: Known limits), or one that leaves a
-    reminder tag after it. Agent text inside a
-    reminder (a background agent's result, a side session's quoted report) can quote the closing
-    tag. That ends the block early and leaves agent text standing in front of the operator's
+    reminder tag after it. Agent text inside a reminder (a background agent's result, a side
+    session's quoted report) can quote the closing tag. That ends the block early and leaves agent text standing in front of the operator's
     words. If it also quotes an opening tag, removing blocks anywhere would pair them with the
     real tags and leave agent text standing as the operator's. Such a message changes no state:
     nothing is acked or voided, and no `hold`, `release`, `used` or `approve` is recorded. The
     session is now told that the operator's words, if any, were not read.
   - **The ceremony log counts differently.** It now counts replies behind a leading reminder,
     which it dropped before, at the length of the operator's words, and no longer counts a
-    spawned session's brief. So `ceremony_30d.messages` and `ceremony_share` shift at 1.6.1 (not
+    spawned session's brief that carries the header. So `ceremony_30d.messages` and `ceremony_share` shift at 1.6.1 (not
     measured).
   - **Known limits:**
     - A reply behind a reminder that cannot be taken off cleanly is not read. A correction or a
@@ -53,9 +53,10 @@ All notable changes to rails (formerly apex) are documented here. Format follows
       directions (two review rounds). Whether only an explicit yes should ack is decision #67,
       pinned meanwhile by a strict xfail at the hook.
     - A reminder that never closes but quotes a closing tag cannot be told from a closed one
-      followed by a reply, so what follows the quote is read as the operator's. The harness
-      closes its own reminders: all 175 reminder-led prompts in the local transcripts to
-      2026-10-20 closed cleanly, and none left a tag.
+      followed by a reply, so what follows the quote is read as the operator's. The text alone
+      cannot show this never happens. What it shows: the harness writes each closing tag at the
+      start of a line, and in the 175 reminder-led non-meta user lines in the local transcripts
+      to 2026-10-20 every closing tag starts a line, so none was quoted mid-line.
     - A peer session's message ("Another Claude session sent a message: …") has no machine
       prefix, on 1.6.0 or now. In the transcripts it is a meta entry that did not reach the hook:
       in one jarvis session a shown intent stayed unacked through three of them.
