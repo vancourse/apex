@@ -2,8 +2,9 @@
 
 A message that begins with closed harness `<system-reminder>` blocks (re-read instructions, a side
 session reporting in, "Linked sessions now") is read from after them (`intent.operator_text`).
-Every other message is read as on 1.6.0. One that begins with a reminder that cannot be taken off
-cleanly stays a machine message, and the session is told its words were not read (`_UNREAD`).
+Every other message is read as on 1.6.0, except a spawned session's brief, now a machine message
+by its header (`intent.MACHINE_PREFIXES`). One that begins with a reminder that cannot be taken
+off cleanly stays a machine message, and the session is told its words were not read (`_UNREAD`).
 
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`

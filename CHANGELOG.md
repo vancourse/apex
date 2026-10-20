@@ -7,7 +7,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 ## [1.6.1] — 2026-10-20
 
 ### Fixed
-- **An operator's reply behind a harness reminder acks the intent again.** Claude Code puts a
+- **An operator's reply behind a harness reminder acks the intent.** Claude Code puts a
   `<system-reminder>` block in front of the operator's words when instruction files were re-read,
   when a side session reported in, and on every idle prompt in a linked or spawned session.
   `intent.is_human` saw a prompt starting with `<` and took it for a machine message, so the shown
@@ -19,8 +19,8 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     (`intent.operator_text`). `prompt_words` reads that text for `hold`, `release`, `used`,
     `approve`, the ack-or-correction and the ceremony log, so a "rather than" in a side session's
     report cannot make the operator's reply a correction.
-  - **Every other prompt is judged as on 1.6.0**, whole. A reply followed by a reminder still
-    acks, and the reminder's words are still read with it.
+  - **Every other prompt is judged as on 1.6.0**, whole, except a spawned session's brief (below).
+    A reply followed by a reminder still acks, and the reminder's words are still read with it.
   - **Machine messages, never an ack:**
     - a prompt that is only reminders;
     - one whose text after the reminders starts with `<` (a `<task-notification>`);
@@ -28,7 +28,8 @@ All notable changes to rails (formerly apex) are documented here. Format follows
       …", the parent agent's brief), which is new: it is a machine message by its header, with
       or without a reminder in front.
   - **A leading reminder that cannot be taken off cleanly** stays a machine message, as on 1.6.0:
-    one that never closes, or one that leaves a reminder tag after it. Agent text inside a
+    one that never closes (unless it quotes a closing tag: Known limits), or one that leaves a
+    reminder tag after it. Agent text inside a
     reminder (a background agent's result, a side session's quoted report) can quote the closing
     tag. That ends the block early and leaves agent text standing in front of the operator's
     words. If it also quotes an opening tag, removing blocks anywhere would pair them with the
@@ -51,8 +52,13 @@ All notable changes to rails (formerly apex) are documented here. Format follows
       reminder taken off, clicks in linked sessions ack too. A word list leaks in both
       directions (two review rounds). Whether only an explicit yes should ack is decision #67,
       pinned meanwhile by a strict xfail at the hook.
-    - A session whose title contains a reminder's closing tag would leave a tag in every idle
-      reply, so no reply there is read.
+    - A reminder that never closes but quotes a closing tag cannot be told from a closed one
+      followed by a reply, so what follows the quote is read as the operator's. The harness
+      closes its own reminders: all 175 reminder-led prompts in the local transcripts to
+      2026-10-20 closed cleanly, and none left a tag.
+    - A peer session's message ("Another Claude session sent a message: …") has no machine
+      prefix, on 1.6.0 or now. In the transcripts it is a meta entry that did not reach the hook:
+      in one jarvis session a shown intent stayed unacked through three of them.
   - `rails --version`, the session-start line and posted statuses say 1.6.1 (`rails.VERSION`).
 
 ## [1.6.0] — 2026-10-19

@@ -5,8 +5,7 @@
 hash only when that marker appears in the LAST assistant message of the turn —
 so "shown" means the operator could actually see it. The next HUMAN message is
 classified: a correction clears the ack and asks for a rewrite; anything else
-acks that hash. ``rails: autonomous <scope>`` in a dispatch prompt acks for an
-unattended session, and is counted separately.
+acks that hash (`rails.gates.prompt_words`, the only writer of ``acked_hash``).
 
 State per leaf in ``<store>/<repo>/state.json`` under ``intent[<leaf>]``:
 ``{hash, shown_at, acked_hash, acked_at, acked_by}``.
@@ -46,7 +45,9 @@ MACHINE_PREFIXES = (
 )
 
 #: Context Claude Code puts in front of an operator's words: re-read instruction files, a side
-#: session reporting in. Never the operator's words, so a prompt is judged without it. Behind
+#: session reporting in. None of the reminders seen in front of a reply carried the operator's
+#: words (175 reminder-led prompts in the local transcripts to 2026-10-20), so a prompt is judged
+#: without them. Behind
 #: one, "go ahead and merge" started with `<` and was taken for a machine message; the intent
 #: was never acked and `rails ship` refused three times (jarvis, 2026-10-20).
 #:
@@ -59,6 +60,11 @@ MACHINE_PREFIXES = (
 #: it is judged whole, as on 1.6.0, and starts with `<`. Failing open would let agent text ack
 #: an intent; failing closed drops that one reply, as 1.6.0 dropped every reply behind a reminder,
 #: and `prompt_words` says so (`unread_reply`).
+#:
+#: Known limit: a reminder that never closes but QUOTES a closing tag cannot be told from a closed
+#: one followed by a reply, so what follows the quote is read as the operator's. The harness
+#: closes its own reminders: every one of 175 reminder-led prompts in the local transcripts to
+#: 2026-10-20 closed cleanly, and none left a tag.
 _LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
 _REMINDER_TAG = re.compile(r"</?system-reminder>")
 
@@ -76,7 +82,8 @@ def operator_text(prompt: str) -> str:
 
 def unread_reply(payload: dict[str, Any], prompt: str) -> bool:
     """A main-session prompt that begins with a reminder `operator_text` could not take off: one
-    that never closes, or one that leaves a tag after it. The operator may have written in it."""
+    that never closes (and quotes no closing tag), or one that leaves a tag after it. The operator
+    may have written in it."""
     return (
         not payload.get("agent_id")
         and prompt.lstrip().startswith("<system-reminder>")

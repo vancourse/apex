@@ -343,6 +343,19 @@ def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo
     assert [r["len"] for r in log] == [len(p) for p in prompts]
     dispatch(_evt("UserPromptSubmit", repo, prompt="hold\n\n" + _REMINDER), rows)
     assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    # Known limit: a reminder after the reply is read with it, as on 1.6.0, so its "rather than"
+    # makes the reply a correction.
+    h = _intent(repo, "# Export CSV, take 2\n")
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt="go ahead\n\n" + _REMINDER), rows)
+    assert "Rewrite .rails/intent.md" in out.notices[0]
+
+
+def test_known_limit_an_unclosed_reminder_that_quotes_a_closing_tag_reads_what_follows():
+    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.6.1, Known
+    limits). None was seen: the harness closes its own reminders."""
+    prompt = "<system-reminder>\nIt reported: \"stops at </system-reminder>\nlooks right"
+    assert intent.operator_text(prompt) == "looks right"
 
 
 def test_the_operators_words_are_read_behind_a_harness_reminder(repo):
