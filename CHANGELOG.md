@@ -13,12 +13,22 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   for a machine message, so the shown intent was never acked. In jarvis on 2026-10-20,
   "go ahead and merge" and "are we done now?" both reached the session that way, and
   `rails ship` refused three times with "intent … has not been acked". A plain reply acked at
-  once. A prompt is now judged on the operator's words: closed `<system-reminder>` blocks are
-  removed first (`intent.operator_text`). The same text is what `prompt_words` reads for
-  `hold`, `release`, `used`, the ack-or-correction and the ceremony log, so a "rather than" in a
-  side session's report no longer reads as a correction. A prompt that is only harness text,
-  one carrying a `<task-notification>`, or one with an unclosed reminder is still a machine
-  message and never acks.
+  once. A prompt is now judged on the operator's words: the run of closed `<system-reminder>`
+  blocks at its START is removed (`intent.operator_text`). The same text is what `prompt_words`
+  reads for `hold`, `release`, `used`, the ack-or-correction and the ceremony log, so a
+  "rather than" in a side session's report no longer reads as a correction.
+  - **Still a machine message, never an ack:** a prompt that is only reminders; one whose
+    remaining text starts with `<` (a `<task-notification>`); and one with a reminder tag left
+    anywhere after that run. The last covers an unclosed block, a reminder after the operator's
+    words, and agent text inside a reminder (a background agent's result, a side session's
+    quoted report) that quotes the closing tag. Such a quote ends the block early. If it also
+    quotes an opening tag, removing blocks anywhere would pair them with the real tags and leave
+    agent text standing as the operator's.
+  - **A spawned session's first prompt** ("Background (from the session that started this
+    one): …", the parent agent's brief) is a machine message by its header, with or without
+    a reminder in front.
+  - **The ceremony log now counts the replies it dropped before,** so `ceremony_30d.messages`
+    rises from 1.6.1.
 
 ## [1.6.0] — 2026-10-19
 

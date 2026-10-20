@@ -33,20 +33,40 @@ CORRECTION = re.compile(
     re.IGNORECASE,
 )
 
-MACHINE_PREFIXES = ("<", "[", "{", "Caveat:", "This session is being continued")
+#: The last one is the header of a session's first prompt when another session started it: the
+#: parent agent's brief, which a reminder hides until it is removed (`operator_text`).
+MACHINE_PREFIXES = (
+    "<",
+    "[",
+    "{",
+    "Caveat:",
+    "This session is being continued",
+    "Background (from the session that started this one)",
+)
 
-#: Context Claude Code puts around an operator's words: re-read instruction files, a side
+#: Context Claude Code puts in front of an operator's words: re-read instruction files, a side
 #: session reporting in. Never the operator's words, so a prompt is judged without it. Behind
 #: one, "go ahead and merge" started with `<` and was taken for a machine message; the intent
-#: was never acked and `rails ship` refused three times (jarvis, 2026-10-20). Only a CLOSED
-#: block is removed: an unclosed one leaves the prompt starting with `<`, which stays a machine
-#: message, so a malformed prompt can never become an ack.
-_HARNESS_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+#: was never acked and `rails ship` refused three times (jarvis, 2026-10-20).
+#:
+#: Only a RUN of closed blocks at the very START is removed, and a reminder tag left anywhere
+#: after that means the boundary cannot be trusted (`is_human`). The text inside a reminder is
+#: agent-written: a background agent's result, a side session's quoted report. Quoting a closing
+#: tag ends the block early and leaves the real one behind; quoting a closing tag and then an
+#: opening one would, if blocks were removed anywhere, pair with the real tags and leave agent
+#: text standing as the operator's. Both leave a tag here, so both stay machine messages, as
+#: does an unclosed block. Failing closed costs the operator one more reply; failing open would
+#: let agent text ack an intent.
+_LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
+_REMINDER_TAG = re.compile(r"</?system-reminder>")
 
 
 def operator_text(prompt: str) -> str:
-    """The prompt as the operator wrote it: harness reminder blocks removed, then stripped."""
-    return _HARNESS_REMINDER.sub("", prompt).strip()
+    """The prompt as the operator wrote it: the reminders in front of it removed, then stripped."""
+    text = prompt
+    while match := _LEADING_REMINDER.match(text):
+        text = text[match.end() :]
+    return text.strip()
 
 
 def intent_file(top: Path) -> Path:
@@ -107,6 +127,8 @@ def is_human(payload: dict[str, Any], prompt: str) -> bool:
     if payload.get("agent_id"):
         return False
     stripped = operator_text(prompt)
+    if _REMINDER_TAG.search(stripped):
+        return False
     return bool(stripped) and not stripped.startswith(MACHINE_PREFIXES)
 
 

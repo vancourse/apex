@@ -1,7 +1,9 @@
 """UserPromptSubmit: the operator's words, and the intent ack (design R24, R22, decision 13.2).
 
-A HUMAN message is read as the operator wrote it: a harness `<system-reminder>` block in front
-of it (re-read instructions, a side session reporting in) is removed first (`intent.operator_text`).
+A HUMAN message is read as the operator wrote it: the harness `<system-reminder>` blocks in front
+of it (re-read instructions, a side session reporting in) are removed first
+(`intent.operator_text`). A prompt with a reminder tag left anywhere after that is not human
+(`intent.is_human`).
 
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`
