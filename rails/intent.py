@@ -50,39 +50,38 @@ MACHINE_PREFIXES = (
 #: one, "go ahead and merge" started with `<` and was taken for a machine message; the intent
 #: was never acked and `rails ship` refused three times (jarvis, 2026-10-20).
 #:
-#: Only a RUN of closed blocks at the very START is removed, and a reminder tag left anywhere
-#: after that means the boundary cannot be trusted (`is_human`). The text inside a reminder can
-#: be agent-written: a background agent's result, a side session's quoted report. Quoting a
-#: closing tag ends the block early and leaves the real one behind; quoting a closing tag and
-#: then an opening one would, if blocks were removed anywhere, pair with the real tags and leave
-#: agent text standing as the operator's. Both leave a tag here, so both stay machine messages,
-#: as does an unclosed block. Failing closed must not keep a correction from counting, so a
-#: stray tag also un-shows a shown intent: it is acked only after it is shown again, and the hook
-#: says so; `hold` is honoured either way (`prompt_words`). Failing open would let agent text ack
-#: an intent.
+#: Only a RUN of closed blocks at the very START is removed, and only when no reminder tag is left
+#: after it. The text inside a reminder can be agent-written: a background agent's result, a side
+#: session's quoted report. Quoting a closing tag ends the block early and leaves agent text and
+#: the real closing tag behind; quoting a closing tag and then an opening one would, if blocks
+#: were removed anywhere, pair with the real tags and leave agent text standing as the operator's.
+#: So a prompt with a tag left, like one whose reminder never closes, is not taken apart at all:
+#: it is judged whole, as on 1.6.0, and starts with `<`. Failing open would let agent text ack
+#: an intent; failing closed drops that one reply, as 1.6.0 dropped every reply behind a reminder,
+#: and `prompt_words` says so (`unread_reply`).
 _LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
 _REMINDER_TAG = re.compile(r"</?system-reminder>")
 
 
 def operator_text(prompt: str) -> str:
-    """The prompt with the reminders in front of it removed, then stripped. That is the operator's
-    words when `is_human` also holds; with a stray tag left (`stray_reminder`) it may not be."""
+    """The text after the closed reminders that begin the prompt, stripped, when no reminder tag
+    is left after them. Otherwise the prompt itself, unchanged, to be judged as on 1.6.0."""
     text = prompt
     while match := _LEADING_REMINDER.match(text):
         text = text[match.end() :]
+    if text == prompt or _REMINDER_TAG.search(text):
+        return prompt
     return text.strip()
 
 
-def stray_reminder(prompt: str) -> bool:
-    """Whether a reminder tag is left after the leading run is removed: an untrusted boundary."""
-    return bool(_REMINDER_TAG.search(operator_text(prompt)))
-
-
-def around_reminders(prompt: str) -> tuple[str, str]:
-    """What stands before the first reminder tag left and after the last one: where the operator's
-    own words would be when the boundary is untrusted."""
-    parts = _REMINDER_TAG.split(operator_text(prompt))
-    return parts[0], parts[-1]
+def unread_reply(payload: dict[str, Any], prompt: str) -> bool:
+    """A main-session prompt that begins with a reminder `operator_text` could not take off: one
+    that never closes, or one that leaves a tag after it. The operator may have written in it."""
+    return (
+        not payload.get("agent_id")
+        and prompt.lstrip().startswith("<system-reminder>")
+        and operator_text(prompt) == prompt
+    )
 
 
 def intent_file(top: Path) -> Path:
@@ -142,9 +141,7 @@ def update(repo: store.RepoId, **fields: Any) -> None:
 def is_human(payload: dict[str, Any], prompt: str) -> bool:
     if payload.get("agent_id"):
         return False
-    stripped = operator_text(prompt)
-    if _REMINDER_TAG.search(stripped):
-        return False
+    stripped = operator_text(prompt).lstrip()
     return bool(stripped) and not stripped.startswith(MACHINE_PREFIXES)
 
 

@@ -9,47 +9,50 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 ### Fixed
 - **An operator's reply behind a harness reminder acks the intent again.** Claude Code puts a
   `<system-reminder>` block in front of the operator's words when instruction files were re-read,
-  when a side session reported in, and on every idle prompt in a linked or spawned session. `intent.is_human` saw a prompt starting with `<` and took it
-  for a machine message, so the shown intent was never acked. In jarvis on 2026-10-20,
-  "go ahead and merge" and "are we done now?" both reached the session that way, and
-  `rails ship` refused three times with "intent … has not been acked". A plain reply acked at
-  once. A prompt is now judged on the operator's words: the run of closed `<system-reminder>`
-  blocks at its START is removed (`intent.operator_text`). The same text is what `prompt_words`
-  reads for `hold`, `release`, `used`, `approve`, the ack-or-correction and the ceremony log, so
-  a "rather than" in a side session's report cannot make the operator's reply a correction.
-  - **Still a machine message, never an ack:** a prompt that is only reminders; one whose
-    remaining text starts with `<` (a `<task-notification>`); and one with a reminder tag left
-    anywhere after that run. The last covers an unclosed block, a reminder after the operator's
-    words, and agent text inside a reminder (a background agent's result, a side session's
-    quoted report) that quotes the closing tag. Such a quote ends the block early. If it also
-    quotes an opening tag, removing blocks anywhere would pair them with the real tags and leave
-    agent text standing as the operator's.
-  - **A spawned session's first prompt** ("Background (from the session that started this
-    one): …", the parent agent's brief) is a machine message by its header, with or without
-    a reminder in front.
-  - **A message with a stray tag acks nothing.** The operator's words may be in it, before
-    the first tag left or after the last one, so:
-    - `hold` there is recorded. A hold set from agent text costs one `release`; a dropped hold
-      would let pushes through unseen.
-    - `release`, `used` or `approve` there is not recorded, and the session is told to have
-      the operator say it again on its own.
-    - A shown, unacked intent stops being shown, and the Stop hook asks for it again
-      (`blocked_hash` is cleared, as for a correction). If those words read as a correction,
-      it is voided as corrected, exactly as without the tag, so showing it unchanged cannot get
-      it acked. Otherwise it is only un-shown, so the next unrelated reply cannot ack an intent
-      the dropped message may have corrected.
-    - The session is told in each case, not left to find out at push.
+  when a side session reported in, and on every idle prompt in a linked or spawned session.
+  `intent.is_human` saw a prompt starting with `<` and took it for a machine message, so the shown
+  intent was never acked. In jarvis on 2026-10-20, "go ahead and merge" and "are we done now?"
+  both reached the session that way, and `rails ship` refused three times with "intent … has not
+  been acked". A plain reply acked at once.
+  - **What changed:** a prompt that BEGINS with closed `<system-reminder>` blocks, with no
+    reminder tag left after them, is judged on the text that follows them
+    (`intent.operator_text`). `prompt_words` reads that text for `hold`, `release`, `used`,
+    `approve`, the ack-or-correction and the ceremony log, so a "rather than" in a side session's
+    report cannot make the operator's reply a correction.
+  - **Every other prompt is judged as on 1.6.0**, whole. A reply followed by a reminder still
+    acks, and the reminder's words are still read with it.
+  - **Machine messages, never an ack:**
+    - a prompt that is only reminders;
+    - one whose text after the reminders starts with `<` (a `<task-notification>`);
+    - a spawned session's first prompt ("Background (from the session that started this one):
+      …", the parent agent's brief), which is new: it is a machine message by its header, with
+      or without a reminder in front.
+  - **A leading reminder that cannot be taken off cleanly** stays a machine message, as on 1.6.0:
+    one that never closes, or one that leaves a reminder tag after it. Agent text inside a
+    reminder (a background agent's result, a side session's quoted report) can quote the closing
+    tag. That ends the block early and leaves agent text standing in front of the operator's
+    words. If it also quotes an opening tag, removing blocks anywhere would pair them with the
+    real tags and leave agent text standing as the operator's. Such a message changes no state:
+    nothing is acked or voided, and no `hold`, `release`, `used` or `approve` is recorded. The
+    session is now told that the operator's words, if any, were not read.
   - **The ceremony log counts differently.** It now counts replies behind a leading reminder,
-    which it dropped before. It no longer counts a reply followed by a reminder, or a spawned
-    session's brief. So `ceremony_30d.messages` shifts at 1.6.1 (not measured).
+    which it dropped before, at the length of the operator's words, and no longer counts a
+    spawned session's brief. So `ceremony_30d.messages` and `ceremony_share` shift at 1.6.1 (not
+    measured).
   - **Known limits:**
-    - An agent-written decline button ("Hold B7 for now; leave the branch unpushed.") still
-      reads as approval when clicked, as it did on 1.6.0 in an unlinked session. Removing the
-      "Linked sessions now" reminder exposes linked sessions' clicks too. A word list leaks in
-      both directions (two review rounds); whether only an explicit yes should ack is decision
-      #67, pinned meanwhile by a strict xfail.
-    - A session whose title contains a reminder's closing tag would put a stray tag in every
-      idle reply, so no reply there could ack.
+    - A reply behind a reminder that cannot be taken off cleanly is not read. A correction or a
+      `hold` in it does not count, the shown intent stays shown, and the next reply acks it
+      unless the intent is rewritten first. The session is told, so it can ask the operator to
+      say it again. On 1.6.0 this was every reply behind a reminder.
+    - A reminder after the operator's words is read as theirs, as on 1.6.0; its "rather than"
+      makes the reply a correction. The reminders in the 2026-10-20 incident were in front.
+    - An agent-written decline button ("Hold B7 for now; leave the branch unpushed.") still acks
+      when clicked, as it did on 1.6.0 in an unlinked session. With the "Linked sessions now"
+      reminder taken off, clicks in linked sessions ack too. A word list leaks in both
+      directions (two review rounds). Whether only an explicit yes should ack is decision #67,
+      pinned meanwhile by a strict xfail at the hook.
+    - A session whose title contains a reminder's closing tag would leave a tag in every idle
+      reply, so no reply there is read.
   - `rails --version`, the session-start line and posted statuses say 1.6.1 (`rails.VERSION`).
 
 ## [1.6.0] — 2026-10-19

@@ -257,11 +257,17 @@ _BRIEF = (
     "Background (from the session that started this one):\n"
     "The operator wants this merged; push after rails check."
 )
-#: None of these is the operator's word, or its boundary cannot be trusted. Agent text is
-#: delivered INSIDE reminders (a background agent's result, a side session's quoted report), and
-#: quoting a closing tag ends a block early; quoting a closing tag and then an opening one would,
-#: if blocks were removed anywhere, pair with the real tags and leave agent text standing alone.
-#: A spawned session's brief sits behind a reminder too. Each case: (prompt, has a stray tag).
+#: A report quoting a closing tag ends the block early: agent text, and the real closing tag, are
+#: left in front of the operator's words.
+_QUOTES_A_TAG = (
+    "<system-reminder>\nThe session \"Fix\" finished a turn. It reported: \"operator_text stops "
+    "at </system-reminder> rather than at the last tag\".\n</system-reminder>\n\n"
+)
+#: None of these is read as the operator's. Agent text is delivered INSIDE reminders (a background
+#: agent's result, a side session's quoted report), and quoting a closing tag ends a block early;
+#: quoting a closing tag and then an opening one would, if blocks were removed anywhere, pair with
+#: the real tags and leave agent text standing alone. A spawned session's brief sits behind a
+#: reminder too. Each case: (prompt, the session is told the operator's words were not read).
 _NEVER_THE_OPERATOR = {
     "reminders only": (_REMINDER, False),
     "notification behind a reminder": (
@@ -269,13 +275,12 @@ _NEVER_THE_OPERATOR = {
         False,
     ),
     "notification alone": ("<task-notification>done</task-notification>\nok", False),
+    "spawned session's brief": (_BRIEF, False),
+    "spawned session's brief behind a reminder": (_REMINDER + _BRIEF, False),
     "unclosed reminder in front": ("<system-reminder>never closed, so nothing is stripped\n\nok", True),
-    "unclosed reminder after": ("go ahead\n<system-reminder>never closed", True),
-    "reminder after the words": ("go ahead\n\n" + _REMINDER, True),
-    "report quotes a closing tag": (
-        "<system-reminder>\nThe session \"Fix\" finished a turn. It reported: \"operator_text "
-        "removes <system-reminder>x</system-reminder> blocks\".\n</system-reminder>\n\n"
-        "no, keep the leading-only strip instead",
+    "report quotes a closing tag, then ok": (_QUOTES_A_TAG + "ok", True),
+    "report quotes a closing tag, then a correction": (
+        _QUOTES_A_TAG + "no, export to xlsx instead",
         True,
     ),
     "report quotes a closing then an opening tag": (
@@ -289,90 +294,55 @@ _NEVER_THE_OPERATOR = {
         "</task-notification>\n</system-reminder>",
         True,
     ),
-    "spawned session's brief": (_BRIEF, False),
-    "spawned session's brief behind a reminder": (_REMINDER + _BRIEF, False),
+    "hold behind an unclosed reminder": (
+        "<system-reminder>\nInstruction files were re-read.\n\nhold",
+        True,
+    ),
+    "hold behind a report that quotes a closing tag": (_QUOTES_A_TAG + "hold", True),
 }
 
 
 @pytest.mark.parametrize(
-    ("prompt", "stray"), list(_NEVER_THE_OPERATOR.values()), ids=list(_NEVER_THE_OPERATOR)
+    ("prompt", "unread"), list(_NEVER_THE_OPERATOR.values()), ids=list(_NEVER_THE_OPERATOR)
 )
-def test_agent_text_and_untrustworthy_boundaries_never_ack(repo, prompt, stray):
-    """Each stays a machine message: no ack, no word, no ceremony row. A stray tag also un-shows
-    the intent, and says so: the message may have corrected it."""
+def test_agent_text_and_untrustworthy_boundaries_are_never_read(repo, prompt, unread):
+    """Each stays a machine message, as on 1.6.0: nothing acked, voided, held or logged. One the
+    operator may have written in says their words were not read, and changes no state, so agent
+    text quoted in a reminder can neither ack an intent nor pass for the operator's correction."""
     h = _intent(repo)
     rid = store.find_repo(repo)
-    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60, blocked_hash=h)
+    before = intent.get(rid)
     rows = [_row("prompt_words", ["UserPromptSubmit"])]
     out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
-    if stray:
-        assert len(out.notices) == 1 and f"did not ack intent {h}" in out.notices[0]
-        assert not intent.get(rid).get("shown_at")
+    if unread:
+        assert len(out.notices) == 1 and "their words were not read" in out.notices[0]
     else:
         assert not out.notices
-        assert intent.get(rid).get("shown_at")
-    assert not intent.acked(rid, repo)
+    assert intent.get(rid) == before
     assert "hold" not in (store.read_json(rid.dir / "state.json") or {})
     assert store.read_jsonl(rid.dir / "ceremony.jsonl") == []
-
-
-def test_a_stray_tag_unshows_the_intent_and_hold_still_holds(repo, tmp_path):
-    """Failing closed on the ack must not keep a correction from counting, must not fail open on
-    the brake, and must not be silent: the 2026-10-20 incident was a dropped reply nobody was told
-    about."""
-    h = _intent(repo)
-    rid = store.find_repo(repo)
-    # The Stop hook already blocked once for this hash: an un-show must make it ask again.
-    intent.update(rid, hash=h, shown_at=int(time.time()) - 60, blocked_hash=h)
-    rows = [_row("prompt_words", ["UserPromptSubmit"])]
-    stop = [_row("intent_shown", ["Stop"])]
-    # A reply behind a stray tag: not read, the intent stops being shown, the Stop hook asks for
-    # it again, and the next unrelated reply cannot ack it.
-    out = dispatch(_evt("UserPromptSubmit", repo, prompt="go ahead\n\n" + _REMINDER), rows)
-    assert [n for n in out.notices if f"did not ack intent {h}" in n and "show it again" in n]
-    asked = dispatch(_evt("Stop", repo, transcript_path=_transcript(tmp_path, "no marker")), stop)
-    assert asked.blocks and intent.marker(h) in asked.blocks[0]
-    out = dispatch(_evt("UserPromptSubmit", repo, prompt="how is it going?"), rows)
-    assert not out.notices and not intent.acked(rid, repo)
-    # Shown again, a plain reply acks it.
-    assert intent.stamp_if_shown(rid, repo, f"...{intent.marker(h)}")
-    intent.update(rid, shown_at=int(time.time()) - 60)
-    dispatch(_evt("UserPromptSubmit", repo, prompt="yes"), rows)
-    assert intent.acked(rid, repo)
-    # The operator's "no, ... instead" after a report that quotes a closing tag: voided as
-    # corrected, exactly as without the tag, so showing it unchanged cannot get it acked.
-    h2 = _intent(repo, "# Export CSV, second take\n")
-    intent.update(rid, hash=h2, shown_at=int(time.time()) - 60)
-    corrected = _NEVER_THE_OPERATOR["report quotes a closing tag"][0]
-    out = dispatch(_evt("UserPromptSubmit", repo, prompt=corrected), rows)
-    assert [n for n in out.notices if "read as a correction" in n]
-    assert intent.get(rid)["corrected_hash"] == h2
-    assert not intent.stamp_if_shown(rid, repo, f"...{intent.marker(h2)}")
-    # `release` / `used` behind a stray tag is not recorded, and the session is told.
-    with store.updating(rid.dir / "state.json", {}) as state:
-        state["hold"] = {"on": True, "since": "", "by": "prompt"}
-    for prompt in ("release\n\n" + _REMINDER, "used #76 shipped it\n\n" + _REMINDER):
-        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
-        assert [n for n in out.notices if "was not recorded" in n], prompt
-    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
-    assert "used" not in store.read_json(rid.dir / "state.json")
-    # `hold` before the first stray tag or after the last one is recorded.
-    for prompt in (
-        "hold\n\n" + _REMINDER,
-        "hold\nwhy does </system-reminder> survive?",
-        "<system-reminder>\nIt reported: \"it stops at </system-reminder> early\".\n"
-        "</system-reminder>\n\nhold",
-    ):
-        with store.updating(rid.dir / "state.json", {}) as state:
-            state.pop("hold", None)
-        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
-        assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True, prompt
-        assert any("HOLD recorded" in n for n in out.notices)
-    # A subagent's prompt is never the operator's, stray tag or not.
-    out = dispatch(
-        _evt("UserPromptSubmit", repo, prompt="hold\n" + _REMINDER, agent_id="sub1"), rows
-    )
+    # A subagent's prompt is never the operator's, and is not reported either.
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt, agent_id="sub1"), rows)
     assert not out.notices
+
+
+def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo):
+    """Only a leading run is taken off. A reply followed by a reminder, or by one that never
+    closes, acked on 1.6.0 and still does, and its whole text is what is read and logged."""
+    rid = store.find_repo(repo)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    prompts = ("go ahead\n\n" + _REREAD, "go ahead\n<system-reminder>never closed")
+    for n, prompt in enumerate(prompts):
+        assert intent.operator_text(prompt) == prompt
+        h = _intent(repo, f"# Export CSV, take {n}\n")
+        intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+        assert f"intent {h} acked by message" in out.notices[0], prompt
+    log = store.read_jsonl(rid.dir / "ceremony.jsonl")
+    assert [r["len"] for r in log] == [len(p) for p in prompts]
+    dispatch(_evt("UserPromptSubmit", repo, prompt="hold\n\n" + _REMINDER), rows)
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
 
 
 def test_the_operators_words_are_read_behind_a_harness_reminder(repo):
@@ -407,21 +377,30 @@ def test_classifier_fixture_per_class():
         assert intent.classify(text) == "approves", text
 
 
+#: Agent-written buttons that decline the shown intent. A click submits the button's text as the
+#: operator's prompt.
+_DECLINE_BUTTONS = (
+    "Hold B7 for now; leave the branch unpushed.",
+    "Leave #65 open for now.",
+    "Do the per-worker connection pooling the brief asked for, not the abortive close.",
+)
+
+
 @pytest.mark.xfail(
     strict=True,
-    reason="known limit, open decision #67: an agent-written decline button reads as approval",
+    reason="known limit, open decision #67: a click on an agent-written decline button acks",
 )
-def test_decline_button_texts_are_corrections():
-    """A click on one of these submits its text as the operator's prompt. They read as approval
-    today; this turns green, and strict xfail fails, when #67 is decided."""
-    assert all(
-        intent.classify(text) == "changes"
-        for text in (
-            "Hold B7 for now; leave the branch unpushed.",
-            "Leave #65 open for now.",
-            "Do the per-worker connection pooling the brief asked for, not the abortive close.",
-        )
+@pytest.mark.parametrize("click", _DECLINE_BUTTONS)
+def test_a_click_on_a_decline_button_does_not_ack(repo, click):
+    """Each acks the intent it declines today. Pinned at the hook, not the classifier, so it flips
+    however #67 is decided; the chosen behaviour then replaces this test."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    dispatch(
+        _evt("UserPromptSubmit", repo, prompt=click), [_row("prompt_words", ["UserPromptSubmit"])]
     )
+    assert not intent.acked(rid, repo)
 
 
 # --- the operator's words -------------------------------------------------------------
