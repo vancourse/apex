@@ -64,9 +64,10 @@ MACHINE_PREFIXES = (
 #:
 #: Known limit: a reminder that never closes but QUOTES a closing tag cannot be told from a closed
 #: one followed by a reply, so what follows the quote is read as the operator's. The text alone
-#: cannot show this never happens. What it shows: the harness writes each closing tag at the start
-#: of a line, and in the 175 reminder-led non-meta user lines in the local transcripts to
-#: 2026-10-20 every closing tag starts a line, so none was quoted mid-line.
+#: cannot show this never happens. What it shows: in the 175 non-meta user lines of the local
+#: transcripts to 2026-10-20 that begin with a reminder, every closing tag starts a line, so none
+#: was quoted mid-line. (Elsewhere, in tool results and assistant text, closing tags do sit
+#: mid-line.)
 _LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
 _REMINDER_TAG = re.compile(r"</?system-reminder>")
 
