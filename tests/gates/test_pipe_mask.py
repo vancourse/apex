@@ -185,3 +185,10 @@ def test_non_shell_tools_are_untouched(verdict):
 def test_a_wrapper_still_runs_pytest(command):
     """jarvis's copy caught these by the bare word; jarvis now relies on this one (1.3.0)."""
     assert pipe_mask._STATUS_BEARING.search(command)
+
+
+def test_r6_each_statement_of_a_powershell_block_is_judged_alone(verdict):
+    """A push and a later filter in one block are two statements, as on 1.6.0."""
+    block = 'if ($?) {\n    git commit -m "wip"\n    git log --oneline | Select-Object -First 3\n}'
+    assert verdict(pipe_mask, block, tool="PowerShell") == "allow"
+    assert verdict(pipe_mask, "if ($?) { git push; gh pr view --json url | Select-String url }", tool="PowerShell") == "allow"

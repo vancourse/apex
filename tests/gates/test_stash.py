@@ -93,3 +93,7 @@ def test_the_message_names_the_commit_remedy_per_shell(reason):
 
 def test_a_non_shell_tool_is_untouched(verdict):
     assert verdict(stash, tool="Write", content="git stash", file_path="x") == "allow"
+
+
+def test_r6_a_stash_on_a_later_line_of_a_powershell_block_is_found(verdict):
+    assert verdict(stash, "if ($dirty) {\n    Write-Host 'dirty'\n    git stash\n}", tool="PowerShell") == "deny"

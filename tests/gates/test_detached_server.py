@@ -118,3 +118,8 @@ def test_override_needs_a_value(verdict):
 
 def test_ignores_other_tools(verdict):
     assert verdict(detached_server, OBSERVED_LEAK, tool="Write") == "allow"
+
+
+def test_r6_a_server_started_inside_a_powershell_block_is_found(verdict):
+    command = "if (-not $up) {\n  Start-Process python -ArgumentList '-m','http.server'\n}"
+    assert verdict(detached_server, command, tool="PowerShell") == "deny"

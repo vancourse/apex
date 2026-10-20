@@ -29,11 +29,40 @@ def test_denies_the_observed_shapes(verdict):
         "psql <<EOF\nSELECT 1;\nEOF",
         "cat <<EOF\nbody\nEOF",
         "cat <<_MARKER\nbody\n_MARKER",
+        "cat <<END-MSG\nbody\nEND-MSG",
+        'git commit -m "$(cat <<EOF\nbody\nEOF)"',
         "cat > a.txt <<'EOF'\nx\nEOF\ncat > b.txt <<EOF\ny\nEOF",
     ],
 )
 def test_denies_every_unquoted_shape(verdict, command):
     assert verdict(heredoc_write, command) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m "$(\ncat <<EOF\nfix: parse \\$1 in the template\nEOF)"',
+        "x=$(\ncat <<'EOF'\na\nEOF)\ncat > f.py <<PY\nR = 1\nPY",
+    ],
+)
+def test_a_substitution_opened_on_an_earlier_line_still_ends_at_its_paren(verdict, command):
+    assert verdict(heredoc_write, command) == "deny", command
+
+
+def test_eof_paren_closes_the_substitution_for_the_heredocs_after_it(verdict):
+    # `EOF)` closed the `$(`: the next quoted heredoc ends only at its bare `PY`, so the
+    # `<<Q` in its body is text
+    command = "x=$(\ncat <<'EOF'\na\nEOF)\ncat <<'PY'\nPY) see\ncat <<Q\nQ\nPY"
+    assert verdict(heredoc_write, command) == "allow"
+
+
+def test_eof_paren_ends_only_a_heredoc_opened_inside_a_substitution(verdict):
+    documented = (
+        "git commit -F - <<'EOF'\nRead a glued terminator: a line such as\nEOF)\n"
+        "ends a heredoc only inside $(...). The unquoted form is still refused:\n"
+        "cat > f.py <<PY\nx\nPY\nEOF"
+    )
+    assert verdict(heredoc_write, documented) == "allow"
 
 
 @pytest.mark.parametrize(

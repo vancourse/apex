@@ -399,3 +399,9 @@ def test_the_planted_suite_is_refused_by_the_real_dispatcher(repo):
     rendered = json.loads(outcome.render())["hookSpecificOutput"]
     assert rendered["permissionDecision"] == "deny"
     assert "rails lock suite -- uv run pytest apps/ -q" in rendered["permissionDecisionReason"]
+
+
+def test_r6_a_suite_inside_a_powershell_block_is_found(verdict, repo):
+    assert verdict(heavy_pytest, "if ($?) {\n    uv run pytest apps/ -q\n}", tool="PowerShell", cwd=repo) == "deny"
+    command = "git pull; if ($?) { git status; uv run pytest apps/ -q }"
+    assert verdict(heavy_pytest, command, tool="PowerShell", cwd=repo) == "deny"

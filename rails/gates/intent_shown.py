@@ -19,12 +19,20 @@ def check(evt: Event):
     if repo is None:
         return None
     h = intent.current_hash(repo.top)
+    last = intent.last_assistant_text(evt.transcript_path)
+    if h is None or intent.marker(h) not in last:
+        # A session started in the main folder shows a worktree's intent (p3i): stamp that
+        # worktree, and bind the session so its next human message acks it there. The main
+        # folder's own intent, if it has one, is not what this turn showed.
+        other = intent.shown_elsewhere(repo, last)
+        if other is not None and intent.stamp_if_shown(other, other.top, last):
+            intent.bind_session(repo, str(evt.payload.get("session_id", "")), other)
+            return None
     if h is None:
         return None
     st = intent.get(repo)
     if st.get("acked_hash") == h:
         return None
-    last = intent.last_assistant_text(evt.transcript_path)
     if intent.stamp_if_shown(repo, repo.top, last):
         return None
     if evt.payload.get("stop_hook_active") or st.get("blocked_hash") == h:

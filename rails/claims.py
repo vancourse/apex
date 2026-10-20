@@ -109,8 +109,23 @@ class Claim:
     items: list[str]
     at: str
     kind: str = ""
+    #: When this line of work was first claimed; `at` moves on every add, this does not.
+    since: str = ""
     adhoc: str = ""
     paths: list[str] = field(default_factory=list)
+
+
+def pinned_since(repo: store.RepoId, claim: Claim) -> str:
+    """When this line of work began, pinned in claim_meta the first time it is read: jarvis's
+    claim.py moves `at` on every add and writes no `since`. A new first item is a new line."""
+    first = claim.items[0] if claim.items else claim.adhoc
+    with store.updating(_meta_path(repo), {}) as meta:
+        m = meta.setdefault(claim.leaf, {})
+        if m.get("since") and m.get("since_first", first) == first:
+            return str(m["since"])
+        m["since"] = claim.at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        m["since_first"] = first
+        return str(m["since"])
 
 
 def _meta_path(repo: store.RepoId) -> Path:
@@ -130,6 +145,7 @@ def load(repo: store.RepoId) -> list[Claim]:
                 branch=str(body.get("branch") or ""),
                 items=[str(i) for i in body["items"]],
                 at=str(body.get("at") or ""),
+                since=str(m.get("since") or body.get("at") or ""),
                 kind=str(m.get("kind", "")),
                 adhoc=str(m.get("adhoc", "")),
                 paths=list(m.get("paths", [])),
@@ -232,6 +248,10 @@ def add(
         )
         if body is None:
             body = {"branch": branch, "items": [], "at": now}
+        # When this line was first claimed, kept in the plugin's own meta: the store's
+        # format is jarvis's claim.py's too. A claim older than `since` starts at its
+        # last stamp.
+        first_at = str(body.get("at") or now)
         # A worktree that switches branch keeps its claim (jarvis #2599): the worktree is the
         # line of work; its owner releases what it no longer holds.
         body["branch"] = branch
@@ -243,6 +263,8 @@ def add(
         _write(repo.main, entries)
     with store.updating(_meta_path(repo), {}) as meta:
         m = meta.setdefault(repo.leaf, {})
+        m.setdefault("since", first_at)
+        m.setdefault("since_first", body["items"][0] if body["items"] else adhoc)
         if kind:
             m["kind"] = kind
         if adhoc:

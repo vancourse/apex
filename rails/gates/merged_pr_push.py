@@ -36,7 +36,7 @@ import subprocess
 from pathlib import Path
 
 from rails.hookio import Deny, Event
-from rails.shell import scrubbed_segments
+from rails.shell import arguments, is_substitution, scrubbed_segments, words
 from rails.shell.override import in_environment
 
 NAME = "merged_pr_push"
@@ -58,7 +58,7 @@ _GIT_FLAG = (
 #: `VAR=1 git push ...` is how a push consent is spelled in bash, so an
 #: env-assignment prefix is part of the shape.
 _PUSH = re.compile(
-    r"(?:^|[;&|]|\b(?:and|then)\s+)\s*(?:\w+=\S*\s+)*git\s+(?:"
+    r"(?:^|[;&|({]|\b(?:and|then|if|elif|else|do|while|until)\s+|!\s*)\s*(?:\w+=\S*\s+)*git\s+(?:"
     + _GIT_FLAG
     + r")*push\b([^;&|]*)"
 )
@@ -67,9 +67,19 @@ _PUSH = re.compile(
 _VALUED_FLAGS = frozenset({"-o", "--push-option", "--receive-pack", "--exec", "--repo"})
 
 
-def target_branches(push_args: str) -> list[str | None]:
-    """The branch names a push lands on; ``None`` for "the current branch"."""
-    tokens = push_args.split()
+def target_branches(push_args: str, cwd: Path | None = None) -> list[str | None]:
+    """The branch names a push lands on; ``None`` for "the current branch" (no refspec,
+    `HEAD` or `@`). A redirect (`2>&1`) is not a refspec."""
+    # The push ends at a `}` closing the block it sits in: `try { git push } catch { ... }`
+    # pushes the current branch, and `catch` is not its remote (the text is quote-blanked).
+    depth = 0
+    for i, c in enumerate(push_args):
+        depth += 1 if c == "{" else -1 if c == "}" else 0
+        if depth < 0:
+            push_args = push_args[:i]
+            break
+    # a `)` or `}` closing the subshell or block the push sits in is not a refspec
+    tokens = [t for t in arguments(push_args.split(), _VALUED_FLAGS) if t not in (")", "}")]
     if "--delete" in tokens or "-d" in tokens or "--tags" in tokens:
         return []
     positional: list[str] = []
@@ -94,12 +104,52 @@ def target_branches(push_args: str) -> list[str | None]:
             continue  # `git push origin :branch` deletes the remote branch
         if spec.startswith("refs/tags/") or ":refs/tags/" in spec:
             continue
-        dst = spec.split(":", 1)[1] if ":" in spec else spec
+        from rails.gates.destructive import refspec_dst
+
+        dst = refspec_dst(spec)
         if dst.startswith("refs/heads/"):
             dst = dst[len("refs/heads/") :]
-        if dst:
+        for close, opener in ((")", "("), ("}", "{")):
+            # `(git push origin feat)`, `{git push origin feat}`: the subshell's or block's,
+            # not a substitution's own
+            excess = dst.count(close) - dst.count(opener)
+            if excess > 0 and dst.endswith(close):
+                dst = dst[: len(dst) - min(excess, len(dst) - len(dst.rstrip(close)))]
+        if dst in ("HEAD", "@"):
+            out.append(None)
+        elif is_substitution(dst):
+            # `$(git branch --show-current)` runs in the shell's folder ``cwd``; what any other
+            # substitution prints cannot be told
+            from rails.gates.destructive import substituted_branch
+
+            name = substituted_branch(dst, cwd)
+            if name:
+                out.append(name)
+        elif dst:
             out.append(dst)
     return out
+
+
+def _push_folder(
+    raw: str, scrubbed: str, match: re.Match[str], cwd: Path | None, shell: str
+) -> Path | None:
+    """The folder `git -C <folder> push` pushes from: its branch is the one a push with no
+    refspec lands on. The path is read from the raw text as the tool's shell reads it (a
+    quoted path survives, a PowerShell `C:\\x` keeps its backslashes). None when rails cannot
+    find the folder (`git -C $WT push`): its branch cannot be told."""
+    from rails.gates.destructive import folder_of
+
+    if cwd is None:
+        return cwd
+    folder = cwd
+    # each `-C` git sees, found outside quotes (`GIT_SSH_COMMAND="ssh -C"` is not one), its
+    # path read from the raw text, and applied from the folder before it
+    for flag in re.finditer(r"(?:^|\s)-C(?=\s)", scrubbed[match.start() : match.start(1)]):
+        rest = words(raw[match.start() + flag.end() :], shell)
+        if not rest:
+            return None
+        folder = folder_of(rest[0], folder)
+    return folder if folder.is_dir() else None
 
 
 def current_branch(cwd: Path | None) -> str | None:
@@ -196,10 +246,13 @@ def check(evt: Event) -> Deny | None:
     if _OVERRIDE.search(command):
         return None
     branches: list[str] = []
-    for _raw, scrubbed in scrubbed_segments(command, shell):
+    for raw, scrubbed in scrubbed_segments(command, shell):
         for match in _PUSH.finditer(scrubbed):
-            for target in target_branches(match.group(1)):
-                name = target if target is not None else current_branch(evt.cwd)
+            folder = _push_folder(raw, scrubbed, match, evt.cwd, shell)
+            for target in target_branches(match.group(1), evt.cwd):
+                if target is None and folder is None:
+                    continue  # the current branch of a folder rails cannot find
+                name = target if target is not None else current_branch(folder)
                 if name and name not in branches:
                     branches.append(name)
     for branch in branches:

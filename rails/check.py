@@ -567,7 +567,9 @@ def check(
             file=out,
         )
     if post_after and not failed:
-        post(cwd, out=out)
+        posted = post(cwd, out=out)
+        if posted:
+            return posted  # statuses held back: the PR cannot merge, and the caller must know
     elif post_after:
         print("rails check: not posting statuses - the check is RED", file=out)
     return 1 if failed else 0
@@ -590,6 +592,34 @@ def post(cwd: Path, *, out=sys.stdout, rerun: bool = True) -> int:
         return 2
     sha = head(top)
     tree_sha = tree(top)
+    # A push that skipped the hook (`--no-verify`, `core.hooksPath=`) skipped the disarm too;
+    # posting is the step every merge needs from here, so it disarms as well (p2). It judges
+    # the pushed head only: an unpushed HEAD is not what the armed PR would merge.
+    from rails.githooks import disarm_unreviewed
+    from rails.gitutil import git as _git
+
+    branch = _git(top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+    pushed = (
+        _git(top, "rev-parse", "--verify", "-q", f"origin/{branch}", check=False).strip()
+        if branch and branch != "HEAD"
+        else ""
+    )
+    notes: list[str] = []
+    try:
+        failed = disarm_unreviewed(repo, [(branch, sha)] if pushed == sha else [], notes)
+    except Exception as exc:  # noqa: BLE001 - unknown is armed
+        failed = [-1]
+        notes.append(f"  could not check auto-merge ({type(exc).__name__})")
+    for note in notes:
+        print(note, file=out)
+    if failed:
+        # Green statuses on a PR that may still be armed would merge a tree no review covers.
+        print(
+            "rails post: not posting - a PR this push landed on may still be armed with no review "
+            "covering it. Turn auto-merge off (`gh pr merge <N> --disable-auto`), then post again.",
+            file=out,
+        )
+        return 1
     rows = [r for r in receipts.read(repo, "lane", sha=sha) if receipts.valid(r)]
     if not rows:
         print(

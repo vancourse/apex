@@ -541,6 +541,147 @@ def test_a_push_to_an_open_pr_needs_a_review_of_the_pushed_tree(repo, commit, mo
     assert githooks.pre_push([], line2, rid) == (0, [])  # before a PR exists, no review is asked
 
 
+def _pushable(monkeypatch, repo, commit, *, shadow_review: bool):
+    """A leak snapshot, a full marker and an open PR for one pushed commit."""
+    names = ("prepush_hold", "prepush_marker", "prepush_retired", "prepush_leak", "ship_review")
+    rows = {
+        n: GateRow(
+            name=n,
+            module="prepush",
+            events=["git:pre-push"],
+            mode="shadow" if (shadow_review and n == "ship_review") else "enforce",
+        )
+        for n in names
+    }
+    monkeypatch.setattr(githooks, "_registry_rows", lambda: rows)
+    monkeypatch.setattr(githooks, "open_pr", lambda repo, branch: True)
+    rid = store.find_repo(repo)
+    from rails import leak
+
+    store.write_json(leak.snapshot_path(rid), leak.build_snapshot(["9999.99"], {}, "t"))
+    return rid
+
+
+def _armed(monkeypatch, number: int | None = 12) -> list[tuple[int, str]]:
+    disarmed: list[tuple[int, str]] = []
+    monkeypatch.setattr(githooks, "armed_pr", lambda repo, branch: number)
+    monkeypatch.setattr(
+        githooks, "disarm", lambda repo, n, note: disarmed.append((n, note)) or True
+    )
+    return disarmed
+
+
+def test_p2a_an_unreviewed_push_to_an_armed_pr_disarms_it(repo, commit, monkeypatch):
+    """The planted defect for `prepush_disarm`: `ship_review` in shadow lets the push through,
+    and GitHub's auto-merge would merge the unreviewed tree."""
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push(["origin", "u"], lines, rid)
+    assert code == 0 and disarmed == [], "nothing is disarmed before the chained hook passed"
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert [n for n, _ in disarmed] == [12]
+    assert sha[:12] in disarmed[0][1]
+    assert githooks.pr_holds(rid)["12"]["sha"] == sha, "a disarm holds the PR for every folder"
+    assert any("disarmed PR #12" in m and "rails ship" in m for m in msgs), msgs
+
+
+def test_p2_a_push_to_another_remote_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    assert githooks.disarm_after_push(["backup", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid) == []
+    assert disarmed == []
+
+
+def test_p2_a_push_the_chained_hook_refuses_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    called: list[object] = []
+    monkeypatch.setattr(githooks, "pre_push", lambda *a: (0, []))
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 1)
+    monkeypatch.setattr(githooks, "disarm_after_push", lambda *a: called.append(a) or [])
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(githooks.sys, "stdin", io.StringIO(""))
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 1
+    assert called == []
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 0)
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 0
+    assert len(called) == 1
+    assert rid
+
+
+def test_p2a_the_operator_s_own_push_disarms_too(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=False)
+    disarmed = _armed(monkeypatch)
+    monkeypatch.setenv("RAILS_OPERATOR", "1")
+    monkeypatch.setattr(githooks, "operator", lambda: True)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push(["origin", "u"], lines, rid)
+    assert code == 0, msgs
+    githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert [n for n, _ in disarmed] == [12]
+
+
+def test_p2_a_refused_push_lands_nothing_and_disarms_nothing(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=False)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    code, _ = githooks.pre_push([], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert code == 1 and disarmed == []
+
+
+def test_p2b_a_prose_only_push_after_the_review_stays_armed(
+    repo, commit, monkeypatch, tmp_path
+):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    prose = commit(repo, "docs/notes.md", "# notes\n")
+    receipts.write_marker(rid, prose, "t", ["checks"], quick=False)
+    lines = [f"refs/heads/work {prose} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push([], lines, rid)
+    assert code == 0, msgs
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert disarmed == [], msgs
+    assert sha  # the reviewed code commit is the one the receipt covers
+
+
+def test_p2_a_pr_that_is_not_armed_is_left_alone(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch, number=None)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, "t", ["checks"], quick=False)
+    lines = [f"refs/heads/work {sha} refs/heads/work {ZERO}"]
+    code, msgs = githooks.pre_push([], lines, rid)
+    assert code == 0, msgs
+    msgs = githooks.disarm_after_push(["origin", "u"], lines, rid)
+    assert disarmed == [] and not any("disarmed" in m for m in msgs)
+
+
+def test_p2_disarm_never_blanks_a_body_it_could_not_read(repo, monkeypatch):
+    """`gh pr view` failing must not lead to `gh pr edit` with an empty body."""
+    rid = store.find_repo(repo)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **_):
+        calls.append(argv)
+        ok = argv[:3] == ["gh", "pr", "merge"]
+        return subprocess.CompletedProcess(argv, 0 if ok else 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(githooks.subprocess, "run", fake_run)
+    assert githooks.disarm(rid, 12, "note") is True
+    assert [c[:3] for c in calls] == [["gh", "pr", "merge"], ["gh", "pr", "view"]]
+
+
 def test_a_ticked_box_is_still_owed_and_comments_are_not():
     body = (
         "## Acceptance criteria\n- [x] `step: a1` the invite opens on her phone\n- [ ] she sees only her items\n"
@@ -693,6 +834,7 @@ def test_arm_review_counts_origin_branch_as_pushed_and_fails_closed(repo, commit
     _pushed(git, repo)
     git(repo, "remote", "add", "origin", "https://example.invalid/app.git")
     git(repo, "branch", "--set-upstream-to=origin/main")  # cut from master: @{u} is not the PR head
+    store.write_json(store.find_repo(repo).leaf_dir / "pr.json", {"number": 12})  # this worktree's PR (p3f)
     arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
     assert arm_review.check(arm) is None  # origin/work holds HEAD; a prose diff needs no review
 
@@ -948,3 +1090,2008 @@ def test_a_main_checkout_claim_does_not_fence_an_issue_off(repo, git, tmp_path):
 
 def test_a_nested_must_fix_list_is_not_the_report():
     assert review.must_fix_count('{"must_fix": [], "notes": {"must_fix": [1, 2]}}') == 0
+
+
+# --- p3g: pr.json follows the PR after it merges -------------------------------------
+
+
+def test_p3g_a_merged_pr_stops_reading_open_on_the_next_command(repo, monkeypatch):
+    from rails import gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN", "armed": True})
+    answers = {"state": "OPEN"}
+    asked: list[tuple[str, ...]] = []
+
+    def fake_gh(cwd, *args, check=True, timeout=60):
+        asked.append(args)
+        return json.dumps(answers)
+
+    monkeypatch.setattr(gitutil, "gh", fake_gh)
+    assert cli.refresh_pr_state(repo, now=1000.0) is None  # still open: recorded, unchanged
+    assert store.read_json(rid.leaf_dir / "pr.json", {})["state"] == "OPEN"
+    answers["state"] = "MERGED"
+    assert cli.refresh_pr_state(repo, now=1030.0) is None  # within the minute: not asked again
+    assert len(asked) == 1
+    assert cli.refresh_pr_state(repo, now=1100.0) == "MERGED"
+    record = store.read_json(rid.leaf_dir / "pr.json", {})
+    assert record["state"] == "MERGED" and record["armed"] is False
+    assert cli.refresh_pr_state(repo, now=2000.0) is None  # not OPEN: never asked again
+    assert len(asked) == 2
+
+
+def test_p3g_an_unanswerable_gh_leaves_the_record_alone(repo, monkeypatch):
+    from rails import gitutil
+
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 7, "state": "OPEN"})
+
+    def broken(cwd, *args, check=True, timeout=60):
+        raise gitutil.GitError("gh failed to run")
+
+    monkeypatch.setattr(gitutil, "gh", broken)
+    assert cli.refresh_pr_state(repo, now=1000.0) is None
+    record = store.read_json(rid.leaf_dir / "pr.json", {})
+    assert record["state"] == "OPEN" and record["state_checked_at"] == 1000.0
+    asked: list[object] = []
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: asked.append(a) or "{}")
+    assert cli.refresh_pr_state(repo, now=1030.0) is None
+    assert asked == [], "a failure is remembered for the minute too"
+
+
+# --- p3h: a GraphQL read is judged by a body it can read --------------------------------
+
+
+def test_p3h_a_graphql_read_whose_input_file_exists_is_not_refused(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    (repo / "q.json").write_text('{"query": "query { viewer { login } }"}', encoding="utf-8")
+    (repo / "sub").mkdir()
+    (repo / "sub" / "q2.json").write_text('{"query": "query { viewer { id } }"}', encoding="utf-8")
+    cwd = str(repo)
+    assert arm_review.check(_evt("Bash", {"command": "gh api graphql --input q.json"}, cwd=cwd)) is None
+    assert arm_review.check(_evt("Bash", {"command": "cat q.json | gh api graphql --input -"}, cwd=cwd)) is None
+    assert arm_review.check(_evt("Bash", {"command": "cd sub && gh api graphql --input q2.json"}, cwd=cwd)) is None
+    rid = store.find_repo(repo)
+    assert store.read_json(rid.leaf_dir / "pr.json", None) is None  # a read never stamps a PR armed
+
+
+def test_p3h_a_body_it_cannot_read_is_refused_naming_the_path(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    cwd = str(repo)
+    for command, path in (
+        ("gh api graphql --input missing.json", "missing.json"),
+        ("Get-Content gone.json | gh api graphql --input -", "gone.json"),
+        ("gh api graphql --input=nowhere/q.json", "nowhere/q.json"),
+    ):
+        deny = arm_review.check(_evt("Bash", {"command": command}, cwd=cwd))
+        assert deny is not None and path in deny.reason and "cannot be read" in deny.reason, command
+
+
+# --- p3j: a close sent from a script file ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "script", "command"),
+    [
+        pytest.param(
+            "close.py",
+            "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones/75', '-X', 'PATCH', '-f', 'state=closed'])\n",
+            "python close.py",
+            id="python",
+        ),
+        pytest.param(
+            "close.sh",
+            "#!/bin/sh\ngh api repos/a/b/milestones/75 -X PATCH -f state=closed\n",
+            "bash close.sh",
+            id="sh",
+        ),
+        pytest.param(
+            "close.ps1",
+            "gh api repos/a/b/milestones/75 --method PATCH -f 'state=closed'\n",
+            "pwsh -File close.ps1",
+            id="ps1",
+        ),
+    ],
+)
+def test_p3j_a_close_from_a_script_file_is_refused(tmp_path, name, script, command):
+    (tmp_path / name).write_text(script, encoding="utf-8")
+    deny = milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path)))
+    assert deny is not None and name in deny.reason, command
+    shell = "PowerShell" if name.endswith(".ps1") else "Bash"
+    deny = milestone_close.check(_evt(shell, {"command": f"./{name}"}, cwd=str(tmp_path)))
+    assert deny is not None, f"./{name}"
+
+
+def test_p3j_a_script_that_reads_closed_milestones_is_allowed(tmp_path):
+    (tmp_path / "list.py").write_text(
+        "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones?state=closed'])\n",
+        encoding="utf-8",
+    )
+    assert milestone_close.check(_evt("Bash", {"command": "python list.py"}, cwd=str(tmp_path))) is None
+    assert milestone_close.check(_evt("Bash", {"command": "uv run python missing.py"}, cwd=str(tmp_path))) is None
+
+
+# --- p3f: a PR number from another worktree ----------------------------------------------
+
+
+def _reviewed(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    return store.find_repo(repo)
+
+
+def test_p3f_a_pr_headed_by_another_worktree_s_branch_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "other-line"}))
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge 34 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "PR #34 heads other-line" in deny.reason
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False  # nothing stamped
+    # its own PR, by pr.json or by GitHub naming this branch, arms
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))) is None
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "work"}))
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 56 --auto"}, cwd=str(repo))) is None
+
+
+def test_p3f_a_pr_whose_head_cannot_be_read_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    from rails import gitutil
+
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+
+    def broken(cwd, *a, **k):
+        raise gitutil.GitError("gh failed to run")
+
+    monkeypatch.setattr(gitutil, "gh", broken)
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge 34 --auto"}, cwd=str(repo)))
+    assert deny is not None and "could not be read" in deny.reason
+
+
+# --- p3b: an agent's --accept arms only after the operator names the PR -----------------
+
+
+def _operator_says(repo, text):
+    from rails.dispatch import dispatch
+
+    row = GateRow(name="prompt_words", module="prompt_words", events=["UserPromptSubmit"], mode="enforce")
+    evt = Event(name="UserPromptSubmit", payload={"hook_event_name": "UserPromptSubmit", "cwd": str(repo),
+                                                  "session_id": "s", "prompt": text})
+    return dispatch(evt, [row])
+
+
+def test_p3b_an_agent_accept_does_not_arm_until_the_operator_names_the_pr(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "drops a blank date", "reproducer": "feed one"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="the blank date is refused upstream")
+    monkeypatch.delenv("CLAUDECODE")
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    deny = arm_review.check(arm)
+    assert deny is not None and "accept #12" in deny.reason
+    tree12 = git(repo, "rev-parse", "HEAD^{tree}")[:12]
+    _operator_says(repo, f"accept #34 {tree12}")  # another PR's word lifts nothing here
+    assert arm_review.check(arm) is not None
+    _operator_says(repo, "accept #12 0000000")  # another tree's word lifts nothing either
+    assert arm_review.check(arm) is not None
+    _operator_says(repo, f"accept #12 {tree12}")
+    assert arm_review.check(arm) is None
+
+
+def test_p3b_the_operator_s_own_accept_arms_as_before(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    store.write_json(store.find_repo(repo).leaf_dir / "pr.json", {"number": 12})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "x", "reproducer": "y"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="checked by hand")
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 12 --auto"}, cwd=str(repo))) is None
+
+
+
+# --- apex review round 1 ---------------------------------------------------------------
+
+
+def test_p2_check_post_disarms_a_push_that_skipped_the_hook(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    receipts.write(rid, "lane", sha=sha, lane="checks", exit=0, secs=1)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check_mod, "gh_api", lambda *a, **k: {}, raising=False)
+    out = io.StringIO()
+    check_mod.post(repo, out=out, rerun=False)
+    assert [n for n, _ in disarmed] == [12], out.getvalue()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("gh pr merge https://github.com/o/r/pull/34 --auto --squash", id="url"),
+        pytest.param("gh pr merge '#34' --auto", id="hash"),
+    ],
+)
+def test_p3f_a_pr_url_selector_is_judged_as_its_number(repo, commit, git, tmp_path, monkeypatch, command):
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    monkeypatch.setattr(gitutil, "gh", lambda cwd, *a, **k: json.dumps({"headRefName": "other-line"}))
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "PR #34 heads other-line" in deny.reason
+
+
+def test_p3b_an_arm_with_no_selector_is_judged_for_this_worktrees_pr(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.chdir(repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    open_fix = '{"reviewed_sha": "abc", "must_fix": [{"what": "x", "reproducer": "y"}]}\n' + "x" * 220
+    (tmp_path / "c.md").write_text("Steelman.\n" + open_fix, encoding="utf-8")
+    (tmp_path / "a.md").write_text(open_fix, encoding="utf-8")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md", accept="checked")
+    monkeypatch.delenv("CLAUDECODE")
+    tree12 = git(repo, "rev-parse", "HEAD^{tree}")[:12]
+    _operator_says(repo, f"accept #12 {tree12}")
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge --auto --squash"}, cwd=str(repo))) is None
+
+
+def test_p3e_an_alias_reaches_arm_review(repo, commit, git, tmp_path, monkeypatch):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    config = tmp_path / "ghconf"
+    config.mkdir()
+    (config / "config.yml").write_text("aliases:\n    am: pr merge --auto --squash\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    deny = arm_review.check(_evt("Bash", {"command": "gh am 12"}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason
+
+
+def test_p3e_an_alias_substitutes_its_arguments(tmp_path, monkeypatch):
+    from rails.gates.destructive import commands
+
+    config = tmp_path / "ghconf"
+    config.mkdir()
+    (config / "config.yml").write_text("aliases:\n    pm: pr merge $1 --auto --squash\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    found = [t for _, t in commands("gh pm 42", "bash")]
+    assert ["gh", "pr", "merge", "42", "--auto", "--squash"] in found, found
+
+
+def test_p3e_launchers_nested_too_deep_are_refused():
+    import shlex
+
+    from rails.gates import destructive
+
+    command = "ls"
+    for _ in range(10):
+        command = "bash -c " + shlex.quote(command)
+    deny = destructive.check(_evt("Bash", {"command": command}))
+    assert deny is not None and "nested too deep" in deny.reason
+
+
+def test_p3e_a_script_s_dash_c_argument_is_not_a_command():
+    from rails.gates.destructive import commands
+
+    found = [t for _, t in commands("bash deploy.sh -c 'rm -rf /'", "bash")]
+    assert ["rm", "-rf", "/"] not in found, found
+
+
+def test_p3h_a_heredoc_or_echo_body_is_read_from_the_command(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    for command in (
+        "gh api graphql --input - <<'EOF'\n{\"query\": \"query { viewer { login } }\"}\nEOF",
+        "echo '{\"query\": \"query { viewer { login } }\"}' | gh api graphql --input -",
+    ):
+        assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "command"),
+    [
+        pytest.param(
+            "test_planted.py",
+            "x = 'milestones/75 -X PATCH -f state=closed'\n",
+            "python -m pytest test_planted.py",
+            id="pytest-s-test-file",
+        ),
+        pytest.param(
+            "tests/test_planted.py",
+            "x = 'milestones/75 -X PATCH -f state=closed'\n",
+            "python tests/test_planted.py",
+            id="a-test-file-run-directly",
+        ),
+        pytest.param(
+            "report.py",
+            "import requests\nr = requests.get(API + '/milestones', params={'state': 'closed'})\ndata = r.json()\n",
+            "python report.py",
+            id="a-read-with-a-data-assignment",
+        ),
+    ],
+)
+def test_p3j_a_read_or_a_test_file_is_not_a_close(tmp_path, name, text, command):
+    (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / name).write_text(text, encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path))) is None
+
+
+
+# --- apex review round 2 ---------------------------------------------------------------
+
+
+def test_p2_a_hand_rearm_of_a_disarmed_pr_is_refused(repo, commit, git, tmp_path, monkeypatch):
+    """The planted defect for `rearm_disarmed`: arm_review only logs this week, and a hand
+    `gh pr merge N --auto` undid the disarm."""
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "state": "OPEN", "armed": False})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "PR #12" in deny.reason
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge --auto --squash"}, cwd=str(repo))) is not None
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --squash"}, cwd=str(repo))) is not None
+    githooks.release_pr_hold(rid, 12)
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))) is None
+
+
+def test_p2_a_reviewed_rearm_of_a_disarmed_pr_is_allowed(repo, commit, git, tmp_path, monkeypatch):
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "state": "OPEN", "armed": False, "disarmed_by": "abc"})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    assert rearm_disarmed.check(arm) is None
+    assert arm_review.check(arm) is None
+    pr = store.read_json(rid.leaf_dir / "pr.json")
+    assert pr["armed"] is True and "disarmed_by" not in pr, "an arm past every check clears the mark"
+    assert "12" not in githooks.pr_holds(rid)
+
+
+def test_p2_check_post_judges_the_pushed_head_only(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write(rid, "lane", sha=sha, lane="checks", exit=0, secs=1)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check_mod, "gh_api", lambda *a, **k: {}, raising=False)
+    check_mod.post(repo, out=io.StringIO(), rerun=False)
+    assert disarmed == [], "an unpushed HEAD is not what the armed PR merges"
+
+
+def test_p2_check_post_disarms_with_no_lane_receipts(repo, commit, git, monkeypatch):
+    from rails import check as check_mod
+
+    _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch)
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    assert check_mod.post(repo, out=io.StringIO(), rerun=False) == 1
+    assert [n for n, _ in disarmed] == [12]
+
+
+def _worktree_with_unreviewed_push(repo, git, tmp_path):
+    wt = tmp_path / "feat"
+    git(repo, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "src").mkdir(exist_ok=True)
+    (wt / "src" / "b.py").write_text("y = 2\n", encoding="utf-8")
+    git(wt, "add", "-A")
+    git(wt, "commit", "-q", "-m", "code")
+    git(wt, "update-ref", "refs/remotes/origin/feat", "HEAD")
+    return wt
+
+
+@pytest.mark.parametrize("spelling", ["native", "git-bash"])
+def test_p3f_an_arm_after_cd_judges_the_worktree_it_moved_to(repo, git, tmp_path, spelling):
+    import os
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)  # the folder the session started in is clean and pushed: nothing to judge there
+    target = str(wt).replace("\\", "/")
+    if spelling == "git-bash":
+        if os.name != "nt":
+            pytest.skip("a Git Bash drive path is a Windows spelling")
+        target = "/" + target[0].lower() + target[2:].replace("\\", "/")
+    deny = arm_review.check(_evt("Bash", {"command": f"cd {target} && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+def test_p3f_a_branch_selector_for_another_branch_is_refused(repo, git, tmp_path):
+    _worktree_with_unreviewed_push(repo, git, tmp_path)
+    git(repo, "update-ref", "refs/remotes/origin/work", "HEAD")
+    deny = arm_review.check(_evt("Bash", {"command": "gh pr merge feat --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "another branch" in deny.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('echo "arming"; gh api graphql --input - < q.json', id="an-echo-elsewhere"),
+        pytest.param("git commit -q --allow-empty -F - <<EOF\nmsg\nEOF\ngh api graphql --input - < q.json", id="a-heredoc-elsewhere"),
+    ],
+)
+def test_p3h_a_file_fed_to_input_is_read_beside_an_inline_body(repo, commit, git, command):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    (repo / "q.json").write_text('{"query": "mutation { enablePullRequestAutoMerge(input: {}) { clientMutationId } }"}', encoding="utf-8")
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason, command
+
+
+_CLOSE = "import subprocess\nsubprocess.run(['gh', 'api', 'repos/a/b/milestones/75', '-X', 'PATCH', '-f', 'state=closed'])\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["uv run python close.py", "uv run close.py", "uv run python3 close.py", "uv run --with requests python close.py"],
+)
+def test_p3j_uv_runs_a_close_script(tmp_path, command):
+    (tmp_path / "close.py").write_text(_CLOSE, encoding="utf-8")
+    deny = milestone_close.check(_evt("Bash", {"command": command}, cwd=str(tmp_path)))
+    assert deny is not None and "close.py" in deny.reason, command
+
+
+def test_p3j_a_script_handed_to_a_module_is_its_argument(tmp_path):
+    (tmp_path / "close.py").write_text(_CLOSE, encoding="utf-8")
+    assert milestone_close.check(_evt("Bash", {"command": "python -m mytool close.py"}, cwd=str(tmp_path))) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('bash -lc "git push --force origin master"', id="bash-lc"),
+        pytest.param('sh -ec "git push --force origin master"', id="sh-ec"),
+        pytest.param('bash -o pipefail -c "git push --force origin master"', id="bash-o-pipefail"),
+        pytest.param(
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command "git push --force origin master"',
+            id="powershell-with-options",
+        ),
+    ],
+)
+def test_p3e_shell_options_before_the_command_are_skipped(command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt("Bash", {"command": command})) is not None, command
+
+
+
+# --- apex review round 3 ---------------------------------------------------------------
+
+
+def test_p2_a_held_pr_cannot_be_armed_from_a_folder_that_does_not_hold_it(repo, commit, git, tmp_path, monkeypatch):
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["held_prs"] = {"12": {"sha": "abc", "leaf": "another-worktree", "why": "a push disarmed it"}}
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "does not hold its branch" in deny.reason
+
+
+def test_p2_a_held_pr_is_judged_on_its_pushed_head(repo, commit, git, tmp_path, monkeypatch):
+    """A review of an unpushed fix does not cover the head GitHub would merge."""
+    from rails.gates import rearm_disarmed
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers disarmed it")
+    commit(repo, "src/b.py", "y = 2\n")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "Push, then arm" in deny.reason
+
+
+def test_p2_disable_auto_is_never_a_merge():
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("Bash", {"command": "gh pr merge 12 --disable-auto"})) is None
+    assert merge_by_effect.check(_evt("Bash", {"command": "gh pr merge 12 --admin --disable-auto"})) is not None
+
+
+def test_p2_the_disarm_reads_the_body_as_utf8(repo, monkeypatch):
+    rid = store.find_repo(repo)
+    seen: list[dict] = []
+
+    def fake_run(argv, **kw):
+        seen.append({"argv": argv[:3], **kw})
+        return subprocess.CompletedProcess(argv, 0, stdout='{"body": "Purser fix — stage 2"}', stderr="")
+
+    monkeypatch.setattr(githooks.subprocess, "run", fake_run)
+    assert githooks.disarm(rid, 12, "note") is True
+    view = next(s for s in seen if s["argv"] == ["gh", "pr", "view"])
+    assert view.get("encoding") == "utf-8"
+    written = (rid.leaf_dir / "disarm-12.md").read_bytes()
+    assert "—".encode("utf-8") in written and b"\r\n" not in written
+
+
+
+# --- apex review round 4 ---------------------------------------------------------------
+
+
+def test_p2_a_hold_is_judged_on_the_held_pr_s_branch(repo, commit, git, tmp_path, monkeypatch):
+    """A worktree that switched branch cannot arm its old PR's unreviewed head."""
+    from rails import gitutil
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    githooks.hold_pr(rid, 12, git(repo, "rev-parse", "HEAD"), "a push no review covers landed on it", "work")
+    git(repo, "checkout", "-q", "-b", "next")
+    commit(repo, "src/b.py", "y = 2\n")
+    git(repo, "update-ref", "refs/remotes/origin/next", "HEAD")
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+
+    def offline(*a, **k):
+        raise gitutil.GitError("offline")
+
+    monkeypatch.setattr(gitutil, "gh", offline)
+    arm = _evt("Bash", {"command": "gh pr merge 12 --auto --squash"}, cwd=str(repo))
+    assert arm_review.check(arm) is not None, "pr.json names #12 for work, and this is next"
+    deny = rearm_disarmed.check(arm)
+    assert deny is not None and "Check out work" in deny.reason
+
+
+def test_p2_an_unreviewed_push_to_an_unarmed_pr_holds_it(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    disarmed = _armed(monkeypatch, number=None)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN", "armed": False})
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    msgs = githooks.disarm_after_push(["origin", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert disarmed == [] and githooks.pr_holds(rid)["12"]["branch"] == "work"
+    assert any("held off auto-merge" in m for m in msgs), msgs
+
+
+def test_p2_a_disarm_that_fails_still_holds(repo, commit, monkeypatch):
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    monkeypatch.setattr(githooks, "armed_pr", lambda repo, branch: 12)
+    monkeypatch.setattr(githooks, "disarm", lambda repo, n, note: False)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    msgs = githooks.disarm_after_push(["origin", "u"], [f"refs/heads/work {sha} refs/heads/work {ZERO}"], rid)
+    assert "12" in githooks.pr_holds(rid)
+    assert any("could not be turned off" in m for m in msgs), msgs
+
+
+@pytest.mark.parametrize(
+    ("shell", "template", "expect"),
+    [
+        pytest.param("Bash", 'WT={wt}; cd "$WT" && gh pr merge --auto --squash', "cannot follow", id="cd-to-a-variable"),
+        pytest.param("PowerShell", "Push-Location {wt}; gh pr merge --auto --squash", "PR #12", id="push-location"),
+        pytest.param("PowerShell", "Set-Location -Path {wt}; gh pr merge --auto --squash", "PR #12", id="set-location-path"),
+        pytest.param("Bash", "gh pr merge feat --squash", "does not hold its branch", id="a-branch-selector"),
+        pytest.param("Bash", "cd {wt} && gh pr merge --squash", "PR #12", id="a-direct-merge-after-cd"),
+    ],
+)
+def test_p2_a_held_pr_is_found_however_the_command_reaches_it(repo, git, tmp_path, shell, template, expect):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = template.format(wt=str(wt).replace("\\", "/"))
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(repo)))
+    assert deny is not None and expect in deny.reason, command
+
+
+def test_p2_a_push_rails_refuses_disarms_nothing(repo, commit, monkeypatch):
+    """Drives `main`: a push rails refused never reaches the disarm."""
+    _pushable(monkeypatch, repo, commit, shadow_review=True)
+    called: list[object] = []
+    monkeypatch.setattr(githooks, "pre_push", lambda *a: (1, ["refused"]))
+    monkeypatch.setattr(githooks, "run_chained", lambda *a: 0)
+    monkeypatch.setattr(githooks, "disarm_after_push", lambda *a: called.append(a) or [])
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(githooks.sys, "stdin", io.StringIO(""))
+    assert githooks.main(["x", "pre-push", "origin", "u"]) == 1
+    assert called == []
+
+
+
+# --- apex#52: the five items open before merge -------------------------------------------
+
+
+def test_p2_an_arm_releases_only_the_pr_it_armed(repo, commit, git, tmp_path, monkeypatch):
+    """A reviewed arm on one branch must not lift the hold on another branch's PR."""
+    from rails import gitutil
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    githooks.hold_pr(rid, 12, git(repo, "rev-parse", "HEAD"), "a push no review covers landed on it", "work")
+    git(repo, "checkout", "-q", "-b", "next")
+    commit(repo, "src/b.py", "y = 2\n")
+    git(repo, "update-ref", "refs/remotes/origin/next", "HEAD")
+    monkeypatch.chdir(repo)
+    clean = '{"must_fix": []}'
+    (tmp_path / "c.md").write_text("Steelman.\n" + clean + "x" * 220, encoding="utf-8")
+    (tmp_path / "a.md").write_text(clean + "y" * 220, encoding="utf-8")
+    review.record(repo, tmp_path / "c.md", tmp_path / "a.md")
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: json.dumps({"headRefName": "next"}))
+    for command in ("gh pr merge 13 --auto --squash", "gh pr merge --auto --squash"):
+        assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+        assert "12" in githooks.pr_holds(rid), command
+        assert store.read_json(rid.leaf_dir / "pr.json").get("armed") is not True, command
+    git(repo, "checkout", "-q", "work")
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --squash"}, cwd=str(repo))) is not None
+
+
+@pytest.mark.parametrize(
+    ("shell", "template"),
+    [
+        pytest.param("PowerShell", "if ($LASTEXITCODE -eq 0) {{ gh pr merge 12 --auto --squash }}", id="ps-if-block"),
+        pytest.param("PowerShell", "$r = gh pr merge 12 --auto --squash 2>&1; $r", id="ps-assignment"),
+        pytest.param("Bash", "if git status; then gh pr merge 12 --auto --squash; fi", id="bash-then"),
+        pytest.param("Bash", "out=$(gh pr merge 12 --auto --squash)", id="bash-substitution"),
+        pytest.param("Bash", "x=`gh pr merge 12 --auto --squash`", id="bash-backticks"),
+        pytest.param("Bash", "! gh pr merge 12 --auto --squash", id="bash-negation"),
+    ],
+)
+def test_p2_a_merge_behind_shell_syntax_is_still_judged(repo, git, tmp_path, shell, template):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = template.format()
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason, command
+
+
+def test_p2_a_subshell_cd_is_followed(repo, git, tmp_path):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = f"(cd {str(wt).replace(chr(92), '/')} && gh pr merge --auto --squash)"
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "PR #12" in deny.reason
+
+
+def test_the_shared_parser_sees_a_destructive_command_behind_syntax():
+    from rails.gates import destructive
+
+    for command in ("if true; then git push --force origin master; fi", "(git push --force origin master)"):
+        assert destructive.check(_evt("Bash", {"command": command})) is not None, command
+
+
+@pytest.mark.parametrize(
+    "switch", ["git switch work", "git checkout work", "gh pr checkout 12"], ids=["switch", "checkout", "gh-checkout"]
+)
+def test_p2_a_branch_switch_in_the_command_needs_the_pr_named(repo, commit, git, switch):
+    from rails.gates import rearm_disarmed
+
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    rid = store.find_repo(repo)
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers landed on it", "work")
+    git(repo, "checkout", "-q", "-b", "next")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": f"{switch} && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "Name the PR by number" in deny.reason, switch
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr merge 12 --auto --squash -R other/repo",
+        "gh pr merge 12 --auto --squash --repo=other/repo",
+        "GH_REPO=other/repo gh pr merge 12 --auto --squash",
+        "gh pr merge https://github.com/other/repo/pull/12 --auto --squash",
+    ],
+    ids=["dash-r", "repo-equals", "gh-repo-env", "another-repo-s-url"],
+)
+def test_p2_a_merge_of_another_repo_s_pr_is_refused(repo, git, command):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "other/repo" in deny.reason, command
+
+
+def test_p2_a_merge_naming_this_repo_is_judged_as_usual(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    assert rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto -R acme/app"}, cwd=str(repo))) is None
+
+
+def test_p2_a_merge_naming_a_repo_from_outside_any_checkout_is_refused(tmp_path):
+    from rails.gates import rearm_disarmed
+
+    outside = tmp_path / "not-a-checkout"
+    outside.mkdir()
+    deny = rearm_disarmed.check(_evt("Bash", {"command": "gh pr merge 12 --auto -R acme/app"}, cwd=str(outside)))
+    assert deny is not None and "acme/app" in deny.reason
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [("could not resolve to a PullRequest: HTTP 502", githooks.ARMED_UNKNOWN), ("no pull requests found for branch \"work\"", None)],
+    ids=["unknown", "no-pr"],
+)
+def test_p2_an_unanswerable_armed_state_is_unknown_not_unarmed(repo, monkeypatch, stderr, expected):
+    rid = store.find_repo(repo)
+    monkeypatch.setattr(githooks.shutil, "which", lambda name: "gh")
+    monkeypatch.setattr(
+        githooks.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 1, stdout="", stderr=stderr)
+    )
+    assert githooks.armed_pr(rid, "work") == expected
+
+
+@pytest.mark.parametrize("disarmed_ok", [False, True], ids=["disarm-fails", "disarm-works"])
+def test_p2_post_holds_its_statuses_while_a_pr_may_still_be_armed(repo, commit, git, monkeypatch, disarmed_ok):
+    from rails import check as check_mod
+
+    rid = _pushable(monkeypatch, repo, commit, shadow_review=True)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    monkeypatch.setattr(githooks, "armed_pr", lambda repo, branch: githooks.ARMED_UNKNOWN)
+    tried: list[int] = []
+    monkeypatch.setattr(githooks, "disarm", lambda repo, n, note: tried.append(n) or disarmed_ok)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    receipts.write(rid, "lane", sha=sha, lane="checks", exit=0, secs=1)
+    posted: list[object] = []
+    monkeypatch.setattr(check_mod, "origin_slug", lambda top: "acme/app")
+    monkeypatch.setattr(check_mod, "gh_api", lambda *a, **k: posted.append(a) or {}, raising=False)
+    code = check_mod.post(repo, out=io.StringIO(), rerun=False)
+    assert tried == [12], "an unreadable armed state is disarmed as if armed"
+    if disarmed_ok:
+        assert code == 0
+    else:
+        assert code == 1 and posted == [], "no statuses while the PR may still be armed"
+
+
+
+def test_p2_an_arm_of_another_pr_on_the_same_branch_leaves_its_hold(repo, commit, git, tmp_path, monkeypatch):
+    """pr.json names #12 on this branch; arming #13 (also on this branch) is not arming #12."""
+    from rails import gitutil
+
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers landed on it", "work")
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: json.dumps({"headRefName": "work"}))
+    assert arm_review.check(_evt("Bash", {"command": "gh pr merge 13 --auto --squash"}, cwd=str(repo))) is None
+    assert "12" in githooks.pr_holds(rid)
+    assert store.read_json(rid.leaf_dir / "pr.json").get("armed") is not True
+
+
+
+# --- apex#52 review of the five fixes: quoted text is data ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "git commit -m 'docs: refuse `git commit --no-verify` from agents'", id="single-quoted-backticks"),
+        pytest.param(
+            "Bash",
+            "git commit -m \"$(cat <<'EOF'\nfix(gates): a bare `git push --force origin master` is refused\nEOF\n)\"",
+            id="the-default-commit-form-with-a-paren",
+        ),
+        pytest.param("Bash", "# never `rm -rf ~` here\ngit status", id="a-comment"),
+        pytest.param("Bash", "rg -n '`git push --force origin master`' docs/", id="a-grep"),
+        pytest.param("PowerShell", "git commit -m 'never `rm -rf ~` in the script'", id="ps-single-quoted"),
+        pytest.param(
+            "PowerShell",
+            "git commit -m @'\nRefuse `git commit --no-verify` from agents\n'@",
+            id="ps-here-string",
+        ),
+    ],
+)
+def test_text_that_mentions_a_command_runs_nothing(shell, command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt(shell, {"command": command})) is None, command
+
+
+def test_a_commit_message_naming_another_repo_s_merge_is_not_a_merge(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    for command in (
+        "git commit -m 'test: refuse `gh pr merge 12 --auto -R other/repo`'",
+        "gh pr merge 12 --auto --squash --body 'see https://github.com/other/repo/pull/3'",
+        "gh pr merge 12 --auto -R github.com/acme/app",
+        "gh pr merge 12 --auto -R https://github.com/acme/app/",
+    ):
+        assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("(cd {other} && git status); gh pr merge --auto --squash", id="a-subshell"),
+        pytest.param("x=$(cd {other} && pwd); gh pr merge --auto --squash", id="a-substitution"),
+    ],
+)
+def test_a_cd_in_a_child_shell_does_not_move_the_merge(repo, git, tmp_path, template):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = template.format(other=str(repo).replace(chr(92), "/"))
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason, command
+
+
+def test_a_powershell_gh_repo_names_another_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "$env:GH_REPO = 'other/repo'; gh pr merge 12 --auto --squash"
+    deny = rearm_disarmed.check(_evt("PowerShell", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "other/repo" in deny.reason
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "gh pr merge $PR --auto --squash", id="a-variable"),
+        pytest.param("Bash", "gh pr merge $(gh pr view --json number -q .number) --auto --squash", id="a-substitution"),
+        pytest.param("PowerShell", "$r=gh pr merge 12 --auto --squash", id="ps-glued-assignment"),
+    ],
+)
+def test_a_held_pr_reached_through_a_variable_or_glued_assignment_is_refused(repo, git, tmp_path, shell, command):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    assert rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(wt))) is not None, command
+
+
+def test_arm_review_does_not_stamp_across_a_branch_switch(repo, commit, git, tmp_path, monkeypatch):
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    githooks.hold_pr(rid, 12, "abc", "a push no review covers landed on it", "work")
+    arm_review.check(_evt("Bash", {"command": "git switch next && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert "12" in githooks.pr_holds(rid)
+    assert store.read_json(rid.leaf_dir / "pr.json").get("armed") is not True
+
+
+# --- apex#52 second verify: what shell syntax hid or invented ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "(cd ../wt && gh pr merge 12 --auto --squash)", id="a-subshell-s-glued-paren"),
+        pytest.param("Bash", "gh pr merge 12 --auto --squash 2>&1", id="a-redirect"),
+        pytest.param("Bash", "gh pr merge 12 --auto --squash > out.txt", id="a-bare-redirect"),
+        pytest.param("PowerShell", "gh pr merge 12 --auto --squash 2>&1", id="ps-redirect"),
+    ],
+)
+def test_the_arm_merge_by_effect_recommends_is_not_refused(shell, command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is None, command
+
+
+def test_a_subshell_s_closing_paren_is_not_another_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "(cd . && gh pr merge 12 --auto --squash -R acme/app)"
+    assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_an_arm_inside_a_subshell_judges_the_worktree_it_moved_to(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)  # the folder the session started in has nothing to judge
+    command = f"(cd {str(wt).replace(chr(92), '/')} && gh pr merge --auto --squash)"
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+def test_the_folder_comes_back_after_the_subshell_s_last_statement(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    command = f"(git status; cd {str(repo).replace(chr(92), '/')}); gh pr merge --auto --squash"
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(wt)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "gh pr merge --auto --squash 2>&1", id="bash-no-selector"),
+        pytest.param("Bash", "gh pr merge --auto --squash > out.txt", id="bash-bare-redirect"),
+        pytest.param("PowerShell", "gh pr merge --auto --squash 2>&1", id="ps-no-selector"),
+        pytest.param(
+            "Bash",
+            "gh pr create --title t --body \"$(cat <<'EOF'\nIt's ready\nEOF\n)\" && gh pr merge --auto --squash",
+            id="after-a-heredoc-with-an-apostrophe",
+        ),
+    ],
+)
+def test_a_held_pr_re_armed_behind_a_redirect_or_a_heredoc_is_refused(repo, git, tmp_path, shell, command):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason, command
+
+
+def test_a_push_after_a_heredoc_commit_with_an_apostrophe_is_judged():
+    from rails.gates import destructive
+
+    message = "\"$(cat <<'EOF'\nFix the gate's scope\nEOF\n)\""
+    assert destructive.check(_evt("Bash", {"command": f"git commit -m {message} && git push --force origin master"}))
+    assert destructive.check(_evt("Bash", {"command": f"git commit -m {message}"})) is None
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "# tidy up; never `rm -rf ~` here\ngit status", id="bash-semicolon"),
+        pytest.param("Bash", "# a && rm -rf ~ would be wrong\ngit status", id="bash-and"),
+        pytest.param("PowerShell", "# tidy; Remove-Item -Recurse ~ is never it\ngit status", id="ps-semicolon"),
+        pytest.param("PowerShell", "<# tidy;\nRemove-Item -Recurse ~ #>\ngit status", id="ps-block"),
+    ],
+)
+def test_a_separator_inside_a_comment_cuts_nothing(shell, command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt(shell, {"command": command})) is None, command
+
+
+def test_an_arm_named_in_a_comment_is_not_an_arm(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    command = "# later; gh pr merge --auto --squash\nrails check"
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(wt))) is None
+
+
+def test_an_unterminated_substitution_keeps_its_last_character():
+    from rails.gates.destructive import _substitutions
+
+    assert _substitutions("echo $(git push", "bash") == ["git push"]
+    assert _substitutions("echo $(git push)", "bash") == ["git push"]
+
+
+def test_a_marker_change_inside_a_substitution_is_refused():
+    assert operator_bounds.check(_evt("Bash", {"command": "x=$(CLAUDECODE=0 rails used x)"}))
+
+
+def test_a_redirect_is_not_another_branch_s_pr(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    for command in ("gh pr merge --auto --squash 2>&1", "gh pr merge --auto --squash > out.txt"):
+        assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+
+
+def test_a_shift_inside_a_substitution_is_not_a_heredoc():
+    from rails.shell import segments
+
+    command = 'x="$(echo $((a << b))\necho done)"\ngit push --force origin master'
+    assert segments(command)[-1] == "git push --force origin master"
+
+
+def test_a_redirect_before_another_repo_s_pr_url_hides_nothing(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "gh pr merge > merge.log https://github.com/other/repo/pull/3 --auto --squash"
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "other/repo" in deny.reason
+
+
+
+# --- apex#52 third verify: a command's arguments, read once ------------------------------
+
+
+def _on_branch(repo, git, monkeypatch, branch, rows):
+    git(repo, "checkout", "-q", "-b", branch)
+    lookup = repo.parent / "lookup.json"
+    lookup.write_text(json.dumps({branch: rows}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(lookup))
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "gh pr merge --auto --squash --match-head-commit $(git rev-parse HEAD)", id="a-substitution-value"),
+        pytest.param("Bash", "gh pr merge --auto --squash --match-head-commit `git rev-parse HEAD`", id="a-backtick-value"),
+        pytest.param("PowerShell", "gh pr merge --auto --squash --match-head-commit (git rev-parse HEAD)", id="ps-group-value"),
+        pytest.param("PowerShell", "gh pr merge (gh pr view --json number -q .number) --auto --squash", id="ps-group-selector"),
+        pytest.param("Bash", "gh pr merge --auto --squash --body-file - << 'EOF'\nSquash body\nEOF", id="a-heredoc-target"),
+        pytest.param("Bash", 'gh pr merge --auto --squash --body-file - <<< "Ship it"', id="a-here-string-target"),
+        pytest.param("Bash", "gh pr merge --auto --squash >& /dev/null", id="a-dup-target"),
+        pytest.param("Bash", "gh pr merge --auto --squash \\\n  --delete-branch", id="a-line-continuation"),
+        pytest.param("Bash", "gh pr merge --auto --squash &", id="backgrounded"),
+    ],
+)
+def test_a_held_pr_re_armed_through_a_value_a_redirect_target_or_a_continuation_is_refused(
+    repo, git, tmp_path, shell, command
+):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(wt)))
+    # a group selector is refused as a variable one: which PR it names cannot be told
+    want = "variable" if command.startswith("gh pr merge (") else "PR #12"
+    assert deny is not None and want in deny.reason, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr merge 12 --auto --squash \\\n  --delete-branch",
+        "(cd ../wt && gh pr merge 12 --auto --squash) 2>&1",
+        "gh pr merge https://github.com/acme/app/pull/12#issuecomment-1 --auto --squash",
+    ],
+)
+def test_merge_by_effect_reads_the_arm_as_gh_receives_it(command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is None, command
+
+
+def test_a_subshell_s_paren_before_a_redirect_is_not_another_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "(cd . && gh pr merge 12 --auto --squash -R acme/app) 2>&1"
+    assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("(cd {other} && git status) 2>&1; gh pr merge --auto --squash", id="closed-before-a-redirect"),
+        pytest.param("(cd {other} && git status) | tail -1; gh pr merge --auto --squash", id="closed-before-a-pipe"),
+        pytest.param("if (cd {other} && git diff --quiet); then gh pr merge --auto --squash; fi", id="opened-after-if"),
+    ],
+)
+def test_the_folder_a_subshell_left_comes_back_whatever_follows_its_paren(repo, git, tmp_path, template):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    command = template.format(other=str(repo).replace(chr(92), "/"))
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(wt)))
+    assert deny is not None and "no review receipt" in deny.reason, command
+
+
+@pytest.mark.parametrize("shell", ["Bash", "PowerShell"])
+def test_a_force_push_with_a_redirect_still_lands_on_the_current_branch(repo, git, shell):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    deny = destructive.check(_evt(shell, {"command": "git push --force-with-lease origin 2>&1"}, cwd=str(repo)))
+    assert deny is not None and "force push" in deny.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin 2>&1",
+        "git push -u origin HEAD",
+        "git push origin @",
+        "git push   # update the PR",
+    ],
+)
+def test_a_push_onto_a_merged_current_branch_is_refused_however_it_is_spelled(repo, git, monkeypatch, command):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_a_comment_is_not_read_by_a_regex_gate():
+    from rails.gates import stash
+
+    assert stash.check(_evt("Bash", {"command": "git commit -am wip  # (git stash is shared)"})) is None
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "git commit -m \"$(cat <<'EOF'\nTidy the parser's reads\nEOF)\" && git push --force origin master", id="terminator-glued-to-paren"),
+        pytest.param("Bash", "git commit -m \"$(cat <<END-MSG\nTidy the parser's reads\nEND-MSG\n)\" && git push --force origin master", id="hyphenated-delimiter"),
+    ],
+)
+def test_a_push_after_a_heredoc_commit_is_judged_however_the_heredoc_ends(shell, command):
+    from rails.gates import destructive
+
+    assert destructive.check(_evt(shell, {"command": command})) is not None, command
+
+
+def test_a_bare_marker_assignment_reaches_operator_bounds():
+    assert operator_bounds.check(_evt("Bash", {"command": "CLAUDECODE=0; rails used 75 walked"}))
+
+
+def test_a_substitution_in_a_powershell_block_comment_runs_nothing():
+    from rails.gates import destructive
+
+    command = "<# old: $(git push --force origin master) #>\ngit status"
+    assert destructive.check(_evt("PowerShell", {"command": command})) is None
+
+
+def test_a_pr_url_in_the_body_is_not_the_pr_armed(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    command = 'gh pr merge --auto --squash --body "follows https://github.com/acme/app/pull/5"'
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_powershell_remove_item_r_is_recursive():
+    from rails.gates import destructive
+
+    assert destructive.check(_evt("PowerShell", {"command": "Remove-Item -r -Force ~"})) is not None
+    # bash `rm -r` (no -f) keeps the rule it had: `_rm_rf` judges it
+    assert destructive.check(_evt("Bash", {"command": "rm -r ../old"})) is None
+    # in PowerShell `rm` is Remove-Item, and `-r` is `-Recurse`
+    for command in ("rm -r -Force $HOME", "rm -r -Force ..\\stale-worktree", "rm -R -Force C:\\"):
+        assert destructive.check(_evt("PowerShell", {"command": command})) is not None, command
+
+
+def test_a_flag_s_value_is_never_a_redirect(repo, git, tmp_path):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    # `--subject ">"` is the subject; 13 is the PR armed, and it is not held
+    command = 'gh pr merge --subject ">" 13 --auto --squash'
+    assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(wt))) is None
+
+
+def test_gh_repo_in_a_comment_names_no_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "gh pr merge 12 --auto --squash  # not GH_REPO=other/repo"
+    assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_a_heredoc_whose_end_cannot_be_found_hides_nothing_after_the_substitution():
+    from rails.shell import segments
+
+    command = 'x="$(cat <<EOF\nno terminator here\n)"\ngit push --force origin master'
+    assert segments(command)[-1] == "git push --force origin master"
+
+
+def test_a_push_after_an_unquoted_heredoc_substitution_is_judged():
+    from rails.gates import destructive
+
+    command = "msg=$(cat <<'EOF'\nTidy the parser's reads\nEOF)\ngit push --force origin master"
+    assert destructive.check(_evt("Bash", {"command": command})) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin $(git branch --show-current)",
+        "git push origin `git branch --show-current`",
+        "(git push origin merged-line)",
+        "if git push origin merged-line; then echo pushed; fi",
+    ],
+)
+def test_a_push_onto_a_merged_branch_named_by_substitution_or_behind_syntax_is_refused(
+    repo, git, monkeypatch, command
+):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git push --force origin $(git branch --show-current)", 'git push --force origin "$(git branch --show-current)"'],
+)
+def test_a_force_push_to_a_substituted_current_branch_is_judged_as_that_branch(repo, git, command):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_gh_repo_in_a_comment_beside_a_real_one_names_no_other_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "GH_REPO=acme/app gh pr merge 12 --auto --squash  # was GH_REPO=other/repo"
+    assert rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_a_one_statement_subshell_leaves_no_folder_to_restore(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    here = str(repo).replace(chr(92), "/")
+    there = str(wt).replace(chr(92), "/")
+    # `(git status)` opens and closes; the later subshell's close must not restore to `here`
+    command = f"(git status); cd {there}; (cd {here} && git status); gh pr merge --auto --squash"
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "git push --force to master is now refused",
+        "Move .env loading into settings.py",
+        "git commit --no-verify is refused even behind a heredoc",
+        "Refuse echo KEY=1 > .env from agents",
+    ],
+)
+def test_a_glued_heredoc_body_is_not_read_as_a_command(subject):
+    from rails.gates import destructive
+
+    command = f"msg=$(cat <<'EOF'\n{subject}\nEOF)\ngit commit -m \"$msg\""
+    assert destructive.check(_evt("Bash", {"command": command})) is None, subject
+
+
+def test_a_push_in_a_powershell_block_lands_on_the_current_branch(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "git commit -m x; if ($LASTEXITCODE -eq 0) { git push origin }"
+    assert merged_pr_push.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None
+
+
+def test_a_new_branch_named_after_the_current_one_is_not_the_current_one(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "git push -u origin HEAD:$(git branch --show-current)-v2"
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def _worktree_on(repo, git, tmp_path, branch):
+    wt = tmp_path / branch
+    git(repo, "worktree", "add", "-q", "-b", branch, str(wt))
+    return wt
+
+
+def test_a_current_branch_substitution_is_resolved_where_it_runs(repo, git, tmp_path):
+    from rails.gates import destructive
+
+    wt = _worktree_on(repo, git, tmp_path, "feat")
+    git(repo, "checkout", "-q", "-b", "master")
+    there = str(wt).replace(chr(92), "/")
+    # runs in the shell's folder (master), whatever folder the pushing git is in
+    command = f"git -C {there} push --force-with-lease origin $(git branch --show-current)"
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None
+    # its own -C names feat, so this pushes feat, not master
+    command = f'git push --force-with-lease origin "$(git -C {there} branch --show-current)"'
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_eof_paren_ends_only_a_heredoc_inside_a_substitution():
+    from rails.gates import destructive
+
+    documented = (
+        "git commit -F - <<'EOF'\nJudge what follows a heredoc that ends at its paren:\n"
+        "    msg=$(cat <<'EOF'\n    body\n    EOF)\n    git push --force origin master\nEOF"
+    )
+    assert destructive.check(_evt("Bash", {"command": documented})) is None
+    after = "git commit -F - <<'EOF'\nExample:\nEOF)\nIt's judged now.\nEOF\ngit push --force origin master"
+    assert destructive.check(_evt("Bash", {"command": after})) is not None
+
+
+def test_a_nested_one_statement_subshell_does_not_restore_the_outer_folder(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    command = f"(cd {str(wt).replace(chr(92), '/')} && (git fetch -q) && gh pr merge --auto --squash)"
+    deny = arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "no review receipt" in deny.reason
+
+
+def test_clearing_gh_repo_names_no_repo(repo, git):
+    from rails.gates import rearm_disarmed
+
+    git(repo, "remote", "add", "origin", "https://github.com/acme/app.git")
+    command = "$env:GH_REPO = $null; gh pr merge 12 --auto --squash"
+    assert rearm_disarmed.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None
+
+
+@pytest.mark.parametrize("template", ["git -C {wt} push", 'git -C "{wt}" push origin'])
+def test_a_push_from_a_worktree_on_a_merged_branch_is_refused(repo, git, tmp_path, monkeypatch, template):
+    from rails.gates import merged_pr_push
+
+    wt = _worktree_on(repo, git, tmp_path, "merged-line")
+    lookup = tmp_path / "lookup.json"
+    lookup.write_text(json.dumps({"merged-line": [{"number": 7, "state": "MERGED"}]}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(lookup))
+    command = template.format(wt=str(wt).replace(chr(92), "/"))
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_a_push_to_a_substitution_rails_cannot_read_is_not_the_current_branch(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "git push -u origin $(./next-branch-name.sh)"
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_a_nested_one_statement_subshell_keeps_the_held_pr_s_folder(repo, git, tmp_path):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    _pushed(git, repo)
+    command = f"(cd {str(wt).replace(chr(92), '/')} && (git fetch -q) && gh pr merge --auto --squash)"
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "PR #12" in deny.reason
+
+
+def test_a_substitution_with_its_own_c_folder_is_that_folder_s_branch(repo, git, tmp_path, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    wt = _worktree_on(repo, git, tmp_path, "merged-line")
+    lookup = tmp_path / "lookup.json"
+    lookup.write_text(json.dumps({"merged-line": [{"number": 7, "state": "MERGED"}]}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(lookup))
+    # the drive colon in the path (`C:/...`) is not a refspec's `src:dst`
+    command = f"git push origin $(git -C {str(wt).replace(chr(92), '/')} branch --show-current)"
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None
+
+
+@pytest.mark.parametrize("spelling", ["backslashes", "relative"])
+def test_a_powershell_push_from_a_merged_worktree_is_refused(repo, git, tmp_path, monkeypatch, spelling):
+    import os
+
+    from rails.gates import merged_pr_push
+
+    if os.name != "nt":
+        pytest.skip("a backslash path is a Windows spelling")
+
+    wt = _worktree_on(repo, git, tmp_path, "merged-line")
+    lookup = tmp_path / "lookup.json"
+    lookup.write_text(json.dumps({"merged-line": [{"number": 7, "state": "MERGED"}]}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(lookup))
+    path = str(wt).replace("/", "\\") if spelling == "backslashes" else "..\\merged-line"
+    command = f"git -C {path} push"
+    assert merged_pr_push.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_a_push_from_a_folder_rails_cannot_find_names_no_branch(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    monkeypatch.chdir(repo)  # where a git with no folder would run: it must not be asked
+    # `$WT` is some other folder: the main folder's merged branch is not what it pushes
+    assert merged_pr_push.check(_evt("Bash", {"command": "git -C $WT push"}, cwd=str(repo))) is None
+
+
+def test_a_statement_closing_two_subshells_restores_two_folders(repo, git, tmp_path):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    _pushed(git, repo)
+    here = str(repo).replace(chr(92), "/")
+    command = f"(cd {here} && (git fetch -q)); gh pr merge --auto --squash"
+    deny = rearm_disarmed.check(_evt("Bash", {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason
+
+
+def test_a_substitution_s_folder_rails_cannot_find_names_no_branch(repo, git):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    command = "git push --force-with-lease origin $(git -C $WT branch --show-current)"
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_a_git_bash_c_path_is_the_windows_folder(repo, git, tmp_path):
+    import os
+
+    from rails.gates import destructive
+
+    if os.name != "nt":
+        pytest.skip("a Git Bash drive path is a Windows spelling")
+    wt = _worktree_on(repo, git, tmp_path, "master")
+    native = str(wt).replace("\\", "/")
+    bash_path = "/" + native[0].lower() + native[2:]
+    deny = destructive.check(_evt("Bash", {"command": f"git -C {bash_path} push --force origin"}, cwd=str(repo)))
+    assert deny is not None and "force push" in deny.reason
+
+
+def test_a_powershell_push_assigned_to_a_variable_is_judged():
+    from rails.gates import destructive
+
+    command = "$out = (git push --force origin master)"
+    assert destructive.check(_evt("PowerShell", {"command": command})) is not None
+
+
+def test_is_substitution_is_the_whole_word():
+    from rails.shell import is_substitution
+
+    assert is_substitution("$(git branch --show-current)")
+    assert not is_substitution("$(git branch --show-current)-v2")
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["(git push origin $(git branch --show-current))", "(git push origin HEAD:$(git branch --show-current))"],
+)
+def test_a_substitution_in_a_subshell_keeps_its_paren(repo, git, monkeypatch, command):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_a_quoted_heredoc_body_with_an_odd_quote_is_not_words(repo, commit, git, tmp_path, monkeypatch):
+    from rails.shell import words
+
+    body = 'Arm it with gh pr merge 12 --auto --squash once the 5" screen renders.'
+    command = f"gh pr create --title t --body \"$(cat <<'EOF'\n{body}\nEOF\n)\""
+    assert "merge" not in words(command)
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    rid = store.find_repo(repo)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "branch": "work", "state": "OPEN"})
+    arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+    assert store.read_json(rid.leaf_dir / "pr.json").get("armed") is not True
+
+
+def test_a_current_branch_substitution_with_a_redirect_is_the_current_branch(repo, git):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    command = "git push --force origin $(git branch --show-current 2>/dev/null)"
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None
+
+
+def test_arm_review_restores_two_folders_after_a_double_close(repo, git, tmp_path):
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    _pushed(git, repo)
+    there = str(wt).replace(chr(92), "/")
+    # both subshells close before the arm: it is judged in the clean, pushed main folder
+    command = f"(cd {there} && (git fetch -q)); gh pr merge --auto --squash"
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_a_merge_mutation_in_a_heredoc_query_is_judged():
+    from rails.gates import merge_by_effect
+
+    query = "mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }"
+    command = f"gh api graphql -f query=\"$(cat <<'EOF'\n{query}\nEOF\n)\""
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is not None
+
+
+def test_a_force_push_from_a_folder_rails_cannot_find_is_not_the_main_folder_s(repo, git):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    for command in ('git -C "$WT" push --force-with-lease', "git -C $WT push --force -u origin HEAD"):
+        assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None, command
+
+
+def test_git_c_applies_from_the_folder_before_it(repo, git, tmp_path, monkeypatch):
+    from rails.gates import destructive, merged_pr_push
+
+    _worktree_on(repo, git, tmp_path, "master")
+    _worktree_on(repo, git, tmp_path, "merged-line")
+    lookup = tmp_path / "lookup.json"
+    lookup.write_text(json.dumps({"merged-line": [{"number": 7, "state": "MERGED"}]}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(lookup))
+    parent = str(tmp_path).replace(chr(92), "/")
+    force = f"git -C {parent} -C master push --force origin"
+    assert destructive.check(_evt("Bash", {"command": force}, cwd=str(repo))) is not None
+    merged = f"git -C {parent} -C merged-line push"
+    assert merged_pr_push.check(_evt("Bash", {"command": merged}, cwd=str(repo))) is not None
+
+
+def test_a_quoted_dash_c_is_not_git_s_folder(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = 'GIT_SSH_COMMAND="ssh -C -i key" git push'
+    assert merged_pr_push.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "(git push --force origin $(git branch --show-current) > push.log)",
+        "git push --force origin $(git branch --show-current 2> /dev/null)",
+    ],
+)
+def test_a_current_branch_substitution_beside_a_redirect_is_the_current_branch(repo, git, command):
+    from rails.gates import destructive
+
+    git(repo, "checkout", "-q", "-b", "master")
+    assert destructive.check(_evt("Bash", {"command": command}, cwd=str(repo))) is not None, command
+
+
+def test_a_push_in_a_glued_powershell_block_names_its_branch(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "if ($?) {git push origin merged-line}"
+    assert merged_pr_push.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None
+
+
+def test_a_heredoc_body_is_one_piece_of_text():
+    from rails.shell.bash import heredoc_bodies
+
+    bodies = heredoc_bodies("git commit -m \"$(cat <<'EOF'\nPaid John Smith twice\nEOF\n)\" && git push")
+    assert len(bodies) == 1 and "Paid John Smith twice" in bodies[0]
+    assert heredoc_bodies("gh pr create --body-file - <<'EOF'\na b\nEOF")[0].startswith("a b")
+
+
+def test_merge_by_effect_reads_only_its_own_statement_s_bodies():
+    from rails.gates import merge_by_effect
+
+    command = (
+        "cat > docs/merge.md <<'EOF'\nthe gate refuses mergePullRequest\nEOF\n"
+        "gh api graphql -f query='{ viewer { login } }'"
+    )
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is None
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param(
+            "PowerShell",
+            "$q = @'\nmutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }\n'@\n"
+            "gh api graphql -f query=$q",
+            id="ps-here-string-variable",
+        ),
+        pytest.param(
+            "Bash",
+            "q='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'; "
+            'gh api graphql -f query="$q"',
+            id="bash-variable",
+        ),
+    ],
+)
+def test_a_merge_mutation_set_earlier_and_named_by_variable_is_judged(shell, command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is not None, command
+
+
+def test_a_home_variable_c_path_is_under_home(repo, git, tmp_path, monkeypatch):
+    from rails.gates import destructive
+
+    _worktree_on(repo, git, tmp_path, "master")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for command in ("git -C $HOME/master push --force origin", "git -C ${HOME}/master push --force origin"):
+        deny = destructive.check(_evt("Bash", {"command": command}, cwd=str(repo)))
+        assert deny is not None and "force push" in deny.reason, command
+
+
+def test_a_merge_mutation_piped_from_a_powershell_here_string_is_judged():
+    from rails.gates import merge_by_effect
+
+    command = (
+        "@'\n{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}\n'@"
+        " | gh api graphql --input -"
+    )
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh api graphql --input - <<'EOF'\n"
+        '{"query": "mutation { mergePullRequest(input: {pullRequestId: \\"X\\"}) { clientMutationId } }"}\nEOF',
+        "gh api graphql -F query=@- <<'EOF'\nmutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }\nEOF",
+    ],
+)
+def test_a_merge_mutation_fed_on_stdin_is_judged(command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is not None, command
+
+
+def test_a_graphql_variable_in_the_query_reads_no_other_statement():
+    from rails.gates import merge_by_effect
+
+    command = (
+        'git commit -m "merge_by_effect: judge mergePullRequest in here-strings" && '
+        "gh api graphql -f query='query($n:Int!){repository(owner:\"o\",name:\"r\"){pullRequest(number:$n){state}}}' -F n=52"
+    )
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is None
+
+
+def test_a_powershell_variable_piped_to_gh_is_read():
+    from rails.gates import merge_by_effect
+
+    command = (
+        "$q = @'\n{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}\n'@\n"
+        "$q | gh api graphql --input -"
+    )
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is not None
+
+
+def test_an_empty_here_string_has_an_empty_body():
+    from rails.shell.powershell import here_string_bodies, here_string_spans
+
+    assert here_string_bodies("@'\n'@ | Out-Null") == []
+    assert here_string_spans("@'\nopen") == [(3, 7)]
+
+
+def test_a_git_bash_message_path_is_read(repo, tmp_path, monkeypatch):
+    import os
+
+    from rails.gates import leak_dispatch
+
+    if os.name != "nt":
+        pytest.skip("a Git Bash drive path is a Windows spelling")
+    (tmp_path / "msg.txt").write_text("hello\n", encoding="utf-8")
+    native = str(tmp_path / "msg.txt").replace("\\", "/")
+    bash_path = "/" + native[0].lower() + native[2:]
+    pieces, unreadable = leak_dispatch.extract_all(f"git commit -F {bash_path}", "bash", repo)
+    assert not unreadable and any("hello" in text for _, text in pieces)
+
+
+def test_a_powershell_pipeline_continued_on_the_next_line_is_one_statement():
+    from rails.gates import merge_by_effect
+
+    command = (
+        "@'\n{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}\n'@ |\n"
+        "gh api graphql --input -"
+    )
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is not None
+
+
+def test_a_bash_pipeline_continued_on_the_next_line_is_one_statement():
+    from rails.shell import segments
+
+    assert segments("git log --oneline |\n  head -3") == ["git log --oneline |\n  head -3"]
+    assert segments("a ||\nb") == ["a", "b"]
+
+
+def test_a_temp_folder_message_path_is_read(repo, tmp_path, monkeypatch):
+    from rails.gates import leak_dispatch
+
+    (tmp_path / "msg.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    pieces, unreadable = leak_dispatch.extract_all("git commit -F $env:TEMP/msg.txt", "powershell", repo)
+    assert not unreadable and any("hello" in text for _, text in pieces)
+
+
+# --- review round 5 (2026-10-20, rebased onto 1.6.0) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'out="$(gh pr merge 12 --auto --squash)"', id="bash-quoted-substitution"),
+        pytest.param("Bash", 'out="$(gh pr merge 12 --auto --squash 2>&1)"; echo "$out"', id="bash-quoted-then-echo"),
+        pytest.param("Bash", 'echo "merged: `gh pr merge 12 --auto --squash`"', id="bash-quoted-backticks"),
+        pytest.param("PowerShell", '$out = "$(gh pr merge 12 --auto --squash)"', id="ps-quoted-subexpression"),
+        pytest.param(
+            "PowerShell",
+            "if ($LASTEXITCODE -eq 0) { gh pr merge 12 --auto --squash; gh pr view 12 }",
+            id="ps-block-two-statements",
+        ),
+        pytest.param("PowerShell", "if($?){gh pr merge 12 --auto --squash}", id="ps-block-glued"),
+    ],
+)
+def test_r5_a_merge_inside_quotes_or_a_multi_statement_block_is_judged(repo, git, tmp_path, shell, command):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    deny = rearm_disarmed.check(_evt(shell, {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason, command
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'out="$(gh pr merge 12 --squash)"; echo "$out"', id="bash-quoted-substitution"),
+        pytest.param("PowerShell", '$out = "$(gh pr merge 12 --squash)"', id="ps-quoted-subexpression"),
+        pytest.param("PowerShell", "if ($?) { gh pr merge 12 --admin --squash; gh pr view 12 }", id="ps-block"),
+        pytest.param("PowerShell", "if($?){gh pr merge 12 --admin --squash}", id="ps-block-glued"),
+    ],
+)
+def test_r5_merge_by_effect_sees_a_merge_inside_quotes_or_a_block(shell, command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is not None, command
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "git commit -m 'note: $(gh pr merge 12 --squash) is refused'", id="bash-single-quoted"),
+        pytest.param("Bash", 'git commit -m "note: \\$(gh pr merge 12 --squash) is refused"', id="bash-escaped"),
+        pytest.param("PowerShell", "git commit -m 'note: $(gh pr merge 12 --squash) is refused'", id="ps-single-quoted"),
+        pytest.param("PowerShell", 'git commit -m "note: `$(gh pr merge 12 --squash) is refused"', id="ps-escaped"),
+    ],
+)
+def test_r5_a_merge_named_in_unexpanded_text_runs_nothing(shell, command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is None, command
+
+
+def test_r5_a_powershell_block_s_closing_brace_is_not_a_selector(repo, commit, git, tmp_path, monkeypatch):
+    from rails.gates import merge_by_effect
+
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    command = "if ($?) { git push; gh pr merge --auto --squash }"
+    assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None
+
+
+@pytest.mark.parametrize(
+    "switch",
+    ["gh pr checkout 13", "git switch feat", "git checkout feat"],
+    ids=["gh-checkout", "switch", "checkout"],
+)
+def test_r5_an_arm_after_a_branch_switch_needs_the_pr_named_with_nothing_held(repo, commit, git, tmp_path, monkeypatch, switch):
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    assert not githooks.pr_holds(rid)
+    deny = arm_review.check(_evt("Bash", {"command": f"{switch} && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "by number" in deny.reason, switch
+
+
+def test_r5_restoring_a_file_is_not_a_branch_switch(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    command = "git checkout -- src/a.py && gh pr merge --auto --squash"
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "@'\n{\"query\": \"query { viewer { login } }\"}\n'@ | gh api graphql --input -",
+        "$q = @'\n{\"query\": \"query { viewer { login } }\"}\n'@\n$q | gh api graphql --input -",
+        "'{\"query\": \"query { viewer { login } }\"}' | gh api graphql --input -",
+    ],
+    ids=["here-string-piped", "here-string-variable", "quoted-literal-piped"],
+)
+def test_r5_a_powershell_graphql_read_written_in_the_command_is_read(repo, commit, git, tmp_path, monkeypatch, command):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None, command
+
+
+def test_r5_a_powershell_graphql_arm_written_in_the_command_is_still_an_arm(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    command = (
+        "@'\n{\"query\": \"mutation { enablePullRequestAutoMerge(input: {pullRequestId: \\\"X\\\"}) "
+        "{ clientMutationId } }\"}\n'@ | gh api graphql --input -"
+    )
+    deny = arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo)))
+    assert deny is not None and "review" in deny.reason
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param(
+            "Bash",
+            "read -r -d '' Q <<'EOF'\nmutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }\nEOF\n"
+            'gh api graphql -f query="$Q"',
+            id="bash-read-heredoc",
+        ),
+        pytest.param(
+            "Bash",
+            "declare q='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'\n"
+            'gh api graphql -f query="$q"',
+            id="bash-declare",
+        ),
+        pytest.param(
+            "PowerShell",
+            "[string]$q = 'mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'\n"
+            "gh api graphql -f query=$q",
+            id="ps-typed-assignment",
+        ),
+    ],
+)
+def test_r5_a_merge_mutation_set_any_way_and_named_by_variable_is_judged(shell, command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is not None, command
+
+
+def test_r5_a_graphql_variable_inside_a_single_quoted_query_reads_no_other_statement():
+    from rails.gates import merge_by_effect
+
+    command = (
+        "cat > docs/merge.md <<'EOF'\nthe gate refuses mergePullRequest\nEOF\n"
+        "gh api graphql -f query='query($n: Int!) { repository(owner: \"o\", name: \"r\") "
+        "{ pullRequest(number: $n) { title } } }' -F n=5"
+    )
+    assert merge_by_effect.check(_evt("Bash", {"command": command})) is None
+
+
+# --- review round 6 (2026-10-20) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m 'note: { gh pr merge 12 --squash } is refused'",
+        'git commit -m "note: { gh pr merge 12 --squash } is refused"',
+        "@'\nif ($?) { gh pr merge 12 --squash }\n'@ | Out-File notes.md",
+        "@'\nit's one statement: if ($?) { gh pr merge 12 --squash }\n'@ | Out-File notes.md",
+        "git commit -m 'docs: if ($?) { gh pr merge 12 --squash } is one statement'",
+    ],
+    ids=["single-quoted", "double-quoted", "here-string", "here-string-with-an-apostrophe", "a-quoted-if-block"],
+)
+def test_r6_braces_in_quoted_text_are_not_a_block(command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is None, command
+
+
+def test_r6_a_quoted_block_in_a_pr_comment_arms_nothing(repo, commit, git, tmp_path, monkeypatch):
+    rid = _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
+    githooks.hold_pr(rid, 12, "abc", "held", "work")
+    command = "gh pr comment 12 --body 'fixed: if ($?) { gh pr merge 12 --auto; gh pr view 12 }'"
+    assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None
+    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is False
+    assert "12" in githooks.pr_holds(rid)
+
+
+def test_r6_a_push_on_a_later_line_of_a_powershell_block_is_judged(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "if ($LASTEXITCODE -eq 0) {\n    git add -A\n    git push\n}"
+    assert merged_pr_push.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None
+
+
+def test_r6_a_cd_to_the_repo_s_own_top_is_followed(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    command = 'cd "$(git rev-parse --show-toplevel)" && gh pr merge --auto --squash'
+    assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
+
+
+def test_r6_a_checkout_of_a_branch_with_nothing_after_the_dashes_is_a_switch(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    deny = arm_review.check(_evt("Bash", {"command": "git checkout feat -- && gh pr merge --auto --squash"}, cwd=str(repo)))
+    assert deny is not None and "by number" in deny.reason
+
+
+def test_r6_a_variable_piped_to_graphql_is_not_an_inline_body(repo, commit, git):
+    commit(repo, "src/a.py", "x = 1\n")
+    _pushed(git, repo)
+    (repo / "arm.json").write_text(
+        '{"query": "mutation { enablePullRequestAutoMerge(input: {pullRequestId: \\"X\\"}) { clientMutationId } }"}',
+        encoding="utf-8",
+    )
+    for command in (
+        '$q = Get-Content arm.json -Raw; "$q" | gh api graphql --input -',
+        '$q = Get-Content arm.json -Raw\n"$q" | gh api graphql --input -',
+    ):
+        assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None, command
+
+
+# --- review round 7 (2026-10-20) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "if ($?) { git push; gh pr merge --auto --squash } else { Write-Host 'push failed' }",
+        "try { git push; gh pr merge --auto --squash } catch { Write-Error $_ }",
+        "if ($?) { git push; gh pr merge --auto --squash }else{Write-Host no}",
+    ],
+    ids=["else", "catch", "glued-else"],
+)
+def test_r7_a_block_s_closing_brace_before_else_is_not_an_argument(repo, commit, git, tmp_path, monkeypatch, command):
+    from rails.gates import merge_by_effect
+
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None, command
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None, command
+
+
+def test_r7_the_by_number_arm_in_an_if_else_is_allowed():
+    from rails.gates import merge_by_effect
+
+    command = "if ($?) { gh pr ready 12; gh pr merge 12 --auto --squash } else { Write-Host 'not ready' }"
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is None
+
+
+def test_r7_a_held_pr_merged_in_an_if_else_is_still_judged(repo, git, tmp_path):
+    from rails.gates import rearm_disarmed
+
+    wt = _worktree_with_unreviewed_push(repo, git, tmp_path)
+    githooks.hold_pr(store.find_repo(wt), 12, "abc", "a push no review covers landed on it", "feat")
+    command = "if ($?) { git push; gh pr merge 12 --auto --squash } else { Write-Host 'push failed' }"
+    deny = rearm_disarmed.check(_evt("PowerShell", {"command": command}, cwd=str(wt)))
+    assert deny is not None and "PR #12" in deny.reason
+
+
+def test_r7_a_push_in_a_try_block_judges_the_current_branch(repo, git, monkeypatch):
+    from rails.gates import merged_pr_push
+
+    _on_branch(repo, git, monkeypatch, "merged-line", [{"number": 7, "state": "MERGED"}])
+    command = "try { git add -A; git push } catch { Write-Error $_ }"
+    assert merged_pr_push.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is not None
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", "cd $(git rev-parse --show-toplevel) && gh pr merge --auto --squash", id="bash-unquoted"),
+        pytest.param(
+            "PowerShell", "Set-Location (git rev-parse --show-toplevel); gh pr merge --auto --squash", id="ps-group"
+        ),
+    ],
+)
+def test_r7_a_cd_to_the_top_written_without_quotes_is_followed(repo, commit, git, tmp_path, monkeypatch, shell, command):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    assert arm_review.check(_evt(shell, {"command": command}, cwd=str(repo))) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["Write-Host (gh pr merge 12 --squash)", "$r = @(gh pr merge 12 --admin --squash)"],
+    ids=["group", "array-subexpression"],
+)
+def test_r7_a_merge_inside_a_powershell_group_is_judged(command):
+    from rails.gates import merge_by_effect
+
+    assert merge_by_effect.check(_evt("PowerShell", {"command": command})) is not None, command
+
+
+def test_r7_a_powershell_json_literal_with_doubled_quotes_is_an_inline_body(repo, commit, git, tmp_path, monkeypatch):
+    _reviewed(repo, commit, git, tmp_path, monkeypatch)
+    command = '"{""query"": ""query { viewer { login } }""}" | gh api graphql --input -'
+    assert arm_review.check(_evt("PowerShell", {"command": command}, cwd=str(repo))) is None
+
+
+def test_r7_powershell_blocks_and_groups_read_raw_text():
+    from rails.shell.powershell import blocks, groups
+
+    assert blocks("if ($?) { a; b }") == [" a; b "]
+    assert blocks("if ($?) { a") == [" a"]
+    assert blocks("if($?){a}else{b}") == ["a", "b"]
+    assert blocks("x '{ a }' \"{ b }\" @{c=1} ${d} # { e }") == []
+    assert blocks("@'\n{ f }\n'@ | Out-File n.md") == []
+    assert groups("$u = (gh pr create --title x)") == ["gh pr create --title x"]
+    assert groups("$r = @(gh pr list)") == ["gh pr list"]
+    assert groups("$x = $(gh pr view)") == []  # a subexpression: _substitutions finds it
+    assert groups("echo '(not a group)'") == []
+
+
+@pytest.mark.parametrize("shell", ["Bash", "PowerShell"])
+def test_r7_a_quoted_brace_does_not_end_the_command(shell):
+    from rails.gates import merge_by_effect
+
+    command = 'gh pr merge 12 --body "fix }" --admin --squash'
+    assert merge_by_effect.check(_evt(shell, {"command": command})) is not None, shell
+
+
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+def test_r7_flags_after_a_quoted_brace_are_still_read(shell):
+    from rails.gates import destructive
+
+    command = 'gh pr merge 12 --body "done }" --auto --squash'
+    assert destructive.before_block_end(command, shell) == command
+    assert destructive.before_block_end("gh pr merge --auto } else { x }", shell) == "gh pr merge --auto "
+    assert "--auto" in destructive.commands(command, shell)[0][1]

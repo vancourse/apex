@@ -56,7 +56,7 @@ OVERRIDES = ("JARVIS_HEREDOC_OK", "RAILS_HEREDOC_OK")
 #: herestring) out; `-?` covers `<<-`. Alternation order is load-bearing: the
 #: quoted forms must be tried before the bare one.
 _HEREDOC = re.compile(
-    r"<<(?!<)-?[ \t]*(?P<delim>'[^']*'|\"[^\"]*\"|\\[A-Za-z_]\w*|[A-Za-z_]\w*)"
+    r"<<(?!<)-?[ \t]*(?P<delim>'[^']*'|\"[^\"]*\"|\\[A-Za-z_]\w*|[A-Za-z_][^\s;&|<>()'\"`\\]*)"
 )
 
 #: A redirect that lands in a file. Only used to pick which remedy to name.
@@ -104,10 +104,32 @@ def _is_literal(delim: str) -> bool:
     return delim[0] in "'\"\\"
 
 
-def _terminator(lines: list[str], start: int, bare: str) -> int | None:
-    """Index of the line that closes a heredoc opened before `start`, or None."""
+def _in_substitution(prefix: str) -> bool:
+    """Whether a `$(`, `<(` or `>(` is still open at the end of ``prefix``: the text of the
+    line before a `<<`, as rails.shell.bash tracks it."""
+    opened: list[str] = []
+    i = 0
+    while i < len(prefix):
+        if prefix.startswith(("$(", "<(", ">("), i) and not prefix.startswith("$((", i):
+            opened.append("$")
+            i += 2
+            continue
+        if prefix[i] == "(":
+            opened.append("(")
+        elif prefix[i] == ")" and opened:
+            opened.pop()
+        i += 1
+    return "$" in opened
+
+
+def _terminator(lines: list[str], start: int, bare: str, in_subst: bool = False) -> int | None:
+    """Index of the line that closes a heredoc opened before `start`, or None. A heredoc
+    opened inside a substitution also ends at `EOF)`, as rails.shell.bash reads it."""
     for index in range(start, len(lines)):
-        if lines[index].strip() == bare:
+        line = lines[index].strip()
+        if line == bare or (
+            in_subst and line.startswith(bare) and line[len(bare) :].lstrip().startswith(")")
+        ):
             return index
     return None
 
@@ -121,19 +143,26 @@ def _unquoted_heredocs(command: str) -> list[tuple[str, str]]:
     lines = command.splitlines()
     offenders: list[tuple[str, str]] = []
     index = 0
+    # the command text outside bodies so far: a `$(` opened on an earlier line is still open
+    context = ""
     while index < len(lines):
         line = lines[index]
         cursor = index + 1
+        tails: list[str] = []
         for match in _HEREDOC.finditer(line):
             delim = match.group("delim")
             bare = _bare(delim)
-            end = _terminator(lines, cursor, bare)
+            end = _terminator(lines, cursor, bare, _in_substitution(context + line[: match.start()]))
             if end is None:
                 # Unterminated: not a heredoc. Fail-open is the bias.
                 return offenders
             if not _is_literal(delim):
                 offenders.append((bare, line))
+            closing = lines[end].strip()
+            if closing != bare:
+                tails.append(closing[len(bare) :])  # `EOF)`: its `)` closes the substitution
             cursor = end + 1
+        context += line + "\n" + "".join(tail + "\n" for tail in tails)
         index = cursor
     return offenders
 

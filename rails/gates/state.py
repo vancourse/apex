@@ -61,6 +61,42 @@ def _history_lines(repo: store.RepoId, act: bool) -> list[str]:
     return lines
 
 
+def lines_of_work(repo: store.RepoId) -> list[str]:
+    """One line per worktree of this repo: its branch, its claim, its PR (p1c). Read from
+    the local store and `git worktree list` only, so it is cheap enough for every call."""
+    from rails import claims, intent, work
+    from rails.gitutil import GitError, git
+
+    claimed = {c.leaf: c for c in claims.load(repo)}
+    out = []
+    for top in intent.worktree_tops(repo.top):
+        if not (top / ".git").exists():  # removed, or half removed (no .git left)
+            # git lists a deleted worktree until it is pruned; find_repo would walk up to
+            # the main checkout and report it twice.
+            out.append(f"{'(folder gone)':<28} {top} - `git worktree prune` forgets it")
+            continue
+        rid = store.find_repo(top)
+        if rid is None:
+            continue
+        try:
+            branch = git(top, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip() or "?"
+        except GitError:
+            branch = "?"
+        claim = claimed.get(rid.leaf)
+        what = (
+            ", ".join(claim.items) if claim and claim.items else (claim.adhoc if claim else "")
+        ) or "no claim"
+        pr = store.read_json(rid.leaf_dir / "pr.json", None)
+        shown = ""
+        if isinstance(pr, dict) and pr.get("number"):
+            state = str(pr.get("state", "OPEN")).upper()
+            shown = f" | PR #{pr['number']} {state}{' armed' if pr.get('armed') else ''}"
+        open_items = sum(1 for i in work.load(rid)["items"] if i.get("status") == "open")
+        items = f" | {open_items} open item(s)" if open_items else ""
+        out.append(f"{rid.leaf:<28} {branch:<36} {what[:80]}{shown}{items}")
+    return out
+
+
 def render(repo: store.RepoId, act: bool = False) -> str:
     from rails import claims, leak, receipts, work
 

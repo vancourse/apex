@@ -39,7 +39,7 @@ NAME = "operator_bounds"
 
 #: An assignment to a CLAUDE* variable at the start of a statement or a script line.
 _ASSIGN = re.compile(
-    r"^[\s(]*(?:\w+=\S*\s+)*(?:export\s+|set\s+|setx\s+|env\s+(?:-\S+\s+|\w+=\S*\s+)*)?(?:\$env:)?CLAUDE\w*\s*=(?!=)",
+    r"^[\s(]*(?:\$\()?[\s(]*(?:\w+=\S*\s+)*(?:export\s+|set\s+|setx\s+|env\s+(?:-\S+\s+|\w+=\S*\s+)*)?(?:\$env:)?CLAUDE\w*\s*=(?!=)",
     re.IGNORECASE,
 )
 #: Code that changes the marker, wherever it appears: each spelling names CLAUDE itself, so

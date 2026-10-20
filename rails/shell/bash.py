@@ -18,6 +18,13 @@ spaces too: that is what stops a multi-line quoted message from splitting into
 statements. Comments stay visible (override tokens such as ``# stash-ok`` live
 there) but quotes inside a comment are not quotes.
 
+A heredoc inside ``$(...)`` is a heredoc there too: the default commit form,
+``git commit -m "$(cat <<'EOF' ... EOF)"``, has apostrophes in its body, and
+reading one as an opening quote hid every command after the commit.
+
+``scrub(command, comments=True)`` blanks comments as well. ``spans`` is fed
+that copy, so a ``;`` or ``&&`` inside a comment cuts nothing.
+
 Named limits, all fail-open (text hidden from a deny gate is text allowed):
 ``$(...)`` inside double quotes is skipped with the string; an unterminated
 quote or heredoc hides the rest of the command, which bash would not have run
@@ -33,7 +40,7 @@ import shlex
 #: The delimiter after ``<<`` or ``<<-``: quoted, backslash-quoted, or bare.
 #: Quoted forms first, or ``'EOF'`` would match as nothing.
 _DELIM = re.compile(
-    r"-?[ \t]*(?P<delim>'[^'\n]*'|\"[^\"\n]*\"|\\[A-Za-z_]\w*|[A-Za-z_]\w*)"
+    r"-?[ \t]*(?P<delim>'[^'\n]*'|\"[^\"\n]*\"|\\[A-Za-z_]\w*|[A-Za-z_][^\s;&|<>()'\"`\\]*)"
 )
 
 #: A backslash before one of these is blanked with it: an escaped separator or
@@ -86,8 +93,9 @@ def _skip_backtick(text: str, i: int) -> int:
     return n
 
 
-def _skip_double(text: str, i: int) -> int:
-    """`i` is just after an opening `"`; nested `$(...)` may hold its own quotes."""
+def _skip_double(text: str, i: int, out: list[str] | None = None) -> int:
+    """`i` is just after an opening `"`; nested `$(...)` may hold its own quotes. With
+    ``out``, a heredoc body inside a nested substitution is blanked there."""
     n = len(text)
     while i < n:
         c = text[i]
@@ -97,7 +105,7 @@ def _skip_double(text: str, i: int) -> int:
         if c == '"':
             return i + 1
         if c == "$" and text.startswith("$(", i):
-            i = _skip_subst(text, i + 2)
+            i = _skip_subst(text, i + 2, out)
             continue
         if c == "`":
             i = _skip_backtick(text, i + 1)
@@ -106,20 +114,44 @@ def _skip_double(text: str, i: int) -> int:
     return n
 
 
-def _skip_subst(text: str, i: int) -> int:
-    """`i` is just after `$(`; return the index after the matching `)`."""
+def _skip_subst(text: str, i: int, out: list[str] | None = None) -> int:
+    """`i` is just after `$(`; return the index after the matching `)`.
+
+    A heredoc opened in here has its body skipped at the next newline, so an
+    apostrophe in it (``gate's``) is text, not a quote that never closes.
+    """
     n = len(text)
     depth = 1
+    pending: list[str] = []
     while i < n:
         c = text[i]
+        if c == "\n" and pending:
+            end = _past_bodies(text, i + 1, pending, out)
+            pending = []
+            # A body whose terminator never comes is not read as one: the scan goes on, so
+            # the `)` that closes the substitution still closes it.
+            i = end if end is not None else i + 1
+            continue
         if c == "\\":
+            i += 2
+            continue
+        if text.startswith("$((", i) or text.startswith("((", i):
+            i = _skip_arith(text, i)  # `<<` in here is a shift
+            continue
+        if text.startswith("<<<", i):
+            i += 3
+            continue
+        if text.startswith("<<", i):
+            match = _DELIM.match(text, i + 2)
+            if match:
+                pending.append(_bare(match.group("delim")))
             i += 2
             continue
         if c == "'":
             i = _skip_single(text, i + 1)
             continue
         if c == '"':
-            i = _skip_double(text, i + 1)
+            i = _skip_double(text, i + 1, out)
             continue
         if c == "(":
             depth += 1
@@ -129,6 +161,39 @@ def _skip_subst(text: str, i: int) -> int:
                 return i + 1
         i += 1
     return n
+
+
+def _past_bodies(text: str, i: int, pending: list[str], out: list[str] | None = None) -> int | None:
+    """Inside `$(...)`: where the last of `pending`'s bodies ends, from line `i`. That is the
+    newline after its terminator line, or a `)` right after the terminator (`EOF)`), which
+    closes the substitution. None when a terminator never comes."""
+    n = len(text)
+    first = i
+
+    def blank(stop: int) -> None:
+        if out is not None:
+            for k in range(first, stop):
+                out[k] = " "
+
+    for index, bare in enumerate(pending):
+        while True:
+            j = text.find("\n", i)
+            end = n if j < 0 else j
+            line = text[i:end].strip()
+            if line == bare:
+                i = end
+                break
+            if line.startswith(bare) and line[len(bare) :].lstrip().startswith(")"):
+                close = text.index(")", text.index(bare, i) + len(bare))
+                blank(close)
+                return close
+            if j < 0:
+                return None
+            i = end + 1
+        if index < len(pending) - 1:
+            i += 1
+    blank(i)
+    return i
 
 
 def _skip_arith(text: str, i: int) -> int:
@@ -155,42 +220,65 @@ def _skip_arith(text: str, i: int) -> int:
     return start + 2
 
 
-def _skip_heredoc_bodies(text: str, i: int, pending: list[str], out: list[str]) -> int:
-    """Blank the bodies (and terminator lines) of `pending`, starting at line `i`.
+def _skip_heredoc_bodies(
+    text: str, i: int, pending: list[tuple[str, bool]], out: list[str] | None
+) -> int:
+    """Blank the bodies (and terminator lines) of `pending`, starting at line `i`;
+    with ``out`` None, only find where they end.
 
     Returns the index of the newline ending the last terminator line, so the
     caller treats it as an ordinary statement separator; or ``len(text)`` when
     a heredoc never terminates — bash reads it to end of input.
     """
     n = len(text)
-    for index, bare in enumerate(pending):
+    first = i
+    for index, (bare, in_subst) in enumerate(pending):
         start = i
         found = False
         while i < n:
             j = text.find("\n", i)
             end = n if j < 0 else j
-            if text[i:end].strip() == bare:
+            line = text[i:end].strip()
+            if line == bare:
                 found = True
-                for k in range(start, end):
-                    out[k] = " "
+                if out is not None:
+                    for k in range(start, end):
+                        out[k] = " "
                 i = end
                 break
+            if in_subst and line.startswith(bare) and line[len(bare) :].lstrip().startswith(")"):
+                # `msg=$(cat <<EOF ... EOF)`: the heredoc of a substitution ends at its `)`,
+                # which stays visible to close it
+                close = text.index(")", text.index(bare, i) + len(bare))
+                if out is not None:
+                    # and the newline before the first body: `msg=$(cat <<EOF ... EOF)` is one
+                    # statement, so the body is never read as one of its own
+                    for k in range(max(first - 1, 0), close):
+                        out[k] = " "
+                return close
             i = end + 1
         if not found:
-            for k in range(start, n):
-                out[k] = " "
+            if out is not None:
+                for k in range(start, n):
+                    out[k] = " "
             return n
         if index < len(pending) - 1 and i < n:
-            out[i] = " "  # the newline between two bodies separates nothing
+            if out is not None:
+                out[i] = " "  # the newline between two bodies separates nothing
             i += 1
     return i
 
 
-def scrub(command: str) -> str:
+def scrub(command: str, comments: bool = False, quotes: bool = True) -> str:
+    """With ``quotes`` False, quoted spans and escapes are kept as written and only heredoc
+    bodies (and, with ``comments``, comments) are blanked: what ``words`` tokenizes."""
     out = list(command)
     n = len(command)
     i = 0
-    pending: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    # Open parens at the top level: `$` for a substitution (`$(`, `<(`, `>(`), `(` for a
+    # subshell. Only a heredoc opened inside a substitution may end at `EOF)`.
+    opened: list[str] = []
 
     def blank(a: int, b: int) -> None:
         for k in range(a, b):
@@ -212,46 +300,140 @@ def scrub(command: str) -> str:
                 end = i + 2
                 if command[i + 1] == "\r" and end < n and command[end] == "\n":
                     end += 1
-                blank(i, end)
+                if quotes:
+                    blank(i, end)
                 i = end
                 continue
             i += 2
             continue
         if c == "#" and (i == 0 or command[i - 1] in _WORD_BREAK):
             j = command.find("\n", i)
-            i = n if j < 0 else j
+            end = n if j < 0 else j
+            if comments:
+                blank(i, end)
+            i = end
             continue
         if c == "'":
             end = _skip_single(command, i + 1)
-            blank(i, end)
+            if quotes:
+                blank(i, end)
             i = end
             continue
         if c == "$" and command.startswith("$'", i):
             end = _skip_ansi_c(command, i + 2)
-            blank(i, end)
+            if quotes:
+                blank(i, end)
             i = end
             continue
         if c == '"':
-            end = _skip_double(command, i + 1)
-            blank(i, end)
+            # kept as written for words, except a heredoc body inside a substitution there
+            end = _skip_double(command, i + 1, None if quotes else out)
+            if quotes:
+                blank(i, end)
             i = end
             continue
         if command.startswith("$((", i) or command.startswith("((", i):
             i = _skip_arith(command, i)
             continue
+        if command.startswith(("$(", "<(", ">("), i):
+            opened.append("$")
+            i += 2
+            continue
+        if c == "(":
+            opened.append("(")
+        elif c == ")" and opened:
+            opened.pop()
         if command.startswith("<<<", i):
             i += 3
             continue
         if command.startswith("<<", i):
             match = _DELIM.match(command, i + 2)
             if match:
-                pending.append(_bare(match.group("delim")))
+                pending.append((_bare(match.group("delim")), "$" in opened))
             # The delimiter itself is scanned normally: its quotes are blanked
             # like any other quoted span.
             i += 2
             continue
         i += 1
     return "".join(out)
+
+
+def expanding(command: str) -> str:
+    """``command`` with only the text bash expands left: single-quoted and `$'...'` spans,
+    heredoc bodies and comments blanked; double-quoted text kept, since bash runs a `$(...)`
+    and expands a `$name` inside it (`out="$(gh pr merge 12)"`). Escapes are kept as written
+    (`\\$(` is text), so a reader skips the character after a backslash."""
+    kept = scrub(command, comments=True, quotes=False)
+    out = list(kept)
+    n = len(kept)
+    i = 0
+    while i < n:
+        c = kept[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'":
+            end = _skip_single(kept, i + 1)
+            out[i:end] = " " * (end - i)
+            i = end
+            continue
+        if kept.startswith("$'", i):
+            end = _skip_ansi_c(kept, i + 2)
+            out[i:end] = " " * (end - i)
+            i = end
+            continue
+        if c == '"':
+            i += 1  # its inside is scanned like the rest: `'` there is a plain character
+            while i < n and kept[i] != '"':
+                if kept[i] == "\\":
+                    i += 1
+                elif kept.startswith("$(", i):
+                    i = _skip_subst(kept, i + 2) - 1
+                elif kept[i] == "`":
+                    i = _skip_backtick(kept, i + 1) - 1
+                i += 1
+            i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def heredoc_spans(command: str) -> list[tuple[int, int]]:
+    """(start, end) of every heredoc body in ``command``, at the top level or inside a
+    substitution (quoted or not)."""
+    kept = scrub(command, quotes=False)
+    # b: blanked (a body), w: whitespace the body kept, x: anything else
+    marks = "".join(
+        "b" if c != k else ("w" if c.isspace() else "x") for c, k in zip(command, kept)
+    )
+    return [(m.start(), m.end()) for m in re.finditer(r"b(?:[bw]*b)?", marks)]
+
+
+def heredoc_bodies(command: str) -> list[str]:
+    """The text of every heredoc body in ``command``. ``words`` never reads a body; the gates
+    that judge the text a command sends (a household value in a PR body, a GraphQL mutation)
+    read these."""
+    return [command[a:b] for a, b in heredoc_spans(command)]
+
+
+def statement_bodies(command: str, statement: str) -> list[str]:
+    """The heredoc bodies ``statement`` owns: those inside its own text (`-f q="$(cat <<'EOF'
+    ...)"`), and those it feeds on stdin, which follow it (`--input - <<'EOF'`)."""
+    start = command.find(statement)
+    if start < 0:
+        return heredoc_bodies(statement)
+    end = start + len(statement)
+    owned: list[str] = []
+    reach = end
+    for a, b in heredoc_spans(command):
+        if start <= a < end:
+            owned.append(command[a:b])
+        elif a >= reach and not command[reach:a].strip():
+            owned.append(command[a:b])
+            reach = b
+        elif a >= end:
+            break
+    return owned
 
 
 def spans(command: str, scrubbed: str) -> list[tuple[int, int]]:
@@ -268,6 +450,9 @@ def spans(command: str, scrubbed: str) -> list[tuple[int, int]]:
     i = 0
     while i < n:
         c = scrubbed[i]
+        if c == "\n" and re.search(r"(?<!\|)\|[ \t\r]*$", scrubbed[start:i]):
+            i += 1  # `a |` then `b` on the next line: the pipeline goes on
+            continue
         if c in "\n;":
             cuts.append((start, i))
             start = i + 1
@@ -294,8 +479,15 @@ def spans(command: str, scrubbed: str) -> list[tuple[int, int]]:
 
 
 def words(segment: str) -> list[str]:
-    """Tokens with quotes removed and comments dropped; str.split if shlex refuses."""
+    """Tokens with quotes removed and comments dropped; str.split if shlex refuses.
+
+    A comment is what ``scrub`` reads as one, so a `#` inside a word is the word's
+    (`.../pull/12#issuecomment-1`), as bash reads it. A heredoc body is not words. A line
+    continuation joins the lines.
+    """
+    text = scrub(segment, comments=True, quotes=False)
+    text = re.sub(r"\\\r?\n", "", text)
     try:
-        return shlex.split(segment, comments=True, posix=True)
+        return shlex.split(text, comments=False, posix=True)
     except ValueError:
-        return segment.split()
+        return text.split()
