@@ -290,15 +290,41 @@ _NEVER_THE_OPERATOR = {
 
 @pytest.mark.parametrize("prompt", list(_NEVER_THE_OPERATOR.values()), ids=list(_NEVER_THE_OPERATOR))
 def test_agent_text_and_untrustworthy_boundaries_never_ack(repo, prompt):
-    """Each stays a machine message: no ack, no word, no ceremony row."""
+    """Each stays a machine message: no ack, no word, no ceremony row. A stray tag may only say
+    that it did not ack."""
     h = _intent(repo)
     rid = store.find_repo(repo)
     intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
     rows = [_row("prompt_words", ["UserPromptSubmit"])]
     out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
-    assert not out.notices
+    assert all("did not ack" in n for n in out.notices), out.notices
+    assert bool(out.notices) == intent.stray_reminder(prompt)
     assert not intent.acked(rid, repo)
+    assert "hold" not in (store.read_json(rid.dir / "state.json") or {})
     assert store.read_jsonl(rid.dir / "ceremony.jsonl") == []
+
+
+def test_a_stray_tag_says_it_did_not_ack_but_hold_still_holds(repo):
+    """Failing closed on the ack must not fail open on the brake, and must not be silent: the
+    2026-10-20 incident was a dropped reply nobody was told about."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt="go ahead\n\n" + _REMINDER), rows)
+    assert [n for n in out.notices if f"did not ack intent {h}" in n]
+    assert not intent.acked(rid, repo)
+    for prompt in ("hold\n\n" + _REMINDER, "hold\nwhy does </system-reminder> survive?"):
+        with store.updating(rid.dir / "state.json", {}) as state:
+            state.pop("hold", None)
+        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+        assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True, prompt
+        assert any("HOLD recorded" in n for n in out.notices)
+    # A subagent's prompt is never the operator's, stray tag or not.
+    out = dispatch(
+        _evt("UserPromptSubmit", repo, prompt="hold\n" + _REMINDER, agent_id="sub1"), rows
+    )
+    assert not out.notices
 
 
 def test_the_operators_words_are_read_behind_a_harness_reminder(repo):

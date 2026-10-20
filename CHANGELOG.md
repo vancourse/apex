@@ -15,8 +15,8 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   `rails ship` refused three times with "intent … has not been acked". A plain reply acked at
   once. A prompt is now judged on the operator's words: the run of closed `<system-reminder>`
   blocks at its START is removed (`intent.operator_text`). The same text is what `prompt_words`
-  reads for `hold`, `release`, `used`, the ack-or-correction and the ceremony log, so a
-  "rather than" in a side session's report no longer reads as a correction.
+  reads for `hold`, `release`, `used`, `approve`, the ack-or-correction and the ceremony log, so
+  a "rather than" in a side session's report cannot make the operator's reply a correction.
   - **Still a machine message, never an ack:** a prompt that is only reminders; one whose
     remaining text starts with `<` (a `<task-notification>`); and one with a reminder tag left
     anywhere after that run. The last covers an unclosed block, a reminder after the operator's
@@ -27,8 +27,14 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **A spawned session's first prompt** ("Background (from the session that started this
     one): …", the parent agent's brief) is a machine message by its header, with or without
     a reminder in front.
-  - **The ceremony log now counts the replies it dropped before,** so `ceremony_30d.messages`
-    rises from 1.6.1.
+  - **A stray tag is not silent, and does not drop the brake.** When a shown intent is not
+    acked because of a stray tag, the hook tells the session ("did not ack intent … ask for a
+    plain reply"). `hold` on such a prompt's first line is still recorded: a hold set from agent
+    text costs one `release`, while a dropped hold would let pushes through unseen.
+  - **The ceremony log counts differently.** It now counts replies behind a leading reminder,
+    which it dropped before, and no longer counts a reply followed by a reminder or a spawned
+    session's brief. `ceremony_30d.messages` moves from 1.6.1, net upward in jarvis.
+  - `rails --version`, the session-start line and posted statuses say 1.6.1 (`rails.VERSION`).
 
 ## [1.6.0] — 2026-10-19
 

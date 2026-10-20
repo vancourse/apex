@@ -3,7 +3,8 @@
 A HUMAN message is read as the operator wrote it: the harness `<system-reminder>` blocks in front
 of it (re-read instructions, a side session reporting in) are removed first
 (`intent.operator_text`). A prompt with a reminder tag left anywhere after that is not human
-(`intent.is_human`).
+(`intent.is_human`), except that `hold` on its first line is still honoured and a shown,
+unacked intent says the message did not ack it (`_untrusted`).
 
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`
@@ -51,30 +52,63 @@ def _classify_ceremony(prompt: str) -> str:
     return "other"
 
 
+def _record_hold(repo: store.RepoId) -> str:
+    with store.updating(repo.dir / "state.json", {}) as state:
+        state["hold"] = {
+            "on": True,
+            "since": time.strftime("%Y-%m-%d %H:%M"),
+            "by": "prompt",
+        }
+    return "rails: HOLD recorded. Every push refuses until the operator says `release`."
+
+
+def _first_word(text: str) -> tuple[str, str]:
+    first = text.strip().splitlines()[0].strip() if text.strip() else ""
+    return first, first.lower().rstrip(".!")
+
+
+def _untrusted(repo: store.RepoId, payload: dict, prompt: str):
+    """A prompt with a stray reminder tag is not read as the operator's (`intent.is_human`), but
+    their words may be in it, so two things still happen:
+
+    - `hold` on its first line is honoured. A brake set from agent text costs one `release`; a
+      brake the operator set and the hook dropped lets pushes through unseen.
+    - A shown, unacked intent says it was not acked by this message, so the session asks for a
+      plain reply instead of learning it at push (the 2026-10-20 incident was a silent drop).
+    """
+    if payload.get("agent_id") or not intent.stray_reminder(prompt):
+        return None
+    notices = []
+    if _first_word(intent.operator_text(prompt))[1] == "hold":
+        notices.append(_record_hold(repo))
+    h = intent.current_hash(repo.top)
+    st = intent.get(repo)
+    if h and st.get("hash") == h and st.get("shown_at") and st.get("acked_hash") != h:
+        notices.append(
+            f"rails: a message carrying a stray `<system-reminder>` tag was not read as the "
+            f"operator's, so it did not ack intent {h}. If the operator meant to ack, ask for a "
+            "plain reply."
+        )
+    return [Notice(n) for n in notices] or None
+
+
 def check(evt: Event):
     store.touch_heartbeat()
     repo = store.find_repo(evt.cwd)
     prompt = evt.prompt
-    if repo is None or not intent.is_human(evt.payload, prompt):
+    if repo is None:
         return None
+    if not intent.is_human(evt.payload, prompt):
+        return _untrusted(repo, evt.payload, prompt)
     # The words, the ack and the ceremony log read what the operator wrote, never the reminder
     # the harness put in front of it (a "rather than" in a side session's report is not theirs).
     prompt = intent.operator_text(prompt)
-    first = prompt.strip().splitlines()[0].strip() if prompt.strip() else ""
-    word = first.lower().rstrip(".!")
+    first, word = _first_word(prompt)
     now = int(time.time())
     notices = []
     cls = _classify_ceremony(prompt)
     if word == "hold":
-        with store.updating(repo.dir / "state.json", {}) as state:
-            state["hold"] = {
-                "on": True,
-                "since": time.strftime("%Y-%m-%d %H:%M"),
-                "by": "prompt",
-            }
-        notices.append(
-            "rails: HOLD recorded. Every push refuses until the operator says `release`."
-        )
+        notices.append(_record_hold(repo))
         cls = "hold"
     elif word == "release":
         with store.updating(repo.dir / "state.json", {}) as state:
