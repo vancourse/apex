@@ -4,6 +4,22 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.6.1] — 2026-10-20
+
+### Fixed
+- **An operator's reply behind a harness reminder acks the intent again.** Claude Code puts a
+  `<system-reminder>` block in front of the operator's words when instruction files were re-read
+  or a side session reported in. `intent.is_human` saw a prompt starting with `<` and took it
+  for a machine message, so the shown intent was never acked. In jarvis on 2026-10-20,
+  "go ahead and merge" and "are we done now?" both reached the session that way, and
+  `rails ship` refused three times with "intent … has not been acked". A plain reply acked at
+  once. A prompt is now judged on the operator's words: closed `<system-reminder>` blocks are
+  removed first (`intent.operator_text`). The same text is what `prompt_words` reads for
+  `hold`, `release`, `used`, the ack-or-correction and the ceremony log, so a "rather than" in a
+  side session's report no longer reads as a correction. A prompt that is only harness text,
+  one carrying a `<task-notification>`, or one with an unclosed reminder is still a machine
+  message and never acks.
+
 ## [1.6.0] — 2026-10-19
 
 ### Added

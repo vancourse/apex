@@ -212,6 +212,65 @@ def test_machine_messages_never_ack(repo):
     assert not intent.acked(rid, repo)
 
 
+#: What Claude Code puts in front of an operator's words when instruction files were re-read or a
+#: side session reported in. The words after it are the operator's.
+_REMINDER = (
+    "<system-reminder>\nThe session \"Fix the lanes\" you started finished a turn. It reported: "
+    "\"use the second branch rather than the first\".\n</system-reminder>\n\n"
+)
+
+
+def test_an_operator_reply_behind_a_harness_reminder_still_acks(repo):
+    """Observed in jarvis 2026-10-20: "go ahead and merge" reached the session behind a reminder,
+    was judged a machine message, and `rails ship` refused three times as never acked. The
+    reminder's own words ("rather than") must not read as a correction either."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=_REMINDER + "go ahead and merge"), rows)
+    assert f"intent {h} acked by message" in out.notices[0]
+    assert intent.acked(rid, repo)
+
+
+def test_a_correction_behind_a_harness_reminder_is_still_a_correction(repo):
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    out = dispatch(
+        _evt("UserPromptSubmit", repo, prompt=_REMINDER + "wait, export to xlsx instead"), rows
+    )
+    assert "Rewrite .rails/intent.md" in out.notices[0]
+    assert not intent.acked(rid, repo)
+
+
+def test_a_prompt_that_is_only_harness_text_never_acks(repo):
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    for prompt in (
+        _REMINDER,
+        _REMINDER + "<task-notification>done</task-notification>",
+        "<system-reminder>never closed, so nothing is stripped\n\nok",
+    ):
+        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+        assert not out.notices, prompt
+    assert not intent.acked(rid, repo)
+
+
+def test_the_operators_words_are_read_behind_a_harness_reminder(repo):
+    """`hold` is matched on the first line of the operator's words, not of the reminder, and the
+    ceremony log counts the operator's words, not the harness's."""
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    rid = store.find_repo(repo)
+    dispatch(_evt("UserPromptSubmit", repo, prompt=_REMINDER + "hold"), rows)
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    log = store.read_jsonl(rid.dir / "ceremony.jsonl")
+    assert [(r["class"], r["len"]) for r in log] == [("hold", len("hold"))]
+
+
 def test_classifier_fixture_per_class():
     for text in (
         "no, do X",

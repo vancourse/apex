@@ -35,6 +35,19 @@ CORRECTION = re.compile(
 
 MACHINE_PREFIXES = ("<", "[", "{", "Caveat:", "This session is being continued")
 
+#: Context Claude Code puts around an operator's words: re-read instruction files, a side
+#: session reporting in. Never the operator's words, so a prompt is judged without it. Behind
+#: one, "go ahead and merge" started with `<` and was taken for a machine message; the intent
+#: was never acked and `rails ship` refused three times (jarvis, 2026-10-20). Only a CLOSED
+#: block is removed: an unclosed one leaves the prompt starting with `<`, which stays a machine
+#: message, so a malformed prompt can never become an ack.
+_HARNESS_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+def operator_text(prompt: str) -> str:
+    """The prompt as the operator wrote it: harness reminder blocks removed, then stripped."""
+    return _HARNESS_REMINDER.sub("", prompt).strip()
+
 
 def intent_file(top: Path) -> Path:
     return top / ".rails" / "intent.md"
@@ -93,7 +106,7 @@ def update(repo: store.RepoId, **fields: Any) -> None:
 def is_human(payload: dict[str, Any], prompt: str) -> bool:
     if payload.get("agent_id"):
         return False
-    stripped = prompt.lstrip()
+    stripped = operator_text(prompt)
     return bool(stripped) and not stripped.startswith(MACHINE_PREFIXES)
 
 

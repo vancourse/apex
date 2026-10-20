@@ -1,5 +1,8 @@
 """UserPromptSubmit: the operator's words, and the intent ack (design R24, R22, decision 13.2).
 
+A HUMAN message is read as the operator wrote it: a harness `<system-reminder>` block in front
+of it (re-read instructions, a side session reporting in) is removed first (`intent.operator_text`).
+
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`
   release               lifts hold
@@ -52,6 +55,9 @@ def check(evt: Event):
     prompt = evt.prompt
     if repo is None or not intent.is_human(evt.payload, prompt):
         return None
+    # The words, the ack and the ceremony log read what the operator wrote, never the reminder
+    # the harness put in front of it (a "rather than" in a side session's report is not theirs).
+    prompt = intent.operator_text(prompt)
     first = prompt.strip().splitlines()[0].strip() if prompt.strip() else ""
     word = first.lower().rstrip(".!")
     now = int(time.time())
