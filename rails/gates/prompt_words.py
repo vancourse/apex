@@ -1,12 +1,13 @@
 """UserPromptSubmit: the operator's words, and the intent ack (design R24, R22, decision 13.2).
 
 A HUMAN message is read as the operator wrote it: the harness `<system-reminder>` blocks in front
-of it (re-read instructions, a side session reporting in) are removed first
-(`intent.operator_text`). A prompt with a reminder tag left anywhere after that is not human
-(`intent.is_human`), except that `hold` is still honoured and a shown, unacked intent is
-un-shown with a notice (`_untrusted`).
+of it (re-read instructions, a side session reporting in, "Linked sessions now") are removed
+first (`intent.operator_text`). A prompt with a reminder tag left anywhere after that is not
+human (`intent.is_human`). It acks nothing, but `hold` in it is still honoured, its other words
+are reported as not recorded, and a shown intent stops being shown (`_untrusted`).
 
-Words, matched only on a HUMAN message whose whole first line is the word:
+Words, matched on a HUMAN message whose whole first line is the word (`hold` also on an
+untrusted one):
   hold                  pushes refuse until `release`
   release               lifts hold
   used #<milestone> <task>   records that the operator used it for a real task
@@ -69,29 +70,56 @@ def _first_word(text: str) -> tuple[str, str]:
 
 def _untrusted(repo: store.RepoId, payload: dict, prompt: str):
     """A prompt with a stray reminder tag is not read as the operator's (`intent.is_human`), but
-    their words may be in it, before the first tag left or after the last one. So:
+    their words may be in it, before the first tag left or after the last one. Nothing is acked
+    from it, and nothing is dropped without a word:
 
-    - `hold` on the first line of either is honoured. A brake set from agent text costs one
+    - `hold` on the first line of either part is honoured. A brake set from agent text costs one
       `release`; a brake the operator set and the hook dropped lets pushes through unseen.
-    - A shown, unacked intent is un-shown. The message may have corrected it, and dropping a
-      correction while the intent stays shown would let the next reply ack what was corrected.
-      The session is told, so it shows the intent again and asks for a plain reply instead of
-      learning it at push (the 2026-10-20 incident was a silent drop).
+    - `release`, `used` or `approve` there is not recorded, and the session is told to have the
+      operator say it again on its own.
+    - A shown, unacked intent stops being shown, and the Stop hook asks for it again
+      (`blocked_hash` cleared, as for a correction). When either part reads as a correction, it is
+      voided as corrected, so showing it unchanged cannot get it acked. Otherwise it is only
+      un-shown: the next reply cannot ack an intent the dropped message may have corrected.
+      Either way the session is told, instead of learning it at push (the 2026-10-20 incident
+      was a silent drop).
     """
     if payload.get("agent_id") or not intent.stray_reminder(prompt):
         return None
+    parts = intent.around_reminders(prompt)
+    firsts = [_first_word(part) for part in parts]
     notices = []
-    if any(_first_word(part)[1] == "hold" for part in intent.around_reminders(prompt)):
+    if any(word == "hold" for _, word in firsts):
         notices.append(_record_hold(repo))
+    elif any(
+        word == "release" or _USED.match(first) or _APPROVE.match(first) for first, word in firsts
+    ):
+        notices.append(
+            "rails: a message carrying a stray `<system-reminder>` tag was not read as the "
+            "operator's, so its `release` / `used` / `approve` was not recorded. Ask the operator "
+            "to say it again on its own."
+        )
     h = intent.current_hash(repo.top)
     st = intent.get(repo)
     if h and st.get("hash") == h and st.get("shown_at") and st.get("acked_hash") != h:
-        intent.update(repo, shown_at=0)
-        notices.append(
-            f"rails: a message carrying a stray `<system-reminder>` tag was not read as the "
-            f"operator's, so it did not ack intent {h}, and it may have corrected it: the intent "
-            "is no longer marked shown. Show it again and ask for a plain reply."
+        dropped = (
+            f"rails: a message carrying a stray `<system-reminder>` tag did not ack intent {h}"
         )
+        if any(intent.classify(part) == "changes" for part in parts):
+            intent.update(
+                repo, acked_hash="", acked_at=0, shown_at=0, corrected_hash=h, blocked_hash="",
+                rewrite_requested=int(time.time()),
+            )
+            notices.append(
+                f"{dropped}, and the words around the tag read as a correction: rewrite "
+                ".rails/intent.md and show it again."
+            )
+        else:
+            intent.update(repo, shown_at=0, blocked_hash="")
+            notices.append(
+                f"{dropped}, and may have corrected it, so it is no longer marked shown: show it "
+                "again and ask for a plain reply."
+            )
     return [Notice(n) for n in notices] or None
 
 

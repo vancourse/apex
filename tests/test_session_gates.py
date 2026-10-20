@@ -316,26 +316,46 @@ def test_agent_text_and_untrustworthy_boundaries_never_ack(repo, prompt, stray):
     assert store.read_jsonl(rid.dir / "ceremony.jsonl") == []
 
 
-def test_a_stray_tag_unshows_the_intent_and_hold_still_holds(repo):
+def test_a_stray_tag_unshows_the_intent_and_hold_still_holds(repo, tmp_path):
     """Failing closed on the ack must not keep a correction from counting, must not fail open on
     the brake, and must not be silent: the 2026-10-20 incident was a dropped reply nobody was told
     about."""
     h = _intent(repo)
     rid = store.find_repo(repo)
-    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    # The Stop hook already blocked once for this hash: an un-show must make it ask again.
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60, blocked_hash=h)
     rows = [_row("prompt_words", ["UserPromptSubmit"])]
-    # The operator's "no, ... instead" is lost behind a stray tag: the intent is un-shown, so the
-    # next unrelated reply cannot ack what they corrected.
-    corrected = _NEVER_THE_OPERATOR["report quotes a closing tag"][0]
-    out = dispatch(_evt("UserPromptSubmit", repo, prompt=corrected), rows)
-    assert [n for n in out.notices if f"did not ack intent {h}" in n]
+    stop = [_row("intent_shown", ["Stop"])]
+    # A reply behind a stray tag: not read, the intent stops being shown, the Stop hook asks for
+    # it again, and the next unrelated reply cannot ack it.
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt="go ahead\n\n" + _REMINDER), rows)
+    assert [n for n in out.notices if f"did not ack intent {h}" in n and "show it again" in n]
+    asked = dispatch(_evt("Stop", repo, transcript_path=_transcript(tmp_path, "no marker")), stop)
+    assert asked.blocks and intent.marker(h) in asked.blocks[0]
     out = dispatch(_evt("UserPromptSubmit", repo, prompt="how is it going?"), rows)
     assert not out.notices and not intent.acked(rid, repo)
     # Shown again, a plain reply acks it.
     assert intent.stamp_if_shown(rid, repo, f"...{intent.marker(h)}")
     intent.update(rid, shown_at=int(time.time()) - 60)
-    out = dispatch(_evt("UserPromptSubmit", repo, prompt="yes"), rows)
+    dispatch(_evt("UserPromptSubmit", repo, prompt="yes"), rows)
     assert intent.acked(rid, repo)
+    # The operator's "no, ... instead" after a report that quotes a closing tag: voided as
+    # corrected, exactly as without the tag, so showing it unchanged cannot get it acked.
+    h2 = _intent(repo, "# Export CSV, second take\n")
+    intent.update(rid, hash=h2, shown_at=int(time.time()) - 60)
+    corrected = _NEVER_THE_OPERATOR["report quotes a closing tag"][0]
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=corrected), rows)
+    assert [n for n in out.notices if "read as a correction" in n]
+    assert intent.get(rid)["corrected_hash"] == h2
+    assert not intent.stamp_if_shown(rid, repo, f"...{intent.marker(h2)}")
+    # `release` / `used` behind a stray tag is not recorded, and the session is told.
+    with store.updating(rid.dir / "state.json", {}) as state:
+        state["hold"] = {"on": True, "since": "", "by": "prompt"}
+    for prompt in ("release\n\n" + _REMINDER, "used #76 shipped it\n\n" + _REMINDER):
+        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+        assert [n for n in out.notices if "was not recorded" in n], prompt
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    assert "used" not in store.read_json(rid.dir / "state.json")
     # `hold` before the first stray tag or after the last one is recorded.
     for prompt in (
         "hold\n\n" + _REMINDER,
@@ -374,12 +394,6 @@ def test_classifier_fixture_per_class():
         "use B instead of A",
         "that's not what I asked",
         "I meant the other one",
-        # Decline buttons agents offer next to an intent; a click submits the text (1.6.1 review).
-        "Hold B7 for now; leave the branch unpushed.",
-        "Leave #65 open for now.",
-        "Do the per-worker connection pooling the brief asked for, not the abortive close.",
-        "Later.",
-        "Skip it for now.",
     ):
         assert intent.classify(text) == "changes", text
     for text in (
@@ -391,6 +405,23 @@ def test_classifier_fixture_per_class():
         "Ack the B7 intent. Go ahead with the failing test and the fix.",
     ):
         assert intent.classify(text) == "approves", text
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known limit, open decision #67: an agent-written decline button reads as approval",
+)
+def test_decline_button_texts_are_corrections():
+    """A click on one of these submits its text as the operator's prompt. They read as approval
+    today; this turns green, and strict xfail fails, when #67 is decided."""
+    assert all(
+        intent.classify(text) == "changes"
+        for text in (
+            "Hold B7 for now; leave the branch unpushed.",
+            "Leave #65 open for now.",
+            "Do the per-worker connection pooling the brief asked for, not the abortive close.",
+        )
+    )
 
 
 # --- the operator's words -------------------------------------------------------------

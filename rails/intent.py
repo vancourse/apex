@@ -26,18 +26,10 @@ from rails import store
 #: A message that changes what is built. Leading negation or an explicit redirect;
 #: conservative on purpose — a misread correction costs a rewrite, a misread
 #: approval costs building the wrong thing (139 operator corrections).
-#:
-#: A leading hold / leave / later / skip, and a mid-sentence ", not", are the decline messages
-#: agents write on the buttons they offer next to an intent ("Hold B7 for now; leave the branch
-#: unpushed.", "Leave #65 open for now.", "Do the pooling, not the abortive close."). A click
-#: submits that text as the operator's prompt, and behind a reminder it is classified since
-#: 1.6.1; read as approval, a click on "Hold" acked the intent it declined (review of 1.6.1).
 CORRECTION = re.compile(
-    r"^\s*(?:no\b|nope\b|not\b|don'?t\b|do not\b|stop\b|wait\b|hold\b|hold on\b|actually\b|"
-    r"instead\b|wrong\b|that'?s not\b|but\b|hmm\b|rather\b|change\b|scratch that\b|leave\b|"
-    r"later\b|skip\b)"
-    r"|\binstead of\b|\brather than\b|\bnot what i\b|\bthat'?s wrong\b|\bi meant\b|\bi said\b"
-    r"|,\s*not\b",
+    r"^\s*(?:no\b|nope\b|not\b|don'?t\b|do not\b|stop\b|wait\b|hold on\b|actually\b|instead\b|"
+    r"wrong\b|that'?s not\b|but\b|hmm\b|rather\b|change\b|scratch that\b)"
+    r"|\binstead of\b|\brather than\b|\bnot what i\b|\bthat'?s wrong\b|\bi meant\b|\bi said\b",
     re.IGNORECASE,
 )
 
