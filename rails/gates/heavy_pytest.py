@@ -615,30 +615,64 @@ def _cd_target(tokens: list[str]) -> str | None:
     return None
 
 
-def blank_substitutions(command: str) -> str:
-    """``command`` with each ``$(...)`` and backtick substitution that holds a ``|``, ``;``,
-    ``&`` or newline made one opaque word of the same length (``$___``): that separator would
-    split the statement and drop the options
-    after it, ``-n 4`` included (adversary, review of 90be54f). Offsets are kept, so a
-    statement found in the result is the same span of the command as typed."""
+def _substitution_end(command: str, i: int) -> int | None:
+    """The offset of the ``)`` that closes the ``$(`` at ``i``, quotes inside it skipped, or
+    None when nothing closes it."""
+    depth, j, n = 0, i + 1, len(command)
+    while j < n:
+        c = command[j]
+        if c in "'\"":
+            close = command.find(c, j + 1)
+            if close < 0:
+                return None
+            j = close
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return None
+
+
+def blank_substitutions(command: str, shell: str = "bash") -> str:
+    """``command`` with each closed ``$(...)`` (and, in bash, backtick) substitution that
+    holds a ``|``, ``;``, ``&`` or newline made one opaque word of the same length
+    (``$___``): that separator would split the statement and drop the options after it,
+    ``-n 4`` included (adversary, review of 90be54f). Offsets are kept, so a statement found
+    in the result is the same span of the command as typed.
+
+    Never blanked, so the tokenizer still reads them (both voices, review of acb7290): a
+    substitution nothing closes; anything in single quotes, or after a bash comment's ``#``;
+    and in PowerShell a backtick, which is its escape and line-continuation character there.
+    """
     out = list(command)
     i, n = 0, len(command)
     while i < n:
+        c = command[i]
+        if c == "'":  # literal in both shells: no substitution inside
+            close = command.find("'", i + 1)
+            if close < 0:
+                break
+            i = close + 1
+            continue
+        if shell == "bash" and c == "#" and (i == 0 or command[i - 1].isspace()):
+            newline = command.find("\n", i)
+            if newline < 0:
+                break
+            i = newline + 1
+            continue
+        if shell == "powershell" and c == "`":
+            i += 2  # an escape: the next character is literal
+            continue
+        end: int | None = None
         if command.startswith("$(", i):
-            depth, j = 0, i + 1
-            while j < n:
-                if command[j] == "(":
-                    depth += 1
-                elif command[j] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            end = min(j, n - 1)
-        elif command[i] == "`":
+            end = _substitution_end(command, i)
+        elif shell == "bash" and c == "`":
             close = command.find("`", i + 1)
-            end = n - 1 if close < 0 else close
-        else:
+            end = close if close > 0 else None
+        if end is None:
             i += 1
             continue
         # Only a substitution holding a separator splits the statement. One without, like
@@ -654,7 +688,7 @@ def blank_substitutions(command: str) -> str:
 def judge(command: str, shell: str, cwd: Path) -> tuple[str, int, int] | None:
     """``(why, start, end)`` for the first heavy pytest run in ``command`` (the offsets of its
     statement), else None."""
-    command = blank_substitutions(command)
+    command = blank_substitutions(command, shell)
     base = cwd
     lost = False  # after a `cd` it could not resolve: where the shell is, it cannot tell
     subshells: list[tuple[Path, bool]] = []  # where each open `(` will return to

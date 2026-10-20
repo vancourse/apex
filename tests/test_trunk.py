@@ -492,6 +492,28 @@ def test_a_pass_that_cannot_vouch_for_its_lock_record_skips_the_revert_check(sit
     assert site.checked == []
 
 
+def test_a_resumed_revert_is_not_checked_by_a_pass_without_its_own_lock_record(site, monkeypatch):
+    """Both voices, review of acb7290: an earlier pass opened a revert and died during its
+    check, leaving the row unchecked. A later pass that cannot vouch for its lock record
+    must not run that check either (its `rails check` would wait on the pass forever); the
+    row stays unchecked for a pass that can."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+
+    def dies(made: dict) -> bool:
+        raise KeyboardInterrupt  # the pass is killed mid-check
+
+    with pytest.raises(KeyboardInterrupt):
+        _pass(site, check=dies)
+    rows = trunk.read_state(site.repo)["reverts"]
+    assert rows and rows[-1]["checked"] is False
+    monkeypatch.setattr(store, "holds_record", lambda name: False)
+    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
+    assert "check skipped this pass" in text, text
+    assert trunk.read_state(site.repo)["reverts"][-1]["checked"] is False
+
+
 def _in_thread(fn, seconds: float = 120.0):
     """Run `fn` in a thread; fail (rather than hang the suite) if it does not finish."""
     import threading

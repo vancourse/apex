@@ -316,6 +316,25 @@ def test_a_cwd_reached_through_a_link_still_finds_the_config(repo, tmp_path):
     assert _judge("uv run pytest apps/big", link) is not None
 
 
+@pytest.mark.parametrize(
+    ("command", "shell"),
+    [
+        # A backtick is PowerShell's escape, not a substitution: nothing after it is hidden.
+        ('Write-Host "done`n"; uv run pytest apps/ -q', "powershell"),
+        ("cd pkg; uv run pytest tests `\n  -n 4 `\n  -q", "powershell"),
+        # Literal text and comments open no substitution in bash.
+        ("grep -n '$(' x.sh; uv run pytest apps/ -n 4", "bash"),
+        ("git commit -m 'a lone ` here'; uv run pytest apps/ -q", "bash"),
+        ("# see $(\nuv run pytest apps/ -n 4", "bash"),
+        # A substitution nothing closes is left to the tokenizer.
+        ("echo $(date; uv run pytest apps/ -n 4", "bash"),
+    ],
+)
+def test_text_that_only_looks_like_a_substitution_hides_no_statement(repo, command, shell):
+    """Both voices, review of acb7290: each of these blanked the rest of the command."""
+    assert _judge(command, repo, shell) is not None
+
+
 def test_powershell_spellings(verdict, reason, repo):
     assert verdict(heavy_pytest, "uv run pytest apps/ -q", tool="PowerShell", cwd=repo) == "deny"
     assert verdict(heavy_pytest, "uv run pytest -q *> out.txt", tool="PowerShell", cwd=repo) == "deny"

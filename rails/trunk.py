@@ -899,7 +899,7 @@ def _judge(
     state: dict[str, Any],
     result: Pass,
     forge: Forge,
-    revert_check: Callable[[dict[str, Any]], bool],
+    revert_check: Callable[[dict[str, Any]], bool] | None,
     out,
     tree_path: Path,
     log_dir: Path,
@@ -1085,6 +1085,7 @@ def _judge(
         # pass (coop, review of 90be54f: a revert left unchecked read as a red check).
         print("  revert check skipped: a lock's holder record is not this pass's; reported only", file=out)
         mode = "off"
+        revert_check = None  # an earlier pass's revert, resumed in `_act`, is not checked either
 
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
@@ -1245,7 +1246,7 @@ def _act(
     forge: Forge,
     culprit: Culprit,
     tip: str,
-    revert_check: Callable[[dict[str, Any]], bool],
+    revert_check: Callable[[dict[str, Any]], bool] | None,
     out,
 ) -> None:
     pr = forge.pr_for_commit(culprit.sha)
@@ -1310,13 +1311,18 @@ def _finish(
     forge: Forge,
     culprit: Culprit,
     report: str,
-    revert_check: Callable[[dict[str, Any]], bool],
+    revert_check: Callable[[dict[str, Any]], bool] | None,
     out,
 ) -> None:
     """The steps after a revert opens, each recorded as it completes: in auto mode the
     check and the arm, then the comment on the culprit PR. A pass that dies part-way
     leaves the rest to the next pass that names the same culprit."""
-    if not row.get("checked", True):  # a row with no flag is done (written before them)
+    if not row.get("checked", True) and revert_check is None:
+        # This pass cannot run the check (its lock record is not its own): the row stays
+        # unchecked for the next pass that can (both voices, review of acb7290).
+        culprit.note = "the revert's check was skipped this pass; a later pass runs it"
+        print(f"  revert #{row['revert']}: check skipped this pass", file=out)
+    elif not row.get("checked", True):  # a row with no flag is done (written before them)
         made = {"number": row["revert"], "head_ref": row.get("head_ref", ""), "head_sha": row.get("head_sha", "")}
         try:
             ok = bool(revert_check(made))
