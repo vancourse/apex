@@ -353,7 +353,7 @@ def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo
 
 
 def test_known_limit_an_unclosed_reminder_that_quotes_a_closing_tag_reads_what_follows():
-    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.6.1, Known
+    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.6.3, Known
     limits). The text alone cannot rule it out; in the 175 reminder-led non-meta user lines of the
     local transcripts (2026-10-20), no closing tag was quoted mid-line."""
     prompt = "<system-reminder>\nIt reported: \"stops at </system-reminder>\nlooks right"
@@ -464,8 +464,9 @@ def test_state_touches_the_heartbeat(repo):
 # --- turn end ------------------------------------------------------------------------------
 
 
-def test_turn_end_planted(repo, tmp_path):
+def test_turn_end_planted(repo, tmp_path, monkeypatch):
     """An armed PR with an unproven closing step blocks; the fourth try records `unverified`."""
+    _lookup(tmp_path, monkeypatch, None)  # GitHub gives no answer: the PR may still be open
     rid = store.find_repo(repo)
     item = work.add(rid, "export", step="a1")
     with store.updating(work.path(rid), {}) as data:
@@ -496,7 +497,8 @@ def test_turn_end_offer_shape_blocks_once_without_a_stop_reason(repo, tmp_path):
     assert not dispatch(offer, rows).blocks
 
 
-def test_turn_end_shadow_has_no_side_effects(repo, tmp_path):
+def test_turn_end_shadow_has_no_side_effects(repo, tmp_path, monkeypatch):
+    _lookup(tmp_path, monkeypatch, None)
     rid = store.find_repo(repo)
     work.add(rid, "export", step="a1")
     with store.updating(work.path(rid), {}) as data:
@@ -512,6 +514,177 @@ def test_turn_end_shadow_has_no_side_effects(repo, tmp_path):
     assert [f["verdict"] for f in store.read_jsonl(rid.dir / "firings.jsonl")].count(
         "would-block"
     ) == 5
+
+
+def _lookup(tmp_path, monkeypatch, rows, branch="work"):
+    """What GitHub answers for `branch`, through `merged_pr_push`'s lookup fixture. `None` is no
+    answer at all (no `gh`, a timeout, an error)."""
+    path = tmp_path / "lookup.json"
+    if rows is not None:
+        path.write_text(json.dumps({branch: rows}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(path))
+
+
+def _armed(rid, **fields):
+    record = {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"}
+    store.write_json(rid.leaf_dir / "pr.json", {**record, **fields})
+
+
+def _items(rid, *items):
+    """Work items as (id, step, closes)."""
+    with store.updating(work.path(rid), {}) as data:
+        data["items"] = [
+            {"id": ident, "text": ident, "step": step, "status": "open", "closes": closes}
+            for ident, step, closes in items
+        ]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"branch": None}, {"armed_pr": 5}],
+    ids=["recorded branch", "current branch", "armed by hand as this number"],
+)
+def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monkeypatch, fields):
+    """Observed 2026-10-20: a PR merged at 16:00 UTC and the Stop hook still blocked "armed with no
+    monitor bound", because nothing re-read pr.json's `armed` after the merge. A record with no
+    branch is looked up by the worktree's current branch."""
+    rid = store.find_repo(repo)
+    _armed(rid, **fields)
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    record = store.read_json(rid.leaf_dir / "pr.json")
+    assert (record["state"], record["armed"]) == ("MERGED", False)
+
+
+@pytest.mark.parametrize(
+    ("record", "branch", "rows"),
+    [
+        ({}, "work", [{"number": 5, "state": "OPEN"}]),
+        ({}, "work", None),
+        ({}, "work", [{"number": 4, "state": "MERGED"}]),
+        ({}, "work", [{"number": 5, "state": "MERGED"}, {"number": 6, "state": "OPEN"}]),
+        ({"state": "MERGED"}, "work", [{"number": 5, "state": "MERGED"}]),
+        ({"branch": "old"}, "old", [{"number": 5, "state": "MERGED"}]),
+        ({"armed_pr": 6}, "work", [{"number": 5, "state": "MERGED"}]),
+        ({"armed_pr": None}, "work", [{"number": 5, "state": "MERGED"}]),
+    ],
+    ids=[
+        "open",
+        "no answer",
+        "another PR merged",
+        "a newer PR is open on the branch",
+        "re-armed after it was settled",
+        "the record names another branch",
+        "armed by hand as another number",
+        "armed by hand naming no number",
+    ],
+)
+def test_turn_end_still_holds_an_armed_pr_it_cannot_settle(
+    repo, tmp_path, monkeypatch, record, branch, rows
+):
+    """Blocks as on 1.6.0. The last four are a PR armed by hand after a re-cut: `arm_review` stamps
+    `armed` onto the older record, so that record's merge says nothing about the armed PR unless
+    the arm named the record's own number (review of 1.6.2)."""
+    rid = store.find_repo(repo)
+    _armed(rid, **record)
+    before = store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, rows, branch)
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    out = dispatch(evt, [_row("turn_end", ["Stop"])])
+    assert out.blocks and "armed with no monitor bound" in out.blocks[0]
+    assert store.read_json(rid.leaf_dir / "pr.json") == before
+
+
+def test_turn_end_runs_no_lookup_when_it_would_not_block(repo, tmp_path, monkeypatch):
+    rid = store.find_repo(repo)
+    _armed(rid, monitor="bound")
+    before = store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    assert store.read_json(rid.leaf_dir / "pr.json") == before
+
+
+def test_a_merged_pr_records_its_unproven_steps_as_debt_at_once(repo, tmp_path, monkeypatch):
+    """The steps can no longer be proven before the merge: blocking three times first changes
+    nothing. Only the items for the issues that PR closes, with a step and no walk receipt, become
+    debt; a closing item with no step, and items for another issue, stay open. A PR closed unmerged
+    closed no item, so nothing becomes debt."""
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"), ("a2", "", "#9"), ("b1", "b1", "#10"))
+    rows = [_row("turn_end", ["Stop"])]
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    _armed(rid, monitor="bound", closes=["9"])
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "CLOSED"}])
+    assert not dispatch(evt, rows).blocks
+    record = store.read_json(rid.leaf_dir / "pr.json")
+    assert (record["state"], record["armed"]) == ("CLOSED", False)
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {
+        "a1": "open", "a2": "open", "b1": "open",
+    }
+    _armed(rid, monitor="bound", closes=["9"])
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    assert not dispatch(evt, rows).blocks
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {
+        "a1": "unverified", "a2": "open", "b1": "open",
+    }
+
+
+def test_a_settled_pr_lets_an_offer_shaped_ending_through_once_its_items_are_debt(
+    repo, tmp_path, monkeypatch
+):
+    """The wording check reads the items as the settle left them, not as loaded before it."""
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"))
+    _armed(rid, monitor="bound", closes=["9"])
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    offer = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "Merged. Want me to start B?"))
+    assert not dispatch(offer, [_row("turn_end", ["Stop"])]).blocks
+
+
+@pytest.mark.parametrize(
+    "newer",
+    [
+        {"number": 6, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"},
+        {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound", "armed_pr": 6},
+        {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound", "armed_pr": None},
+    ],
+    ids=[
+        "rails ship recorded another PR",
+        "an arm by hand named another PR",
+        "an arm by hand named no PR",
+    ],
+)
+def test_a_record_rewritten_during_the_lookup_is_not_overwritten(repo, tmp_path, monkeypatch, newer):
+    """A record that changed while `gh` answered about the old PR is kept, and the turn blocks
+    over the PR it now names (review of 1.6.2)."""
+    from rails.gates import merged_pr_push
+
+    rid = store.find_repo(repo)
+    _armed(rid)
+
+    def answer(branch, cwd=None):
+        store.write_json(rid.leaf_dir / "pr.json", newer)
+        return [{"number": 5, "state": "MERGED"}]
+
+    monkeypatch.setattr(merged_pr_push, "pull_requests", answer)
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    assert store.read_json(rid.leaf_dir / "pr.json") == newer
+
+
+def test_turn_end_shadow_writes_nothing_for_a_merged_pr(repo, tmp_path, monkeypatch):
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"))
+    _armed(rid, closes=["9"])
+    before = store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"], shadow=True)]).blocks
+    assert store.read_json(rid.leaf_dir / "pr.json") == before
+    assert work.load(rid)["items"][0]["status"] == "open"
+    assert "would-block" not in [f["verdict"] for f in store.read_jsonl(rid.dir / "firings.jsonl")]
 
 
 # --- store guard and leak at dispatch --------------------------------------------------------
