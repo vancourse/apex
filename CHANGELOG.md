@@ -9,9 +9,10 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 ### Fixed
 - **A PR that already merged no longer holds every turn in its worktree.** `rails ship` writes
   `armed` into the worktree's `pr.json` once, and nothing cleared it. In jarvis on 2026-10-20,
-  PR #2796 merged at 16:00 UTC, and every turn that ended in its worktree was still blocked with
-  "PR #2796 is armed with no monitor bound", which only a false `rails work monitor-bound` or
-  three blocks could get past. Before `turn_end` blocks over an armed PR (no monitor bound, or a
+  PR #2796 merged at 16:00 UTC, and a session's turns ending in its worktree were still blocked
+  with "PR #2796 is armed with no monitor bound". There was no open PR to bind a monitor to, so
+  the only ways past were a false `rails work monitor-bound` or three blocks, after which the
+  gate gives up and writes the closing items `unverified`. Before `turn_end` blocks over an armed PR (no monitor bound, or a
   closing step with no walk receipt), it now looks the PR up with the lookup `merged_pr_push`
   already uses (`gh pr list --head <branch> --state all`, 8 s timeout):
   - **MERGED or CLOSED:** the turn ends, and `pr.json` records that state with `armed: false`.
