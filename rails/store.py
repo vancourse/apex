@@ -236,6 +236,7 @@ def machine_lock(
     notify_every: float = 60.0,
     on_wait: Callable[[dict[str, Any] | None, float], None] | None = None,
     wait: bool = True,
+    priority: bool = False,
 ) -> Iterator[float]:
     """Hold the machine-wide lock ``name`` for the block; yields the seconds spent waiting.
 
@@ -248,6 +249,13 @@ def machine_lock(
     ``LockBusy`` (carrying the holder's record) instead of waiting. A lock an ancestor
     holds for this process (``HELD_ENV``) is re-entered at once: it yields 0 and leaves
     the ancestor's lock and record alone.
+
+    ``priority`` goes first: while a priority waiter waits, no plain waiter takes the lock,
+    so the holder's release hands it to the priority one, and a stream of plain waiters
+    cannot starve it (`rails trunk`, operator 2026-10-20). The claim is a second OS lock
+    beside this one (``<name>.priority.lock``), held only while waiting, so a waiter that
+    dies frees it. Priority waiters queue among themselves on it. A plain waiter's
+    ``on_wait`` record carries the waiting priority holder under ``"next"``.
     """
     from rails.lanes import valid_lock_name
 
@@ -256,21 +264,58 @@ def machine_lock(
     directory = data_root() / "locks"
     directory.mkdir(parents=True, exist_ok=True)
     holder_path = directory / f"{name}.holder.json"
+    next_path = directory / f"{name}.priority.json"
     handle = open(directory / f"{name}.lock", "a+b")
+    gate = open(directory / f"{name}.priority.lock", "a+b")
+    gate_held = False
     started = time.monotonic()
     next_note = started
+
+    def release_gate() -> None:
+        nonlocal gate_held
+        if gate_held:
+            with contextlib.suppress(OSError):
+                next_path.unlink()
+            _unlock(gate)
+            gate_held = False
+
+    def may_try() -> bool:
+        # A priority waiter tries once it holds the claim; a plain one only while nobody
+        # holds it (taken and dropped at once: a probe, not a claim).
+        nonlocal gate_held
+        if priority:
+            if not gate_held and _try_lock(gate, strict=True):
+                gate_held = True
+                for _ in range(50):
+                    try:
+                        write_json(next_path, {**holder, "pid": os.getpid(), "since": int(time.time())})
+                        break
+                    except OSError:
+                        time.sleep(0.02)
+            return gate_held
+        if _try_lock(gate, strict=True):
+            _unlock(gate)
+            return True
+        return False
+
     try:
-        while not _try_lock(handle, strict=True):
+        while not (may_try() and _try_lock(handle, strict=True)):
             if _held_for_us(name, holder_path):
+                release_gate()
                 yield 0.0
                 return
             if not wait:
                 raise LockBusy(name, read_json(holder_path, None))
             now = time.monotonic()
             if on_wait is not None and now >= next_note:
-                on_wait(read_json(holder_path, None), now - started)
+                record = read_json(holder_path, None)
+                upcoming = None if priority else read_json(next_path, None)
+                if isinstance(upcoming, dict):
+                    record = {**(record if isinstance(record, dict) else {}), "next": upcoming}
+                on_wait(record, now - started)
                 next_note = now + notify_every
             time.sleep(poll)
+        release_gate()
         waited = time.monotonic() - started
         # A waiter reading the old record holds it open, and on Windows that refuses the
         # replace, so it is retried. The lock is held either way; the record is what a
@@ -291,6 +336,8 @@ def machine_lock(
                 holder_path.unlink()
             _unlock(handle)
     finally:
+        release_gate()
+        gate.close()
         handle.close()
 
 
