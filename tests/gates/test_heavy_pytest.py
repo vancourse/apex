@@ -326,6 +326,10 @@ def test_a_cwd_reached_through_a_link_still_finds_the_config(repo, tmp_path):
         ("grep -n '$(' x.sh; uv run pytest apps/ -n 4", "bash"),
         ("git commit -m 'a lone ` here'; uv run pytest apps/ -q", "bash"),
         ("# see $(\nuv run pytest apps/ -n 4", "bash"),
+        # An apostrophe or a `#` inside double quotes opens nothing (both voices, review of 07ea71a).
+        ("git commit -m \"don't\" && cd pkg && uv run pytest $(ls tests | head -2) -n 4", "bash"),
+        ('git commit -m "closes #12" && cd pkg && uv run pytest $(ls tests | head -2) -n 4', "bash"),
+        ("Write-Host \"it's\"; cd pkg; uv run pytest $(ls tests | select -first 2) -n 4", "powershell"),
         # A substitution nothing closes is left to the tokenizer.
         ("echo $(date; uv run pytest apps/ -n 4", "bash"),
     ],

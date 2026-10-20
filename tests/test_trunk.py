@@ -511,7 +511,8 @@ def test_a_resumed_revert_is_not_checked_by_a_pass_without_its_own_lock_record(s
     monkeypatch.setattr(store, "holds_record", lambda name: False)
     code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
     assert "check skipped this pass" in text, text
-    assert trunk.read_state(site.repo)["reverts"][-1]["checked"] is False
+    row = trunk.read_state(site.repo)["reverts"][-1]
+    assert row["checked"] is False and row["commented"] is False, row
 
 
 def _in_thread(fn, seconds: float = 120.0):

@@ -615,24 +615,17 @@ def _cd_target(tokens: list[str]) -> str | None:
     return None
 
 
-def _substitution_end(command: str, i: int) -> int | None:
-    """The offset of the ``)`` that closes the ``$(`` at ``i``, quotes inside it skipped, or
-    None when nothing closes it."""
-    depth, j, n = 0, i + 1, len(command)
-    while j < n:
-        c = command[j]
-        if c in "'\"":
-            close = command.find(c, j + 1)
-            if close < 0:
-                return None
-            j = close
-        elif c == "(":
+def _substitution_end(code: str, i: int) -> int | None:
+    """The offset of the ``)`` that closes the ``$(`` at ``i`` in scrubbed ``code`` (quoted
+    text already blanked), or None when nothing closes it."""
+    depth = 0
+    for j in range(i + 1, len(code)):
+        if code[j] == "(":
             depth += 1
-        elif c == ")":
+        elif code[j] == ")":
             depth -= 1
             if depth == 0:
                 return j
-        j += 1
     return None
 
 
@@ -643,41 +636,27 @@ def blank_substitutions(command: str, shell: str = "bash") -> str:
     ``-n 4`` included (adversary, review of 90be54f). Offsets are kept, so a statement found
     in the result is the same span of the command as typed.
 
-    Never blanked, so the tokenizer still reads them (both voices, review of acb7290): a
-    substitution nothing closes; anything in single quotes, or after a bash comment's ``#``;
-    and in PowerShell a backtick, which is its escape and line-continuation character there.
+    Substitutions are found on `rails.shell.scrub`'s text, the quote, heredoc and escape
+    handling every gate shares, so quoted text (an apostrophe or a `#` in a commit message
+    included), a PowerShell backtick escape and a heredoc body open none (both voices,
+    reviews of acb7290 and 07ea71a). A substitution nothing closes is left to the tokenizer.
     """
+    code = scrub(command, shell)
     out = list(command)
-    i, n = 0, len(command)
+    i, n = 0, len(code)
     while i < n:
-        c = command[i]
-        if c == "'":  # literal in both shells: no substitution inside
-            close = command.find("'", i + 1)
-            if close < 0:
-                break
-            i = close + 1
-            continue
-        if shell == "bash" and c == "#" and (i == 0 or command[i - 1].isspace()):
-            newline = command.find("\n", i)
-            if newline < 0:
-                break
-            i = newline + 1
-            continue
-        if shell == "powershell" and c == "`":
-            i += 2  # an escape: the next character is literal
-            continue
         end: int | None = None
-        if command.startswith("$(", i):
-            end = _substitution_end(command, i)
-        elif shell == "bash" and c == "`":
-            close = command.find("`", i + 1)
+        if code.startswith("$(", i):
+            end = _substitution_end(code, i)
+        elif shell == "bash" and code[i] == "`":
+            close = code.find("`", i + 1)
             end = close if close > 0 else None
         if end is None:
             i += 1
             continue
         # Only a substitution holding a separator splits the statement. One without, like
         # `$(git rev-parse --show-toplevel)`, stays readable: a `cd` into it is followed.
-        if any(ch in command[i : end + 1] for ch in "|;&\n"):
+        if any(ch in code[i : end + 1] for ch in "|;&\n"):
             out[i] = "$"
             for k in range(i + 1, end + 1):
                 out[k] = "_"

@@ -1319,10 +1319,13 @@ def _finish(
     leaves the rest to the next pass that names the same culprit."""
     if not row.get("checked", True) and revert_check is None:
         # This pass cannot run the check (its lock record is not its own): the row stays
-        # unchecked for the next pass that can (both voices, review of acb7290).
+        # unchecked, and uncommented, for the next pass that can (both voices, reviews of
+        # acb7290 and 07ea71a: a comment now would say "not armed" before the check ran).
         culprit.note = "the revert's check was skipped this pass; a later pass runs it"
         print(f"  revert #{row['revert']}: check skipped this pass", file=out)
-    elif not row.get("checked", True):  # a row with no flag is done (written before them)
+        return
+    if not row.get("checked", True):  # a row with no flag is done (written before them)
+        assert revert_check is not None
         made = {"number": row["revert"], "head_ref": row.get("head_ref", ""), "head_sha": row.get("head_sha", "")}
         try:
             ok = bool(revert_check(made))
