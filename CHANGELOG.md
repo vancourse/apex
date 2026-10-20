@@ -4,6 +4,27 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.6.2] — 2026-10-20
+
+### Fixed
+- **A PR that already merged no longer holds every turn in its worktree.** `rails ship` writes
+  `armed` into the worktree's `pr.json` once, and nothing cleared it. In jarvis on 2026-10-20,
+  PR #2796 merged at 16:00 UTC, and every turn that ended in its worktree was still blocked with
+  "PR #2796 is armed with no monitor bound", which only a false `rails work monitor-bound` or
+  three blocks could get past. Before `turn_end` blocks over an armed PR (no monitor bound, or a
+  closing step with no walk receipt), it now looks the PR up with the lookup `merged_pr_push`
+  already uses (`gh pr list --head <branch> --state all`, 8 s timeout):
+  - **MERGED or CLOSED:** the turn ends, and `pr.json` records that state with `armed: false`.
+    For a merge, the closing items whose step has no walk receipt are written `unverified` at
+    once, the debt the fourth block records; a PR closed unmerged closed nothing, so its items
+    stay open.
+  - **OPEN, not found, or no answer** (no `gh`, a timeout, an error): it blocks as on 1.6.0.
+  - **No lookup** on a turn the gate would not block.
+  - In shadow mode the lookup only decides whether a would-block is logged; nothing is written.
+  - Once `pr.json` says MERGED or CLOSED, `second_pr` and the pre-push hook stop treating that
+    PR as open too. They still trust a stale OPEN anywhere `turn_end` has not looked.
+  - `rails --version`, the session-start line and posted statuses say 1.6.2 (`rails.VERSION`).
+
 ## [1.6.0] — 2026-10-19
 
 ### Added

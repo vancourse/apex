@@ -8,6 +8,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from rails import claims, intent, leak, metrics, receipts, ship, store, work
 from rails.dispatch import GateRow, dispatch
 from rails.gates import state as state_gate
@@ -272,8 +274,9 @@ def test_state_touches_the_heartbeat(repo):
 # --- turn end ------------------------------------------------------------------------------
 
 
-def test_turn_end_planted(repo, tmp_path):
+def test_turn_end_planted(repo, tmp_path, monkeypatch):
     """An armed PR with an unproven closing step blocks; the fourth try records `unverified`."""
+    _lookup(tmp_path, monkeypatch, None)  # GitHub gives no answer: the PR may still be open
     rid = store.find_repo(repo)
     item = work.add(rid, "export", step="a1")
     with store.updating(work.path(rid), {}) as data:
@@ -304,7 +307,8 @@ def test_turn_end_offer_shape_blocks_once_without_a_stop_reason(repo, tmp_path):
     assert not dispatch(offer, rows).blocks
 
 
-def test_turn_end_shadow_has_no_side_effects(repo, tmp_path):
+def test_turn_end_shadow_has_no_side_effects(repo, tmp_path, monkeypatch):
+    _lookup(tmp_path, monkeypatch, None)
     rid = store.find_repo(repo)
     work.add(rid, "export", step="a1")
     with store.updating(work.path(rid), {}) as data:
@@ -320,6 +324,82 @@ def test_turn_end_shadow_has_no_side_effects(repo, tmp_path):
     assert [f["verdict"] for f in store.read_jsonl(rid.dir / "firings.jsonl")].count(
         "would-block"
     ) == 5
+
+
+def _lookup(tmp_path, monkeypatch, rows):
+    """What GitHub answers for branch `work`, through `merged_pr_push`'s lookup fixture. `None`
+    is no answer at all (no `gh`, a timeout, an error)."""
+    path = tmp_path / "lookup.json"
+    if rows is not None:
+        path.write_text(json.dumps({"work": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAILS_PR_LOOKUP_FIXTURE", str(path))
+
+
+def _armed(rid, **fields):
+    record = {"number": 5, "branch": "work", "state": "OPEN", "armed": True, "monitor": "unbound"}
+    store.write_json(rid.leaf_dir / "pr.json", {**record, **fields})
+
+
+@pytest.mark.parametrize("branch", ["work", None], ids=["recorded branch", "current branch"])
+def test_turn_end_does_not_hold_a_turn_for_a_pr_that_merged(repo, tmp_path, monkeypatch, branch):
+    """Observed 2026-10-20: a PR merged at 16:00 UTC and the Stop hook still blocked "armed with no
+    monitor bound", because nothing re-read pr.json's `armed` after the merge. A record written
+    before `rails ship` recorded the branch is looked up by the worktree's current branch."""
+    rid = store.find_repo(repo)
+    _armed(rid, branch=branch)
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    record = store.read_json(rid.leaf_dir / "pr.json")
+    assert (record["state"], record["armed"]) == ("MERGED", False)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [[{"number": 5, "state": "OPEN"}], None, [{"number": 4, "state": "MERGED"}]],
+    ids=["open", "no answer", "another PR merged"],
+)
+def test_turn_end_still_holds_an_armed_pr_that_is_open_or_unknown(repo, tmp_path, monkeypatch, rows):
+    rid = store.find_repo(repo)
+    _armed(rid)
+    before = store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, rows)
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    out = dispatch(evt, [_row("turn_end", ["Stop"])])
+    assert out.blocks and "armed with no monitor bound" in out.blocks[0]
+    assert store.read_json(rid.leaf_dir / "pr.json") == before
+
+
+def test_a_merged_pr_records_its_unproven_steps_as_debt_at_once(repo, tmp_path, monkeypatch):
+    """The steps can no longer be proven before the merge: blocking three times first changes
+    nothing, so the debt the fourth block records is written now. A PR closed unmerged closed no
+    item, so its items stay open."""
+    rid = store.find_repo(repo)
+    work.add(rid, "export", step="a1")
+    with store.updating(work.path(rid), {}) as data:
+        data["items"][0]["closes"] = "#9"
+    _armed(rid, monitor="bound")
+    rows = [_row("turn_end", ["Stop"])]
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "CLOSED"}])
+    assert not dispatch(evt, rows).blocks
+    assert work.load(rid)["items"][0]["status"] == "open"
+    assert store.read_json(rid.leaf_dir / "pr.json")["state"] == "CLOSED"
+    _armed(rid, monitor="bound")
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    assert not dispatch(evt, rows).blocks
+    assert work.load(rid)["items"][0]["status"] == "unverified"
+
+
+def test_turn_end_shadow_writes_nothing_for_a_merged_pr(repo, tmp_path, monkeypatch):
+    rid = store.find_repo(repo)
+    _armed(rid)
+    before = store.read_json(rid.leaf_dir / "pr.json")
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"], shadow=True)]).blocks
+    assert store.read_json(rid.leaf_dir / "pr.json") == before
+    assert "would-block" not in [f["verdict"] for f in store.read_jsonl(rid.dir / "firings.jsonl")]
 
 
 # --- store guard and leak at dispatch --------------------------------------------------------
