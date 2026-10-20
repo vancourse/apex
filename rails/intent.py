@@ -26,10 +26,18 @@ from rails import store
 #: A message that changes what is built. Leading negation or an explicit redirect;
 #: conservative on purpose — a misread correction costs a rewrite, a misread
 #: approval costs building the wrong thing (139 operator corrections).
+#:
+#: A leading hold / leave / later / skip, and a mid-sentence ", not", are the decline messages
+#: agents write on the buttons they offer next to an intent ("Hold B7 for now; leave the branch
+#: unpushed.", "Leave #65 open for now.", "Do the pooling, not the abortive close."). A click
+#: submits that text as the operator's prompt, and behind a reminder it is classified since
+#: 1.6.1; read as approval, a click on "Hold" acked the intent it declined (review of 1.6.1).
 CORRECTION = re.compile(
-    r"^\s*(?:no\b|nope\b|not\b|don'?t\b|do not\b|stop\b|wait\b|hold on\b|actually\b|instead\b|"
-    r"wrong\b|that'?s not\b|but\b|hmm\b|rather\b|change\b|scratch that\b)"
-    r"|\binstead of\b|\brather than\b|\bnot what i\b|\bthat'?s wrong\b|\bi meant\b|\bi said\b",
+    r"^\s*(?:no\b|nope\b|not\b|don'?t\b|do not\b|stop\b|wait\b|hold\b|hold on\b|actually\b|"
+    r"instead\b|wrong\b|that'?s not\b|but\b|hmm\b|rather\b|change\b|scratch that\b|leave\b|"
+    r"later\b|skip\b)"
+    r"|\binstead of\b|\brather than\b|\bnot what i\b|\bthat'?s wrong\b|\bi meant\b|\bi said\b"
+    r"|,\s*not\b",
     re.IGNORECASE,
 )
 
@@ -56,9 +64,10 @@ MACHINE_PREFIXES = (
 #: closing tag ends the block early and leaves the real one behind; quoting a closing tag and
 #: then an opening one would, if blocks were removed anywhere, pair with the real tags and leave
 #: agent text standing as the operator's. Both leave a tag here, so both stay machine messages,
-#: as does an unclosed block. Failing closed costs the operator one more reply, and the hook says
-#: so when it drops a reply to a shown intent; `hold` is honoured either way (`prompt_words`).
-#: Failing open would let agent text ack an intent.
+#: as does an unclosed block. Failing closed must not keep a correction from counting, so a
+#: stray tag also un-shows a shown intent: it is acked only after it is shown again, and the hook
+#: says so; `hold` is honoured either way (`prompt_words`). Failing open would let agent text ack
+#: an intent.
 _LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
 _REMINDER_TAG = re.compile(r"</?system-reminder>")
 
@@ -75,6 +84,13 @@ def operator_text(prompt: str) -> str:
 def stray_reminder(prompt: str) -> bool:
     """Whether a reminder tag is left after the leading run is removed: an untrusted boundary."""
     return bool(_REMINDER_TAG.search(operator_text(prompt)))
+
+
+def around_reminders(prompt: str) -> tuple[str, str]:
+    """What stands before the first reminder tag left and after the last one: where the operator's
+    own words would be when the boundary is untrusted."""
+    parts = _REMINDER_TAG.split(operator_text(prompt))
+    return parts[0], parts[-1]
 
 
 def intent_file(top: Path) -> Path:

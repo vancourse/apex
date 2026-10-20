@@ -3,8 +3,8 @@
 A HUMAN message is read as the operator wrote it: the harness `<system-reminder>` blocks in front
 of it (re-read instructions, a side session reporting in) are removed first
 (`intent.operator_text`). A prompt with a reminder tag left anywhere after that is not human
-(`intent.is_human`), except that `hold` on its first line is still honoured and a shown,
-unacked intent says the message did not ack it (`_untrusted`).
+(`intent.is_human`), except that `hold` is still honoured and a shown, unacked intent is
+un-shown with a notice (`_untrusted`).
 
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`
@@ -69,25 +69,28 @@ def _first_word(text: str) -> tuple[str, str]:
 
 def _untrusted(repo: store.RepoId, payload: dict, prompt: str):
     """A prompt with a stray reminder tag is not read as the operator's (`intent.is_human`), but
-    their words may be in it, so two things still happen:
+    their words may be in it, before the first tag left or after the last one. So:
 
-    - `hold` on its first line is honoured. A brake set from agent text costs one `release`; a
-      brake the operator set and the hook dropped lets pushes through unseen.
-    - A shown, unacked intent says it was not acked by this message, so the session asks for a
-      plain reply instead of learning it at push (the 2026-10-20 incident was a silent drop).
+    - `hold` on the first line of either is honoured. A brake set from agent text costs one
+      `release`; a brake the operator set and the hook dropped lets pushes through unseen.
+    - A shown, unacked intent is un-shown. The message may have corrected it, and dropping a
+      correction while the intent stays shown would let the next reply ack what was corrected.
+      The session is told, so it shows the intent again and asks for a plain reply instead of
+      learning it at push (the 2026-10-20 incident was a silent drop).
     """
     if payload.get("agent_id") or not intent.stray_reminder(prompt):
         return None
     notices = []
-    if _first_word(intent.operator_text(prompt))[1] == "hold":
+    if any(_first_word(part)[1] == "hold" for part in intent.around_reminders(prompt)):
         notices.append(_record_hold(repo))
     h = intent.current_hash(repo.top)
     st = intent.get(repo)
     if h and st.get("hash") == h and st.get("shown_at") and st.get("acked_hash") != h:
+        intent.update(repo, shown_at=0)
         notices.append(
             f"rails: a message carrying a stray `<system-reminder>` tag was not read as the "
-            f"operator's, so it did not ack intent {h}. If the operator meant to ack, ask for a "
-            "plain reply."
+            f"operator's, so it did not ack intent {h}, and it may have corrected it: the intent "
+            "is no longer marked shown. Show it again and ask for a plain reply."
         )
     return [Notice(n) for n in notices] or None
 

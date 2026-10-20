@@ -8,8 +8,8 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ### Fixed
 - **An operator's reply behind a harness reminder acks the intent again.** Claude Code puts a
-  `<system-reminder>` block in front of the operator's words when instruction files were re-read
-  or a side session reported in. `intent.is_human` saw a prompt starting with `<` and took it
+  `<system-reminder>` block in front of the operator's words when instruction files were re-read,
+  when a side session reported in, and on every idle prompt in a linked or spawned session. `intent.is_human` saw a prompt starting with `<` and took it
   for a machine message, so the shown intent was never acked. In jarvis on 2026-10-20,
   "go ahead and merge" and "are we done now?" both reached the session that way, and
   `rails ship` refused three times with "intent … has not been acked". A plain reply acked at
@@ -27,10 +27,21 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **A spawned session's first prompt** ("Background (from the session that started this
     one): …", the parent agent's brief) is a machine message by its header, with or without
     a reminder in front.
-  - **A stray tag is not silent, and does not drop the brake.** When a shown intent is not
-    acked because of a stray tag, the hook tells the session ("did not ack intent … ask for a
-    plain reply"). `hold` on such a prompt's first line is still recorded: a hold set from agent
-    text costs one `release`, while a dropped hold would let pushes through unseen.
+  - **A stray tag is not silent, does not swallow a correction, and does not drop the brake.**
+    The message may have held the operator's "no, … instead", so a shown, unacked intent is
+    un-shown. The next unrelated reply cannot ack what was corrected; the intent is acked only
+    after it is shown again. The hook says so ("did not ack intent …, show it again and ask for
+    a plain reply"). `hold` before the first stray tag or after the last is still recorded: a
+    hold set from agent text costs one `release`, while a dropped hold would let pushes through
+    unseen.
+  - **Decline buttons are corrections.** In a linked or spawned session every idle prompt
+    arrives behind a "Linked sessions now" reminder, including clicks on the buttons an agent
+    offers next to an intent, whose text the agent wrote. Classified from 1.6.1, "Hold B7 for
+    now; leave the branch unpushed." read as approval and acked the intent it declined. A
+    leading `hold`, `leave`, `later` or `skip`, and a mid-sentence ", not", now count as
+    corrections.
+  - **Known limit:** a session whose title contains a reminder's closing tag would put a stray
+    tag in every idle reply, so no reply there could ack.
   - **The ceremony log counts differently.** It now counts replies behind a leading reminder,
     which it dropped before, and no longer counts a reply followed by a reminder or a spawned
     session's brief. `ceremony_30d.messages` moves from 1.6.1, net upward in jarvis.
