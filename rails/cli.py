@@ -18,6 +18,7 @@ rails metrics                               the four numbers before/since the cu
 rails history retire <tip> | status         refuse pushes of history the repo rewrote away
 rails sync [--now]                          fast-forward the main checkout to trunk, when it is safe
 rails receipt -- <command...>               run a command, record a sealed receipt of what it printed
+rails lock <name> -- <command...>           run a command holding a lane's machine-wide lock (waits for it)
 rails whereis <term>                        search code, branches, PRs and issues before "we'd need to build X"
 rails state                                 what SessionStart prints
 rails new <app> [--dest DIR]                the starter kit
@@ -345,6 +346,184 @@ def cmd_receipt(argv: list[str]) -> int:
     return done.returncode
 
 
+def _start_tied(argv: list[str], env: dict[str, str]) -> tuple[subprocess.Popen, bool]:
+    """Start the command; on Windows, inside a job object the OS closes when this process
+    exits, however it exits, killing every process in it. The OS frees the machine lock then
+    too, and a suite must not run on without it. The command starts suspended, is put in the
+    job, then resumed, so nothing it starts (a launcher's interpreter, xdist's workers) is
+    born outside. Joining this process to the job and letting the command inherit it is not
+    enough: under the Microsoft Store Python, a joined process's children were outside the
+    job (measured, 2026-10-19). One thing no job holds: a Store-packaged interpreter the
+    command starts (a venv built on the Store Python), which Windows activates outside any
+    job. Returns the process and whether it is tied; never tied elsewhere.
+    """
+    if os.name != "nt":
+        return subprocess.Popen(argv, env=env), False
+    import ctypes
+    from ctypes import wintypes
+
+    class _Basic(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _Extended(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _Basic),
+            ("IoInfo", ctypes.c_ulonglong * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+    ]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    job = kernel32.CreateJobObjectW(None, None)
+    info = _Extended()
+    # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, and no breakaway: a venv's launcher gives the
+    # interpreter a job of its own whose children break away silently, and they leave every
+    # job up the chain that permits breakaway. So `rails lock -- rails ship` loses its
+    # detached trunk runner when rails lock exits.
+    info.BasicLimitInformation.LimitFlags = 0x2000
+    if not job or not kernel32.SetInformationJobObject(
+        job, 9, ctypes.byref(info), ctypes.sizeof(info)  # JobObjectExtendedLimitInformation
+    ):
+        if job:
+            kernel32.CloseHandle(job)
+        return subprocess.Popen(argv, env=env), False
+    proc = subprocess.Popen(argv, env=env, creationflags=0x4)  # CREATE_SUSPENDED
+    handle = int(proc._handle)  # type: ignore[attr-defined]
+    tied = bool(kernel32.AssignProcessToJobObject(job, handle))
+    if ntdll.NtResumeProcess(handle) != 0:
+        proc.kill()
+        proc.wait()
+        raise OSError("could not resume the command after starting it suspended")
+    if not tied:
+        kernel32.CloseHandle(job)
+    # A tied job's handle stays open until this process exits: that is the point.
+    return proc, tied
+
+
+def cmd_lock(argv: list[str]) -> int:
+    """Run a command while holding the machine lock `name`: the one `rails check` takes for
+    a lane that names it (`lock = "suite"`), so a suite started by hand queues with the
+    lanes instead of loading the box beside them (the `heavy_pytest` gate's remedy).
+
+    The wait has no timeout and is printed, with who holds the lock, to stderr; the
+    command's own output and exit code are passed through. The command runs with
+    ``RAILS_LOCKS_HELD`` naming the lock and this process, so a `rails check` or `rails lock`
+    under it re-enters the lock instead of waiting for its own parent. It cannot outlive the
+    lock: Ctrl+C stops its process tree, and on Windows a job object kills the tree when
+    this process dies any other way (the OS frees the lock then too).
+    """
+    from rails import check
+    from rails.lanes import valid_lock_name
+
+    usage = "rails lock <name> -- <command...>   e.g. rails lock suite -- uv run pytest apps/ -q"
+    if not argv or argv[0] in ("-h", "--help"):
+        print(usage)
+        return 2
+    name, command = argv[0], argv[1:]
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        print(usage)
+        return 2
+    if not valid_lock_name(name):
+        print(f"rails lock: {name!r} is not a lock name (a plain word, as in `lock = \"suite\"`)")
+        return 2
+    repo = store.find_repo(Path.cwd())
+    sha = ""
+    if repo is not None:
+        done = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo.top), capture_output=True, text=True
+        )
+        sha = done.stdout.strip() if done.returncode == 0 else ""
+    shown = " ".join(command)
+    holder = {
+        "repo": str(repo.main) if repo else str(Path.cwd()),
+        "leaf": repo.leaf if repo else Path.cwd().name,
+        "lane": f"rails lock: {shown[:80]}",
+        "sha": sha,
+    }
+
+    def note(who: object, waited: float) -> None:
+        text = "another process"
+        if isinstance(who, dict):
+            since = "?"
+            stamp = who.get("since")
+            if isinstance(stamp, (int, float)):
+                since = time.strftime("%H:%M", time.localtime(stamp))
+            text = (
+                f"{who.get('leaf', '?')} ({who.get('lane', '?')} at "
+                f"{str(who.get('sha', ''))[:12]}) since {since}"
+            )
+        print(
+            f"rails lock: wait  lock {name!r} held by {text}; waited {waited / 60:.0f} min",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    with store.machine_lock(name, holder, on_wait=note) as waited:
+        if waited >= 1:
+            print(f"rails lock: took {name!r} after {waited / 60:.0f} min", file=sys.stderr, flush=True)
+        holder_path = store.data_root() / "locks" / f"{name}.holder.json"
+        record = store.read_json(holder_path, None)
+        mine = isinstance(record, dict) and record.get("pid") == os.getpid()
+        # Re-entered (nested under a holder that named it): the record is the holder's.
+        if not mine and not store._held_for_us(name, holder_path):
+            print(
+                f"rails lock: could not write the holder record for {name!r}; a `rails check` "
+                "or `rails lock` under this command will wait for it instead of re-entering",
+                file=sys.stderr,
+                flush=True,
+            )
+        child_env = dict(os.environ)
+        child_env[store.HELD_ENV] = store.held_env([name], child_env)
+        try:
+            proc, tied = _start_tied(check._resolve(command), child_env)
+        except OSError as exc:
+            print(f"rails lock: could not start {command[0]!r}: {exc}", file=sys.stderr)
+            return 127
+        try:
+            if os.name == "nt" and not tied:
+                print(
+                    "rails lock: Windows refused the job object; if this process is killed, "
+                    "the command runs on without the lock",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            while True:
+                # In slices: Windows does not interrupt an infinite wait for Ctrl+C.
+                try:
+                    return proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException:
+            # The lock goes when this block exits: whatever the command started must not
+            # run on without it.
+            check._kill_tree(proc)
+            raise
+
+
 def cmd_whereis(argv: list[str]) -> int:
     if not argv:
         print("rails whereis <term>")
@@ -565,6 +744,8 @@ def main(argv: list[str]) -> int:
         return mainsync.main(rest)
     if cmd == "receipt":
         return cmd_receipt(rest)
+    if cmd == "lock":
+        return cmd_lock(rest)
     if cmd == "whereis":
         return cmd_whereis(rest)
     if cmd == "state":

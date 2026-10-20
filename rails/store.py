@@ -31,7 +31,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 
 def data_root() -> Path:
@@ -190,6 +190,34 @@ def locked(path: Path, timeout: float = 5.0) -> Iterator[None]:
         handle.close()
 
 
+#: Machine locks an ancestor process holds for this one, as ``name:pid`` pairs, comma
+#: separated. ``rails lock`` sets it for the command it runs, so a ``rails check`` (or a
+#: nested ``rails lock``) under it re-enters the lock instead of waiting for its own parent.
+HELD_ENV = "RAILS_LOCKS_HELD"
+
+
+def _held_for_us(name: str, holder_path: Path) -> bool:
+    """Whether an ancestor holds ``name`` for this process: the variable names the lock and
+    the pid that holds it, and the holder's record carries that pid. A pid that does not
+    hold the lock now re-enters nothing."""
+    record: Any = None
+    for entry in os.environ.get(HELD_ENV, "").split(","):
+        held, _, pid = entry.strip().partition(":")
+        if held == name and pid.isdigit():
+            if record is None:
+                record = read_json(holder_path, None)
+            if isinstance(record, dict) and record.get("pid") == int(pid):
+                return True  # any entry: a stale one ahead of it must not hide it
+    return False
+
+
+def held_env(names: list[str], environ: Mapping[str, str] | None = None) -> str:
+    """``HELD_ENV``'s value for a child of this process while it holds ``names``."""
+    environ = os.environ if environ is None else environ
+    entries = [e for e in environ.get(HELD_ENV, "").split(",") if e.strip()]
+    return ",".join([*entries, *(f"{name}:{os.getpid()}" for name in names)])
+
+
 class LockBusy(Exception):
     """A machine lock taken with ``wait=False`` was held; ``holder`` is its record."""
 
@@ -217,7 +245,9 @@ def machine_lock(
     it, from where) is written beside the lock so a waiter can say who it waits for;
     ``on_wait`` gets that record and the seconds waited on the first failed try and
     every ``notify_every`` seconds after. With ``wait=False`` a held lock raises
-    ``LockBusy`` (carrying the holder's record) instead of waiting.
+    ``LockBusy`` (carrying the holder's record) instead of waiting. A lock an ancestor
+    holds for this process (``HELD_ENV``) is re-entered at once: it yields 0 and leaves
+    the ancestor's lock and record alone.
     """
     from rails.lanes import valid_lock_name
 
@@ -231,6 +261,9 @@ def machine_lock(
     next_note = started
     try:
         while not _try_lock(handle, strict=True):
+            if _held_for_us(name, holder_path):
+                yield 0.0
+                return
             if not wait:
                 raise LockBusy(name, read_json(holder_path, None))
             now = time.monotonic()
@@ -239,12 +272,16 @@ def machine_lock(
                 next_note = now + notify_every
             time.sleep(poll)
         waited = time.monotonic() - started
-        # Display only: a waiter reading the old record holds it open, and on Windows
-        # that refuses the replace. The lock is held either way.
-        with contextlib.suppress(OSError):
-            write_json(
-                holder_path, {**holder, "pid": os.getpid(), "since": int(time.time())}
-            )
+        # A waiter reading the old record holds it open, and on Windows that refuses the
+        # replace, so it is retried. The lock is held either way; the record is what a
+        # waiter names and what a child re-enters by (`_held_for_us`).
+        record = {**holder, "pid": os.getpid(), "since": int(time.time())}
+        for _ in range(50):
+            try:
+                write_json(holder_path, record)
+                break
+            except OSError:
+                time.sleep(0.02)
         try:
             yield waited
         finally:

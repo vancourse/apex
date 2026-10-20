@@ -813,7 +813,17 @@ def _attribution_locks(
             raise
         break
     with stack:
-        yield
+        # The reruns start from this process's environment: a `rails lock` of a held name
+        # inside one re-enters instead of waiting for this runner.
+        before = os.environ.get(store.HELD_ENV)
+        os.environ[store.HELD_ENV] = store.held_env(names)
+        try:
+            yield
+        finally:
+            if before is None:
+                os.environ.pop(store.HELD_ENV, None)
+            else:
+                os.environ[store.HELD_ENV] = before
 
 
 def _run(
@@ -1621,8 +1631,9 @@ def start_background(top: Path, out=sys.stdout) -> bool:
     log.parent.mkdir(parents=True, exist_ok=True)
     rails_bin = Path(__file__).resolve().parent.parent / "bin" / "rails"
     argv = [_python(), str(rails_bin), "trunk", "watch"]
-    # The session's virtualenv is not the runner's: each lane resolves its own.
-    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    # The session's virtualenv is not the runner's: each lane resolves its own. Nor are the
+    # locks its caller holds (`rails lock -- rails ship`): the runner outlives them.
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", store.HELD_ENV)}
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
         # `uv run` put the session venv's scripts first on PATH; a lane must not find them.
