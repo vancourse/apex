@@ -1509,8 +1509,8 @@ def test_p3g_a_record_armed_for_another_pr_stays_armed_when_its_own_pr_leaves_op
 
 def test_r8_a_refresh_after_the_merge_records_the_debt_turn_end_would(repo, tmp_path, monkeypatch):
     """Any rails command after a merge refreshes pr.json before the Stop (`rails walk`, `rails
-    work monitor-bound`): it records the same debt turn_end._settle writes, or none is ever
-    written (review of #52 round 8)."""
+    work monitor-bound`): the debt turn_end._settle would write is still written, at the Stop
+    (review of #52 rounds 8 and 9)."""
     from rails import cli, gitutil
 
     rid = store.find_repo(repo)
@@ -1518,12 +1518,13 @@ def test_r8_a_refresh_after_the_merge_records_the_debt_turn_end_would(repo, tmp_
     _armed(rid, monitor="bound", closes=["9"])
     monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "MERGED"}')
     assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
-    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {
-        "a1": "unverified", "a2": "open", "b1": "open",
-    }
+    assert store.read_json(rid.leaf_dir / "pr.json")["pending_debt"] is True
     _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
     evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
     assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {
+        "a1": "unverified", "a2": "open", "b1": "open",
+    }
     # a PR closed unmerged closed no item: no debt
     _items(rid, ("a1", "a1", "#9"))
     _armed(rid, monitor="bound", closes=["9"])
@@ -1602,3 +1603,90 @@ def test_r8_a_line_count_in_a_read_is_not_a_file(repo):
     (repo / "log.txt").write_text("all green\n", encoding="utf-8")
     assert not _leak(repo, "Bash", 'gh pr comment 5 --body "Tests: $(tail -n 20 log.txt)"')
     assert not _leak(repo, "PowerShell", 'gh pr comment 5 --body "Tests: $(Get-Content log.txt -Tail 20)"')
+
+
+# --- review round 9 (2026-10-20) ---------------------------------------------------------------
+
+
+def test_r9_the_default_heredoc_message_with_no_value_is_sent(repo):
+    _leaky_repo(repo)
+    for command in (
+        "git commit -m \"$(cat <<'EOF'\nfix: tidy the parser\nEOF\n)\"",
+        "gh pr create --title x --body \"$(cat <<'EOF'\nclean body\nEOF\n)\"",
+    ):
+        assert not _leak(repo, "Bash", command), command
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(cat log.txt 2>/dev/null)"', id="redirect"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(cat log.txt | head -5)"', id="pipe"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content log.txt -Raw | Out-String)"', id="ps-pipe"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(tail -n +5 log.txt)"', id="plus-count"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content log.txt -Encoding utf8)"', id="ps-encoding"),
+        pytest.param("Bash", "gh pr comment 5 --body \"$(cat 'my notes.txt')\"", id="quoted-path-with-a-space"),
+        pytest.param("Bash", 'gh pr comment 5 --body "$(< log.txt)"', id="redirect-read"),
+    ],
+)
+def test_r9_a_reader_in_a_text_flag_reads_its_files_only(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("all green\n", encoding="utf-8")
+    (repo / "my notes.txt").write_text("all green\n", encoding="utf-8")
+    assert not _leak(repo, shell, command), command
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    (repo / "my notes.txt").write_text("total 1234.56\n", encoding="utf-8")
+    assert _leak(repo, shell, command), command
+
+
+def test_r9_a_walk_after_the_merge_and_before_the_stop_leaves_no_debt(repo, tmp_path, monkeypatch):
+    """`rails walk` refreshes pr.json before it walks: the merge's debt is judged at the Stop (or
+    the next ship), against the walk receipts as they stand then, as turn_end alone does."""
+    from rails import cli, gitutil
+
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"), ("b1", "b1", "#9"))
+    _armed(rid, monitor="bound", closes=["9"])
+    monkeypatch.setattr(gitutil, "gh", lambda *a, **k: '{"state": "MERGED"}')
+    assert cli.refresh_pr_state(repo, now=10**10) == "MERGED"
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {"a1": "open", "b1": "open"}
+    receipts.write(rid, "walk", instrument="walk:planted", steps=[{"step": "a1", "pass": True}], **work.walk_scope(rid))
+    _lookup(tmp_path, monkeypatch, [{"number": 5, "state": "MERGED"}])
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    assert not dispatch(evt, [_row("turn_end", ["Stop"])]).blocks
+    assert {i["id"]: i["status"] for i in work.load(rid)["items"]} == {"a1": "open", "b1": "unverified"}
+    assert "pending_debt" not in store.read_json(rid.leaf_dir / "pr.json")
+
+
+def test_r9_ship_judges_a_pending_merge_debt_before_it_closes_more(repo, git, commit):
+    import io
+
+    rid = store.find_repo(repo)
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    receipts.write_marker(rid, sha, git(repo, "rev-parse", "HEAD^{tree}"), ["checks"], quick=False)
+    _items(rid, ("a1", "a1", "#9"))
+    store.write_json(
+        rid.leaf_dir / "pr.json",
+        {"number": 5, "state": "MERGED", "armed": False, "closes": ["9"], "pending_debt": True},
+    )
+    out = io.StringIO()
+    assert ship.ship(repo, title="t", body="b", base="main", closes=["10"], out=out) == 1
+    assert "unverified: a1" in out.getvalue(), out.getvalue()
+
+
+def test_r9_a_substitution_that_reads_no_file_names_no_file(repo):
+    _leaky_repo(repo)
+    assert not _leak(repo, "Bash", 'gh pr comment 5 --body "Built $(git rev-parse --short HEAD)"')
+
+
+def test_r9_a_shadowed_stop_leaves_a_pending_debt_pending(repo, tmp_path, monkeypatch):
+    rid = store.find_repo(repo)
+    _items(rid, ("a1", "a1", "#9"))
+    store.write_json(
+        rid.leaf_dir / "pr.json",
+        {"number": 5, "state": "MERGED", "armed": False, "closes": ["9"], "pending_debt": True},
+    )
+    evt = _evt("Stop", repo, transcript_path=_transcript(tmp_path, "done"))
+    dispatch(evt, [_row("turn_end", ["Stop"], shadow=True)])
+    assert work.load(rid)["items"][0]["status"] == "open"
+    assert store.read_json(rid.leaf_dir / "pr.json")["pending_debt"] is True

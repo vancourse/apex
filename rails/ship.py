@@ -315,6 +315,9 @@ def ship(
             detected_by = detected_by or prev.get("detected_by")
             body = body or str(prev.get("body", ""))
     explicit_body = body  # the intent's text is re-read on every ship, never frozen into pr.json
+    from rails.gates.turn_end import settle_pending_debt
+
+    settle_pending_debt(repo)  # a merge the refresh saw first leaves its debt before this one ships
     data = work.load(repo)
     unverified = [i["id"] for i in data["items"] if i.get("status") == "unverified"]
     if unverified and closes:

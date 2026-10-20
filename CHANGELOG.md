@@ -154,8 +154,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   the lock `turn_end` settles under. `armed_number` is gone: one selector reader serves the stamp,
   `_pr_numbers` and `_branch_selectors`. The pr.json refresh (p3g) settles a merge the way
   `turn_end` does: only a record still naming the PR it looked up, `armed` cleared only when
-  `armed_pr` is absent or the record's own number, and a merge records the same debt
-  (`turn_end.record_merge_debt`), so a `rails walk` before the Stop loses none.
+  `armed_pr` is absent or the record's own number, and a merge it settles leaves its debt
+  pending (`pending_debt`): `turn_end.settle_pending_debt` judges it at the Stop or at the next
+  `rails ship`, whichever comes first, against the walk receipts as they stand then. So a
+  `rails walk` between the merge and the Stop counts, and no debt is lost.
+
+- **A file read inside a text flag is read.** `--body "Tests: $(tail -20 log.txt)"` reads `log.txt`:
+  only a reader command (`cat`, `tail`, `head`, `Get-Content`, `type`, `< f`) in the
+  substitution's first pipeline stage, and only its file arguments; redirects, heredoc operators
+  (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file), flags and their values are not files.
 
 Not yet: p3a (marking the shadow week's `would-deny` rows; the week ended 2026-10-15).
 

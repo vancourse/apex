@@ -256,11 +256,14 @@ def commands(command: str, shell: str, _depth: int = 0) -> list[tuple[str, list[
     -ArgumentList ...`, and `gh <alias>` from gh's own config."""
     found: list[tuple[str, list[str]]] = []
     for segment in segments(command, shell):
+        # A `;` inside a block leaves `gh pr merge --auto } else { ... }`: the statement is the
+        # part before the block's `}`; what follows is judged after it, as its own statement.
+        head, after = split_at_block_end(segment, shell)
         if _depth < 8:
             # `out=$(gh pr merge ...)`, `` x=`cmd` ``, PowerShell `$(...)`: the inner command
             # runs, so it is judged as one. Its statement text starts with `$(`, so a
             # caller following `cd` knows it ran in a child shell.
-            for inner in _substitutions(segment, shell):
+            for inner in _substitutions(head, shell):
                 found.extend((f"$({s})", t) for s, t in commands(inner, shell, _depth + 1))
         if _depth < 8 and shell == "powershell":
             # `if ($LASTEXITCODE -eq 0) { gh pr merge ... }`, one glued to its condition
@@ -270,13 +273,8 @@ def commands(command: str, shell: str, _depth: int = 0) -> list[tuple[str, list[
             # here-string stay text.
             from rails.shell.powershell import blocks, groups
 
-            for inner in blocks(segment) + groups(segment):
+            for inner in blocks(head) + groups(head):
                 found.extend(commands(inner, shell, _depth + 1))
-        head, after = split_at_block_end(segment, shell)
-        if _depth < 8 and after.strip():
-            # `} > .env`, `} | Set-Content f`, `} else { ... }`: judged as a statement of its own
-            # (a leading `|` only makes an empty first pipeline stage, which is dropped).
-            found.extend(commands(after, shell, _depth + 1))
         for stage in pipeline_stages(words(head, shell)):
             # The command once shell syntax is set aside (`then gh ...`, `(cd x`, `$r = gh
             # ...`). When that leaves nothing, the statement's own words are judged instead
@@ -289,6 +287,10 @@ def commands(command: str, shell: str, _depth: int = 0) -> list[tuple[str, list[
                     # operator_bounds' business); the command it runs is added beside them.
                     found.append((segment, tokens))
                     found.extend((segment, t) for t in _launched(tokens, _depth) if t != tokens)
+        if _depth < 8 and after.strip():
+            # `} > .env`, `} | Set-Content f`, `} else { ... }`: judged as a statement of its own,
+            # after the one it follows (a leading `|` only makes an empty first stage, dropped).
+            found.extend(commands(after, shell, _depth + 1))
     return found
 
 

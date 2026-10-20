@@ -717,10 +717,9 @@ def refresh_pr_state(cwd: Path, now: float | None = None) -> str | None:
             # record stays armed after #5 leaves OPEN.
             if "armed_pr" not in record or str(record.get("armed_pr")) == str(record.get("number")):
                 if state == "MERGED" and record.get("armed"):
-                    # Settled here, so the Stop finds nothing armed: write the debt it would.
-                    from rails.gates.turn_end import record_merge_debt
-
-                    record_merge_debt(repo, record)
+                    # Settled here, so the Stop finds nothing armed: the debt is judged at the Stop
+                    # or the next ship (`turn_end.settle_pending_debt`), after any walk between.
+                    record["pending_debt"] = True
                 record["armed"] = False
                 record.pop("disarmed_by", None)
             from rails.githooks import release_pr_hold

@@ -3142,3 +3142,11 @@ def test_r8_armed_pr_is_the_record_s_own_number(repo, commit, git, tmp_path, mon
     assert arm_review.check(_evt("Bash", {"command": command}, cwd=str(repo))) is None
     record = store.read_json(rid.leaf_dir / "pr.json")
     assert (record["armed"], record["armed_pr"]) == (True, 5)
+
+
+def test_r9_what_follows_a_block_s_brace_is_judged_once_and_after_the_statement():
+    from rails.gates import destructive
+
+    found = [t for _, t in destructive.commands("gh pr merge --auto --squash } else { Write-Host x }", "powershell")]
+    assert found[0][:3] == ["gh", "pr", "merge"], found
+    assert sum(1 for t in found if t and t[0] == "Write-Host") == 1, found

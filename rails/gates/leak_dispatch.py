@@ -40,11 +40,48 @@ _READ_INTO = re.compile(
     r"\$?\(\s*(?:cat|<|Get-Content|gc|type)\s+['\"]?([^'\"\s)]+)['\"]?(?:\s+-Raw)?\s*\)",
     re.IGNORECASE,
 )
-#: A substitution inside a text flag that reads files: `$(tail -20 log.txt)`, `$(< f)`,
-#: PowerShell `$(Get-Content log.txt -Tail 20)`. Its file arguments are read.
-_READ_PART = re.compile(
-    r"\$\(\s*(?:cat|tail|head|Get-Content|gc|type|<)(?:\s+|(?<=<))([^)]*)\)", re.IGNORECASE
+#: The commands that read the files they name, and the flags among theirs that take a value.
+_READERS = frozenset({"cat", "tail", "head", "get-content", "gc", "type"})
+_READER_VALUED = frozenset(
+    {"-n", "-c", "--lines", "--bytes", "-tail", "-totalcount", "-head", "-first", "-last",
+     "-encoding", "-delimiter", "-readcount"}
 )
+
+
+def _files_read_in(value: str, shell: str) -> list[str]:
+    """The files a substitution inside a text flag reads, read the shell's way: `$(tail -20
+    log.txt)`, `$(cat log.txt | head -5)`, `$(< f)`, PowerShell `$(Get-Content log.txt -Raw)`. Only
+    a reader command in the substitution's first pipeline stage counts, and only its file
+    arguments: redirects, heredoc operators (`cat <<'EOF'` reads no file; its body is read as a
+    body), flags and their values are not files."""
+    from rails.gates.destructive import _substitutions, command_name, pipeline_stages
+    from rails.shell import is_redirect, takes_target
+
+    names: list[str] = []
+    for inner in _substitutions(value, shell):
+        words = _words(inner, shell)
+        if words and words[0].startswith("<") and not words[0].startswith("<<"):
+            target = words[1] if words[0] == "<" and len(words) > 1 else words[0][1:]
+            if target:
+                names.append(target)
+            continue
+        stages = pipeline_stages(words)
+        if not stages or command_name(stages[0][0]).lower() not in _READERS:
+            continue
+        args, i = stages[0][1:], 0
+        while i < len(args):
+            tok = args[i]
+            if tok.lower() in _READER_VALUED:
+                i += 2
+            elif is_redirect(tok):
+                i += 2 if takes_target(tok) else 1
+            else:
+                if not (tok.startswith(("-", "+")) or tok.isdigit()):
+                    names.append(tok)
+                i += 1
+    return names
+
+
 _TEXT_FLAGS = {"--body", "-b", "--title", "-t", "--message", "-m", "--notes", "-n"}
 _FILE_FLAGS = {"--body-file", "--input", "--notes-file", "--file"}
 _FIELD_FLAGS = {"-f", "-F", "--field", "--raw-field"}
@@ -346,7 +383,7 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
         if not (is_git_commit or _GH.search(visible)):
             continue
         is_gh_pr_create = bool(re.search(r"\bgh\s+(pr|issue)\s+(create|edit|comment)\b", visible))
-        _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out)
+        _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, shell)
     # `-m "$(cat <<'EOF' ...)"`, `--body-file - <<'EOF'`, PowerShell `$body = @'...'@` or
     # `@'...'@ | gh ... --body-file -`: the body is the text that leaves
     out.extend(("heredoc body", body) for body in _bodies(command, shell))
@@ -355,7 +392,7 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
     return [(label, text) for label, text in out if text], unreadable
 
 
-def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out) -> None:
+def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, shell="bash") -> None:
     """Append the (label, text) each sending flag of one statement carries."""
     i = 0
     while i < len(words):
@@ -376,10 +413,8 @@ def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out) 
             elif "$" in value:
                 out.append((flag, command))  # `-m $m`: the text was set elsewhere in the command
                 # `--body "Tests: $(tail -20 log.txt)"`: the file a substitution reads is read
-                for args in _READ_PART.findall(value):
-                    for name in args.split():
-                        if not name.startswith("-") and not name.isdigit():
-                            out.append((f"{flag} {name}", read_file(name)))
+                for name in _files_read_in(value, shell):
+                    out.append((f"{flag} {name}", read_file(name)))
             i += step
             continue
         if w == "<<<" or (w.startswith("<<<") and len(w) > 3):
