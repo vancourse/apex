@@ -4,7 +4,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
-## [1.6.3] — 2026-10-20
+## [1.7.1] — 2026-10-21
 
 ### Fixed
 - **An operator's reply behind a harness reminder acks the intent.** Claude Code puts a
@@ -47,7 +47,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   - **The ceremony log counts differently.** It now counts replies behind a leading reminder,
     which it dropped before, at the length of the operator's words, and no longer counts a
     spawned session's brief that carries the header. So `ceremony_30d.messages` and
-    `ceremony_share` shift at 1.6.3 (not measured).
+    `ceremony_share` shift at 1.7.1 (not measured).
   - **Known limits:**
     - A reply behind a reminder that cannot be taken off cleanly is not read. A correction or a
       `hold` in it does not count, the shown intent stays shown, and the next reply acks it
@@ -69,7 +69,33 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     - A peer session's message ("Another Claude session sent a message: …") has no machine
       prefix, on 1.6.0 or now. In the transcripts it is a meta entry that did not reach the hook:
       in one jarvis session a shown intent stayed unacked through three of them.
-  - `rails --version`, the session-start line and posted statuses say 1.6.3 (`rails.VERSION`).
+  - `rails --version`, the session-start line and posted statuses say 1.7.1 (`rails.VERSION`).
+
+## [1.7.0] — 2026-10-20
+
+### Changed
+- **No two suites ever share the box** (operator 2026-10-20). Three ways round the `suite` lock
+  are closed.
+  - **The trunk holds the lock for its whole pass**: the full run, the reruns that name a
+    culprit, and what is done about the result. Until now only the reruns took it, so a
+    pre-merge suite ran beside every full run. The pass takes it with priority (below), so a
+    stream of pre-merge checks cannot starve it. A pre-merge suite can now wait out a whole
+    pass: about an hour on jarvis on 2026-10-20, and at most the trunk lanes' timeouts
+    added up. A lane that cannot start (a prerequisite missing) is reported before the lock
+    is waited for, and a pass whose holder record is not its own skips the revert check,
+    which re-enters by that record.
+  - **`machine_lock(priority=True)`.** While a priority waiter waits, no plain waiter takes the
+    lock: the claim is a second OS lock beside it (`<name>.priority.lock`), held only while
+    waiting, so a waiter that dies frees it. A plain waiter keeps the claim across its own
+    try, so a priority waiter that claims meanwhile is not overtaken, and its wait line says
+    who goes next only while a claim is held.
+  - **`heavy_pytest` refuses every parallel pytest outside the lock, of any size.** A two-file
+    run at `-n auto` is sixteen workers, each with a database of its own; up to 30 files used to
+    run unqueued, and a run whose targets the hook cannot read (`$T`) was not judged. A
+    serial run (`-n 0`) of any size is still free. Replayed over two weeks of
+    jarvis agent commands: 108 of 1,092 refused, up from 27, every new one a multi-worker run.
+- jarvis's `ci/local_lanes.py` puts a lane run by hand under `rails lock` (morphyxAI/jarvis,
+  same day), which closes the third way round.
 ## [1.6.2] — 2026-10-20
 
 ### Fixed

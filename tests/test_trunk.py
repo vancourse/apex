@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -278,8 +279,8 @@ trunk_command = ["{PY}", "{s(scripts / 'suite.py')}", "{s(runs)}", "{s(flaky)}",
     return site
 
 
-def _pass(site, *, check=None) -> tuple[int, str]:
-    out = io.StringIO()
+def _pass(site, *, check=None, out=None) -> tuple[int, str]:
+    out = io.StringIO() if out is None else out
 
     def revert_check(made: dict) -> bool:
         site.checked.append(made["number"])
@@ -395,11 +396,10 @@ def test_a_false_failure_in_one_bisect_probe_names_no_culprit(site):
     assert "unattributed" in site.forge.last()["description"]
 
 
-def test_the_attribution_reruns_hold_the_lanes_lock_and_the_revert_check_does_not(site):
-    """#2668: the reruns that name a culprit run under the lane's machine lock, so a
-    session's pre-merge suite cannot load them. The long full run does not take it (each
-    session's suite would wait out the whole pass), and the revert's own check runs after
-    it is released: that check takes the same lock."""
+def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(site):
+    """No two suites share the box (operator 2026-10-20): the full run and the reruns that
+    name a culprit (#2668) both run under the lane's machine lock. The revert's own check
+    takes the same lock and re-enters it, rather than waiting on the pass that holds it."""
     _relanes(site, needs='lock = "trunklock"')
     _pass(site)
     home = str(Path(trunk.__file__).resolve().parents[1])
@@ -419,10 +419,100 @@ def test_the_attribution_reruns_hold_the_lanes_lock_and_the_revert_check_does_no
     assert code == 1, text
     seen = (site.tmp / "lockseen.txt").read_text(encoding="utf-8").split()
     lines = [" ".join(seen[i : i + 2]) for i in range(0, len(seen), 2)]
-    assert "full free" in lines, lines
+    assert "full held" in lines and "full free" not in lines, lines
     assert "rerun held" in lines and "rerun free" not in lines, lines
     assert at_check == ["free"]
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+def test_a_pass_that_cannot_start_a_lane_on_an_idle_box_says_so_at_once(site, monkeypatch):
+    """Docker down, Postgres gone, and no suite running: the box, not the tip. The pass
+    posts `error` without taking the lock (adversary, review of 7aca8eb)."""
+    from rails import check
+
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    monkeypatch.setattr(check, "missing_prerequisite", lambda lane: "Postgres is not reachable")
+    code, text = _in_thread(lambda: _pass(site), 30.0)
+    assert site.forge.last()["state"] == "error", text
+    assert "testing" not in text, text
+
+
+def test_a_prerequisite_a_running_suite_loads_is_checked_after_that_suite(site, monkeypatch):
+    """While a suite holds the lock, Postgres can be out of connection slots because of it.
+    The pass waits that suite out and checks a quiet box (coop, review of 90be54f)."""
+    import threading
+
+    from rails import check
+
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    busy = threading.Event()
+
+    def loaded(lane) -> str | None:
+        return "Postgres is out of connection slots" if busy.is_set() else None
+
+    monkeypatch.setattr(check, "missing_prerequisite", loaded)
+    holding, release = threading.Event(), threading.Event()
+
+    def session() -> None:
+        with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
+            busy.set()
+            holding.set()
+            release.wait(60)
+            busy.clear()
+
+    threading.Thread(target=session, daemon=True).start()
+    assert holding.wait(10)
+    out = io.StringIO()
+    box: dict = {}
+    runner = threading.Thread(target=lambda: box.setdefault("r", _pass(site, out=out)), daemon=True)
+    runner.start()
+    deadline = time.monotonic() + 30
+    while "held by a session" not in out.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "held by a session" in out.getvalue(), out.getvalue()
+    release.set()
+    runner.join(120)
+    code, text = box["r"]
+    assert code == 0 and site.forge.last()["state"] == "success", text
+
+
+def test_a_pass_that_cannot_vouch_for_its_lock_record_skips_the_revert_check(site, monkeypatch):
+    """A revert's own `rails check` re-enters the pass's lock by its holder record; without
+    one it would wait on the pass forever (adversary, review of 7aca8eb). No check then."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+    monkeypatch.setattr(store, "holds_record", lambda name: False)
+    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
+    assert "revert check skipped" in text, text
+    assert site.checked == []
+
+
+def test_a_resumed_revert_is_not_checked_by_a_pass_without_its_own_lock_record(site, monkeypatch):
+    """Both voices, review of acb7290: an earlier pass opened a revert and died during its
+    check, leaving the row unchecked. A later pass that cannot vouch for its lock record
+    must not run that check either (its `rails check` would wait on the pass forever); the
+    row stays unchecked for a pass that can."""
+    _relanes(site, needs='lock = "trunklock"')
+    _pass(site)
+    site.merge("src/b.py", "boom = 1\n")
+
+    def dies(made: dict) -> bool:
+        raise KeyboardInterrupt  # the pass is killed mid-check
+
+    with pytest.raises(KeyboardInterrupt):
+        _pass(site, check=dies)
+    rows = trunk.read_state(site.repo)["reverts"]
+    assert rows and rows[-1]["checked"] is False
+    monkeypatch.setattr(store, "holds_record", lambda name: False)
+    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
+    assert "check skipped this pass" in text, text
+    row = trunk.read_state(site.repo)["reverts"][-1]
+    assert row["checked"] is False and row["commented"] is False, row
 
 
 def _in_thread(fn, seconds: float = 120.0):
@@ -437,20 +527,38 @@ def _in_thread(fn, seconds: float = 120.0):
     return box.get("value")
 
 
-def test_a_pass_with_nothing_to_rerun_does_not_wait_for_the_lock(site):
-    """#2668 (both voices, review of 5437359): master red only with a known failure, and a
-    session's suite holding the lane's lock. The pass reruns nothing, so it posts at once
-    instead of waiting out that suite."""
+def test_a_pass_waits_for_a_running_suite_and_names_it(site):
+    """a2. A session's suite holds the lane's lock: the pass does not start its full run
+    beside it. It waits, names the holder, and runs once the suite lets go."""
+    import threading
+
     _relanes(site, needs='lock = "trunklock"')
     _pass(site)
-    site.env_broken.write_text("on", encoding="utf-8")
     site.merge("src/a.py", "a = 1\n")
-    _pass(site)  # test_c, red at the last verdict too: a known failure from here
-    site.merge("src/d.py", "d = 1\n")
-    with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
-        code, text = _in_thread(lambda: _pass(site))
-    assert code == 1, text
-    assert "known" in site.forge.last()["description"]
+    holding, release = threading.Event(), threading.Event()
+
+    def session() -> None:
+        with store.machine_lock("trunklock", {"leaf": "a session"}, wait=False):
+            holding.set()
+            release.wait(60)
+
+    holder = threading.Thread(target=session, daemon=True)
+    holder.start()
+    assert holding.wait(10)
+    out = io.StringIO()
+    box: dict = {}
+    runner = threading.Thread(target=lambda: box.setdefault("r", _pass(site, out=out)), daemon=True)
+    runner.start()
+    deadline = time.monotonic() + 30
+    while "held by a session" not in out.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "held by a session" in out.getvalue(), out.getvalue()
+    assert "testing" not in out.getvalue(), "the full run started beside a held suite"
+    release.set()
+    runner.join(120)
+    assert not runner.is_alive()
+    code, text = box["r"]
+    assert code == 0, text
 
 
 def test_two_trunk_lanes_on_one_lock_take_it_once():
@@ -463,7 +571,7 @@ def test_two_trunk_lanes_on_one_lock_take_it_once():
     ]
 
     def hold() -> bool:
-        with trunk._attribution_locks(repo, lanes, "f" * 40, io.StringIO()):
+        with trunk._pass_locks(repo, lanes, "f" * 40, io.StringIO()):
             return True
 
     assert _in_thread(hold, 30.0) is True
@@ -1459,7 +1567,7 @@ def test_two_trunk_locks_are_not_held_while_waiting_for_either():
     held = threading.Event()
 
     def take() -> bool:
-        with trunk._attribution_locks(repo, lanes, "f" * 40, out):
+        with trunk._pass_locks(repo, lanes, "f" * 40, out):
             held.set()
         return True
 

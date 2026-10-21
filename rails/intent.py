@@ -34,7 +34,7 @@ CORRECTION = re.compile(
 
 #: The last one is the header of a session's first prompt when another session started it: the
 #: parent agent's brief, which a reminder hides until it is removed (`operator_text`). Seen as
-#: the first prompt of four jarvis worktree sessions (review of 1.6.3).
+#: the first prompt of four jarvis worktree sessions (review of 1.7.1).
 MACHINE_PREFIXES = (
     "<",
     "[",
