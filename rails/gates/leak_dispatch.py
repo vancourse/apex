@@ -110,14 +110,16 @@ _BASH_INPUT_COMMANDS = frozenset({"", "cat", "tail", "head", "sort", "uniq", "gr
 _INPUT_REDIRECT = re.compile(r"(?<![<\w&])<(?![<&>(])")
 
 
-def _input_redirects(raw: str, shell: str) -> list[str]:
+def _input_redirects(raw: str, shell: str, operators: str | None = None) -> list[str]:
     """The files a bash stage reads on stdin, found on the quote-blanked RAW text (a quoted
-    `'<details>'` is text), with the target as written (`< "my log.txt"`)."""
+    `'<details>'` is text), with the target as written (`< "my log.txt"`). ``operators``, the
+    same text with spans blanked that are not this stage's (its substitutions), is where the
+    `<` is looked for; the target is always taken from ``raw``."""
     if shell == "powershell":
         return []
     from rails.shell import scrub
 
-    visible = scrub(raw, "bash", comments=True)
+    visible = scrub(operators if operators is not None else raw, "bash", comments=True)
     out = []
     for m in _INPUT_REDIRECT.finditer(visible):
         # the target as written: a quoted target is blank in `visible`, so it is read from `raw`
@@ -148,21 +150,34 @@ def _without_substitutions(text: str, shell: str) -> str:
 
 def _sender_stdin(statement: str, shell: str) -> tuple[list[str], list[str]]:
     """What the sending statement reads on stdin: (its own `< f`, a whole body read strictly; the
-    files a reader stage piped into it reads, best effort: `cat f | gh ... --body-file -`)."""
-    from rails.gates.destructive import command_name, command_words
+    files a reader stage piped into it reads, best effort: `cat f | gh ... --body-file -`). The
+    sender is found with shell syntax set aside (`then`, `do`, `{`, `(`) and a leading redirect
+    too (`< f gh ...`); a stdin target is named as written in the statement."""
+    from rails.gates.destructive import command_name
+    from rails.shell import is_redirect, takes_target
 
-    stages = _stages(_without_substitutions(statement, shell), shell)
-    names = [command_name((command_words(_words(s, shell)) or [""])[0]).lower() for s in stages]
+    blanked = _without_substitutions(statement, shell)
+    spans = _stage_spans(blanked, shell)
+    own_text = [statement[a:b] for a, b in spans]
+    blank_text = [blanked[a:b] for a, b in spans]
+
+    def command_of(stage: str) -> list[str]:
+        words = _command_words(stage, shell)
+        while words and is_redirect(words[0]):
+            words = words[2:] if takes_target(words[0]) else words[1:]
+        return words
+
+    commands = [command_of(s) for s in blank_text]
+    names = [command_name(w[0]).lower() if w else "" for w in commands]
     sender = next((k for k, n in enumerate(names) if n in ("gh", "git")), None)
     if sender is None:
         return [], []
-    own = _input_redirects(stages[sender], shell)
+    own = _input_redirects(own_text[sender], shell, blank_text[sender])
     piped: list[str] = []
     for k in range(sender):
-        words = command_words(_words(stages[k], shell))
-        piped.extend(_reader_files(words, shell))
+        piped.extend(_reader_files(commands[k], shell))
         if names[k] in _BASH_INPUT_COMMANDS:
-            piped.extend(_input_redirects(stages[k], shell))
+            piped.extend(_input_redirects(own_text[k], shell, blank_text[k]))
     return own, piped
 
 
@@ -333,8 +348,8 @@ def _outside_inner(statement: str, shell: str) -> str:
     return "".join(out)
 
 
-def _stages(statement: str, shell: str) -> list[str]:
-    """The raw text of each pipeline stage, split at a `|` the shell reads (not one in quotes)."""
+def _stage_spans(statement: str, shell: str) -> list[tuple[int, int]]:
+    """(start, end) of each pipeline stage, split at a `|` the shell reads (not one in quotes)."""
     from rails.shell import scrub
 
     visible = scrub(statement, shell, comments=True)
@@ -347,7 +362,12 @@ def _stages(statement: str, shell: str) -> list[str]:
             cuts.append(i + 1)
         i += 1
     cuts.append(len(statement) + 1)
-    return [statement[a : b - 1] for a, b in zip(cuts, cuts[1:])]
+    return [(a, b - 1) for a, b in zip(cuts, cuts[1:])]
+
+
+def _stages(statement: str, shell: str) -> list[str]:
+    """The raw text of each pipeline stage, split at a `|` the shell reads (not one in quotes)."""
+    return [statement[a:b] for a, b in _stage_spans(statement, shell)]
 
 
 def _command_words(stage: str, shell: str) -> list[str]:

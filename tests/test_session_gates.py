@@ -1306,7 +1306,8 @@ def _leak(repo, shell, command):
 
 
 #: Words a misparse would read as files: each planted holding a value, so a misread one refuses.
-_MISREAD = ("notes.txt", "none", "ok", "SilentlyContinue", "x", "gh", "20", "utf8", "testcase", "echo", "log.txt;")
+_MISREAD = ("notes.txt", "none", "ok", "SilentlyContinue", "x", "gh", "20", "utf8", "testcase", "echo", "log.txt;",
+            "DEBUG", "details", "dev", "my")
 
 
 def _plant_misreads(repo):
@@ -1861,7 +1862,9 @@ def test_r12_a_file_read_in_these_shapes_is_read(repo, shell, command):
 def test_r12_a_quoted_target_with_a_space_is_read(repo):
     _leaky_repo(repo)
     (repo / "my log.txt").write_text("total 1234.56\n", encoding="utf-8")
-    assert _leak(repo, "Bash", 'gh pr create --title x --body-file - < "my log.txt"')
+    denies = _leak(repo, "Bash", 'gh pr create --title x --body-file - < "my log.txt"')
+    # the value was found in the file the shell reads, not a misread `my` refused unread
+    assert denies and not any("could not read" in d for d in denies), denies
 
 
 @pytest.mark.parametrize(
@@ -1903,3 +1906,32 @@ def test_r12_a_redirect_inside_a_substitution_is_not_the_sender_s_stdin(repo):
     _leaky_repo(repo)
     command = "uv run pytest -q > out.txt; gh api repos/o/r/issues/5/comments -f body=done -F lines=$(wc -l < out.txt)"
     assert not _leak(repo, "Bash", command)
+
+
+# --- review round 13 (2026-10-21) --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "if [ -s body.md ]; then gh pr comment 5 --body-file - < body.md; fi",
+        "{ gh pr comment 5 --body-file - < body.md; }",
+        "(gh pr comment 5 --body-file - < body.md)",
+        "for n in 5; do gh pr comment $n --body-file - < body.md; done",
+        "if false; then true; else git commit -F - < body.md; fi",
+        "if [ -s body.md ]; then cat body.md | gh pr comment 5 --body-file -; fi",
+        "< body.md gh pr create --title x --body-file -",
+    ],
+    ids=["then", "group", "subshell", "do", "else", "then-piped", "leading-redirect"],
+)
+def test_r13_the_sender_s_stdin_is_read_behind_shell_syntax(repo, command):
+    _leaky_repo(repo)
+    (repo / "body.md").write_text("total 1234.56\n", encoding="utf-8")
+    denies = _leak(repo, "Bash", command)
+    assert denies and not any("could not read" in d for d in denies), (command, denies)
+
+
+def test_r13_a_stdin_target_is_named_as_written(repo):
+    _leaky_repo(repo)
+    denies = _leak(repo, "Bash", 'gh pr create --title x --body-file - < "$(git rev-parse --show-toplevel)/body.md"')
+    assert denies and "$(git rev-parse --show-toplevel)/body.md" in denies[0], denies

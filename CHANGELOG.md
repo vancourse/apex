@@ -169,7 +169,8 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   on the quote-blanked text (`'<details>'` is text, `<(...)` runs a command), is read for a bare
   `$(< f)` and for the commands whose output is their input (`cat`, `sort`, `grep`, ...; not a
   count like `wc -l`); a quoted target (`< "my log.txt"`) is read as written. The sending
-  statement's own stdin (`--body-file - < f`) is a whole body, read strictly; a reader piped into
+  statement's own stdin (`--body-file - < f`, also behind `then`, `do`, `{`, `(` or as a leading
+  `< f gh ...`) is a whole body, read strictly and named as written; a reader piped into
   it (`cat f | gh ... --body-file -`) is read best effort; a `<` inside its substitutions is
   theirs. The null device (`/dev/null`, `nul`, `$null`) is an empty body, never a file the command
   wrote. A whole-value read names its file by the same rules (`(Get-Content -Path:f -Raw)`). Redirects,
