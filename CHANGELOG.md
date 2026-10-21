@@ -4,7 +4,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
-## [Unreleased]
+## [1.8.0] — 2026-10-21
 
 ### Added
 - **The disarm (`prepush_disarm`, R3):** a push that lands on a PR armed for auto-squash, with a tree
