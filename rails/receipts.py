@@ -67,11 +67,11 @@ def valid(body: dict[str, Any]) -> bool:
 
 def write(repo: store.RepoId, kind: str, **fields: Any) -> dict[str, Any]:
     body = {
+        **fields,
         "kind": kind,
         "ts": int(time.time()),
         "leaf": repo.leaf,
         "via_agent": in_agent(),
-        **fields,
     }
     sealed = seal(body)
     store.append_jsonl(repo.leaf_dir / "receipts.jsonl", sealed)

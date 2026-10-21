@@ -49,8 +49,8 @@ _MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|mergeBranch)\b")
 _HTTP_CLIENTS = frozenset(
     {"curl", "wget", "http", "invoke-restmethod", "irm", "invoke-webrequest", "iwr"}
 )
-_ALLOWED_MERGE_FLAGS = frozenset({"--auto", "--squash", "--delete-branch", "-d", "-s"})
-_PR_REF = re.compile(r"^(?:#?\d+|https?://\S+/pull/\d+/?)$")
+_ALLOWED_MERGE_FLAGS = frozenset({"--auto", "--squash", "--delete-branch", "-d", "-s", "--disable-auto"})
+_PR_REF = re.compile(r"^(?:#?\d+|https?://\S+/pull/\d+/?(?:#\S*)?)$")
 _API_BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 
 
@@ -74,17 +74,22 @@ def _has_body(args: list[str]) -> bool:
     )
 
 
-def _gh_api(args: list[str]) -> str | None:
+def _gh_api(args: list[str], bodies: list[str] = ()) -> str | None:
     if _api_method(args) == "GET" and not _has_body(args):
         return None
     if any(_MERGE_PATH.search(tok) for tok in args):
         return "merges through the REST API"
-    if "graphql" in args and any(_MERGE_MUTATION.search(tok) for tok in args):
+    # a query in a heredoc (`-f query="$(cat <<'EOF' ...)"`) is in ``bodies``, not in the words
+    if "graphql" in args and any(_MERGE_MUTATION.search(tok) for tok in [*args, *bodies]):
         return "merges through a GraphQL mutation"
     return None
 
 
 def _gh_pr_merge(args: list[str]) -> str | None:
+    from rails.gates.arm_review import _MERGE_VALUED
+    from rails.shell import arguments
+
+    args = arguments(args, _MERGE_VALUED)  # `2>&1` is the shell's, not gh's
     refs = 0
     skip = False
     for index, tok in enumerate(args):
@@ -102,6 +107,8 @@ def _gh_pr_merge(args: list[str]) -> str | None:
             refs += 1
             continue
         return f"`gh pr merge` with `{tok}`"
+    if "--disable-auto" in args:
+        return None  # turns auto-merge off: the disarm's own remedy, never a merge
     if "--auto" not in args:
         return "`gh pr merge` without `--auto` merges now instead of arming"
     return None
@@ -111,7 +118,7 @@ def _git_push(tokens: list[str], evt: Event) -> str | None:
     sub, args, where = git_subcommand(tokens, evt.cwd)
     if sub != "push":
         return None
-    targets, flags = push_targets(args, where)
+    targets, flags = push_targets(args, where, evt.cwd)
     if flags["dry_run"]:
         return None
     if flags["all"]:
@@ -122,11 +129,51 @@ def _git_push(tokens: list[str], evt: Event) -> str | None:
     return None
 
 
-def _offence(tokens: list[str], evt: Event) -> str | None:
+#: PowerShell's automatic variables: naming one reads nothing the command set.
+_AUTOMATIC = frozenset({"null", "true", "false", "_", "lastexitcode", "pwd", "home", "args", "input"})
+
+
+def _expands_a_variable(evt: Event, segment: str) -> bool:
+    """Whether the statement expands a variable (`$q`, `${q}`) where the shell expands one:
+    outside single quotes. However it was set earlier in the command (`q=...`, `read -d ''
+    q <<EOF`, `declare q=...`, `[string]$q = ...`), its value may be the query, so the whole
+    command is read. A GraphQL `$n` inside a single-quoted query expands nothing."""
+    from rails.shell import expanding
+
+    shell = evt.shell or "bash"
+    visible = expanding(segment, shell)
+    escape = "`" if shell == "powershell" else "\\"
+    i, n = 0, len(visible)
+    while i < n:
+        c = visible[i]
+        if c == escape:
+            i += 2
+            continue
+        if c == "$":
+            name = re.match(r"\{?([A-Za-z_][\w:]*)", visible[i + 1 :])
+            if name and name.group(1).lower() not in _AUTOMATIC:
+                return True
+        i += 1
+    return False
+
+
+def _offence(tokens: list[str], evt: Event, segment: str = "") -> str | None:
     name = command_name(tokens[0])
     if name == "gh" and len(tokens) > 1:
         if tokens[1] == "api":
-            return _gh_api(tokens[2:])
+            if _expands_a_variable(evt, segment):
+                # `-f query=$q`, `$q | gh api ...`: the query was set earlier in the command
+                bodies = [evt.command or ""]
+            elif evt.shell == "powershell":
+                from rails.shell.powershell import here_string_bodies
+
+                bodies = here_string_bodies(segment)
+            else:
+                from rails.shell.bash import statement_bodies
+
+                # this statement's own bodies, inside it or fed on stdin, not another's
+                bodies = statement_bodies(evt.command or "", segment)
+            return _gh_api(tokens[2:], bodies)
         if tokens[1] == "pr" and len(tokens) > 2 and tokens[2] == "merge":
             return _gh_pr_merge(tokens[3:])
         return None
@@ -147,7 +194,7 @@ def check(evt: Event) -> Deny | None:
     if not command or in_environment(*OVERRIDES):
         return None
     for segment, tokens in commands(command, shell):
-        why = _offence(tokens, evt)
+        why = _offence(tokens, evt, segment)
         if why:
             shown = " ".join(segment.split())[:160]
             return Deny(

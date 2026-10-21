@@ -39,6 +39,7 @@ DENIED = [
     "git fetch origin && git push origin HEAD:merged-line",
     "git push --force-with-lease origin merged-line",
     "git push origin HEAD:refs/heads/merged-line",
+    "git commit -m \"$(cat <<'EOF'\nFix the gate's scope\nEOF\n)\" && git push origin HEAD:merged-line",
 ]
 
 ALLOWED = [

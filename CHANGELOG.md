@@ -4,6 +4,184 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.8.0] — 2026-10-21
+
+### Added
+- **The disarm (`prepush_disarm`, R3):** a push that lands on a PR armed for auto-squash, with a tree
+  no review receipt covers, turns auto-merge off on that PR, appends a line naming the push to the PR
+  body, and prints how to re-arm (the two reviewers, `rails review record`, then `rails ship`). It
+  acts whether `ship_review` only logged the push (shadow) or the operator pushed with
+  `RAILS_OPERATOR=1`; a prose-only push the receipt still covers leaves the PR armed. A body it could
+  not read is never rewritten. It judges the PR this worktree armed, and acts only on a push to
+  `origin` that the chained hook accepted. `rails check --post` disarms too (a `--no-verify` push
+  skipped the hook), judging the pushed head. `rails ship` does not arm a tree no review covers, in
+  the shadow week too: the disarm would undo it, or the PR could merge first. It judges the review
+  against `origin/<base>`, not a stale local branch. The PR body is read and written as UTF-8, and
+  `gh pr merge N --disable-auto`, the disarm's own remedy, is never refused as a merge
+  (`merge_by_effect`). A PR whose armed state gh could not read is treated as armed and
+  disarmed, and `rails check --post` posts no statuses while a PR it should have disarmed may
+  still be armed; `rails check --post` and `rails ship` then exit non-zero and say so.
+  (morphyxAI/jarvis#2621)
+- **`rearm_disarmed` (new gate, enforced from the start):** a PR is held when a push no review covers
+  lands on it (armed or not; the hold is written before the disarm, so a failed disarm still holds),
+  or when `rails ship` found no review covering its tree. The hold is kept per PR number, with its
+  branch, in the repo's shared state. An arm or a direct `gh pr merge` of a held PR (by number, by
+  branch, or with no selector in that branch's folder) is refused from a folder that does not hold it,
+  on another branch, or until a review covers the pushed head. A command that changes folder in a way
+  rails cannot follow (`cd "$WT"`) must then name the PR by number. A reviewed arm, or the PR leaving
+  OPEN, releases it. `arm_review` only logged until 2026-10-15, and a hand re-arm undid the disarm.
+  `arm_review` trusts `pr.json`'s PR number only on the branch it was opened from, and stamps and
+  releases only the PR it armed. A branch switch inside the command (`git switch`, `gh pr
+  checkout`) also needs the PR named by number. A merge naming another repo (`-R`, `--repo`,
+  `GH_REPO=` or `$env:GH_REPO =`, another repo's PR URL as the selector), or run from outside a
+  checkout, is refused: its holds and review are judged in that repo's checkout. A URL in `--body`
+  text names nothing, and `-R github.com/o/r` is `o/r`. In a held repo, a merge that names its PR
+  through a variable (`$PR`, `$(gh pr view ...)`) is refused: name the number. `arm_review` does not
+  stamp a PR armed across a branch or folder change it cannot follow. (morphyxAI/jarvis#2621)
+- **`rails state` lists every worktree's line of work (p1c):** one line each, with its branch, its
+  claim, its PR and its open items, read from the local store. A worktree whose folder is gone, or
+  half removed, is listed as gone. (morphyxAI/jarvis#2620)
+
+### Fixed (the holes the 1.3.0 review left open, morphyxAI/jarvis#2622)
+- **An agent's `--accept` no longer arms (p3b).** A review receipt whose open must-fixes an agent
+  accepted arms only after the operator's own prompt says `accept #<pr> <tree>` for that PR and the
+  receipt's tree (its first 7 or more hex digits), after the receipt. The operator's own accept arms
+  as before. New prompt word: `accept #<pr> <tree>`.
+- **Walk receipts are bound to their tree and their line of work (p3c, p3d).** `rails work done` and
+  `turn_end` count a walk only for this worktree's code tree (or one that differs only in prose) and
+  this line of work (the claim's branch, its first item, and when it was first claimed, pinned the
+  first time it is read: adding an issue keeps it, with jarvis's `claim.py` too). A later line reusing
+  `step: a1` does not inherit it. `rails walk` refuses a dirty tree.
+- **Launchers and `gh` aliases are judged as their plain form (p3e).** The shared command parser
+  unwraps `env ...`, `cmd /c`, `bash -c`/`pwsh -c "..."`, `Start-Process ... -ArgumentList`, and
+  `gh <alias>` from gh's own config, with its `$1`... filled in. The launcher's own words are still
+  judged too. Launchers nested past eight deep are refused; a script's own `-c` is its argument.
+  `bash -lc`, `bash -o pipefail -c` and `powershell -NoProfile -ExecutionPolicy Bypass -Command` are
+  unwrapped too. The shared parser also sees a command behind shell keywords (`if/then/do/!`),
+  inside a subshell `( ... )`, a `$(...)` or backtick substitution, a PowerShell `{ ... }` block,
+  and after a PowerShell `$x =` or `$x=` assignment. Substitutions are found only in text the shell
+  expands: one inside a quoted string, a heredoc body or a comment is text (a commit message that
+  mentions a command runs nothing), and PowerShell's backtick is an escape. A `cd` in a bash
+  subshell or a substitution does not move the rest of the command. A heredoc inside `$(...)` is
+  read as one, so an apostrophe in the default commit form's body (`"$(cat <<'EOF' ...)"`) no longer
+  hides every command after the commit. A `;`, `&&` or newline inside a comment (`#`, `<# #>`)
+  splits nothing, and no regex gate reads a comment (`git push  # update the PR` pushes the
+  current branch). A command's arguments are read once (`rails.shell.arguments`): a substitution
+  or group is one argument (`--match-head-commit $(git rev-parse HEAD)`, PowerShell `(gh ...)`),
+  and a redirection (`2>&1`, `> out.txt`, `<< EOF`, `<<< text`), its target and a backgrounding
+  `&` are none, for a PR selector and a push refspec alike. A line continuation joins, a `#`
+  inside a word is the word's, a subshell's closing `)` is found behind a redirect or a pipe, a
+  heredoc inside `$(...)`, quoted or not, ends at `EOF)` too (only there; one whose end never
+  comes is not read as one), its body is never read as words, and a bare `CLAUDECODE=0` reaches
+  `operator_bounds`. `merged_pr_push` and `destructive` read a refspec of `HEAD` or `@` as the
+  current branch, and `$(git branch --show-current)` (or `rev-parse --abbrev-ref HEAD`) as the
+  branch of the folder it runs in (a `:` inside it, as in `C:/x`, is not the refspec's `src:dst`);
+  what any other substitution prints is not guessed.
+  `merged_pr_push` sees a push behind `(`, `{` or a shell keyword, and `git -C <worktree> push`
+  as that worktree's branch (a PowerShell `C:\x` path keeps its backslashes, a Git Bash `/c/x`
+  path is `c:/x`, and a folder rails cannot find names no branch). A `GH_REPO=` in a quote or a
+  comment, or `$env:GH_REPO = $null`, names no repo. Subshells restore one level per `)`.
+  PowerShell `rm -r` and `Remove-Item -r` are recursive (bash `rm -r` keeps its rule), and
+  `$out = (git push ...)` is judged. `heredoc_write` reads a hyphenated delimiter, and ends a
+  heredoc at `EOF)` only inside a substitution (one opened on an earlier line too), as the
+  parser does. A heredoc body inside a double-quoted substitution is never words either; the
+  gates that judge the text a command sends read the bodies themselves
+  (`rails.shell.bash.heredoc_bodies`, `rails.shell.powershell.here_string_bodies`):
+  `leak_dispatch` checks every heredoc or here-string body of a `gh` or `git commit` command the
+  shell runs (`--body-file - <<'EOF'`, PowerShell `$body = @'...'@` and `@'...'@ | gh ...`, but
+  not a `gh` written into a script), plus `<<< text`, `git commit -F <file>`, `git -c k=v commit`
+  and `--body "$(cat f)"`; `merge_by_effect` reads a GraphQL query in its own statement's body,
+  or anywhere in the command when gh names it by variable. A folder that does not exist has no branch (`git -C "$WT" push --force` is
+  not a push to the main folder's branch), and `git -C a -C b` is `a/b`.
+- **`arm_review` judges the PR it arms (p3f).** `gh pr merge N --auto` for a PR headed by another
+  worktree's branch, or one whose head cannot be read, is refused. This worktree's `pr.json` naming N,
+  or GitHub saying this branch heads it, lets it through. A PR URL is judged as its number; no
+  selector, as this worktree's PR. An arm after `cd <worktree>` (a Git Bash `/c/...` path too) is
+  judged for that worktree, and a branch selector naming another branch is refused.
+- **`pr.json` follows the PR (p3g).** Any `rails` command re-reads an OPEN record's state (at most
+  once a minute); a merged or closed PR stops reading OPEN, and `armed` is cleared as `turn_end`
+  would settle it (see "With 1.6.2's `armed_pr`" below). A `gh` that hangs (10 s) or fails is
+  remembered for the minute too.
+- **A GraphQL read is judged by the body it reads (p3h).** An `--input` file that exists, also after a
+  `cd`, is read; a body that cannot be read is refused naming the path, instead of being judged an arm
+  (and stamping the PR armed). A body in a heredoc or piped from `echo` is read from the command; a
+  file fed in (`< q.json`) is read even when an echo or a heredoc sits elsewhere in the command.
+- **The intent ack works from the main folder (p3i).** A session started in the main checkout that
+  shows a worktree's intent stamps that worktree, and its next human message acks it there, while
+  that intent is still the one it showed, whether or not the main folder has an intent of its own.
+- **A milestone close from a script file is refused (p3j).** `python x.py`, `bash x.sh`, `pwsh -File
+  x.ps1`, `./x.sh`, `uv run x.py` and `uv run [--with ...] python[3] x.py` are judged by the
+  script's text. A test file, a script handed to `python -m tool`, and a read that assigns `data =`,
+  are not a close.
+- **A receipt's own fields win.** `kind`, `ts`, `leaf` and `via_agent` are written after the caller's
+  fields, so a caller cannot pass its own.
+
+### Fixed (review round 5, after the rebase onto 1.6.0)
+- **A merge inside double quotes is a merge.** `out="$(gh pr merge 12)"`, a backtick pair inside
+  `"..."`, and PowerShell's `"$(gh pr merge 12)"` run their command, so every tokenised gate judges
+  it. Single-quoted and escaped text (`\$(`, `` `$( ``) still runs nothing.
+- **A PowerShell block's statements are judged.** In `if ($?) { gh pr merge 12 --auto; gh pr view 12 }`
+  the first command, in the block's unclosed first piece, is no longer hidden, and the block's `}`
+  is no longer read as a branch selector (a false refusal of a reviewed arm). A block glued to its
+  condition (`if($?){...}`) is opened too. Blocks are found in the raw statement, so braces in
+  quoted text, a here-string or a comment are text. Statements split as on 1.6.0, so every gate
+  that reads them (pipe_mask, stash, heavy_pytest, merged_pr_push, detached_server) sees each of
+  a block's statements on its own. A command ends at its block's `}`: in `... gh pr merge --auto }
+  else { ... }` the `else` block is judged on its own, and `try { git push } catch { ... }`
+  pushes the current branch (`catch` is not a remote). A group's command is judged too
+  (`Write-Host (gh pr merge 12)`, `@(...)`).
+- **An arm after a branch switch names its PR.** `gh pr checkout 13 && gh pr merge --auto` is refused
+  by `arm_review` whether or not a PR is held: the review judged the tree from before the switch.
+  `git checkout -- <file>` restores files and switches nothing.
+- **`leak_dispatch` reads one statement at a time.** A flag is read only in a statement that runs
+  `git commit` or `gh` (`rg -F "git commit" docs/` sends nothing), including one inside a PowerShell
+  block, a command substitution (`url=$(gh pr create --body ...)`) or a PowerShell group. A body
+  file the command writes before sending it is judged by every statement that writes that exact
+  path (a redirect the shell reads, or a writer command, not a word in a title): it is read as
+  those statements' text only when each is the command's own (a heredoc, a here-string, an `echo`
+  or `Set-Content` literal, with nothing expanded and no program in its pipe); one program among
+  them and the file is refused unread. A copy already on disk is ignored only when the first
+  writer replaces the file; after an append (`>>`, `Add-Content`, `-Append`, `tee -a`) it is read
+  too.
+- **A PowerShell GraphQL read written in the command is read:** a here-string or a quoted literal
+  piped to `gh api graphql --input -`.
+- **`merge_by_effect` reads the whole command when a statement expands a variable** outside single
+  quotes, however it was set (`read -d '' q <<EOF`, `declare`, `[string]$q =`); a GraphQL `$n`
+  inside a single-quoted query reads nothing more.
+
+- **With 1.6.2's `armed_pr`.** A hand arm stamps the record of the PR it armed only (this branch's,
+  and the number it named), writing `armed_pr` (that number, or None when it named none), under
+  the lock `turn_end` settles under. `armed_number` is gone: one selector reader serves the stamp,
+  `_pr_numbers` and `_branch_selectors`. The pr.json refresh (p3g) settles a merge the way
+  `turn_end` does: only a record still naming the PR it looked up, `armed` cleared only when
+  `armed_pr` is absent or the record's own number, and a merge it settles leaves its debt
+  pending (`pending_debt`): `turn_end.settle_pending_debt` judges it at the Stop or at the next
+  `rails ship`, whichever comes first, against the walk receipts as they stand then. So a
+  `rails walk` between the merge and the Stop counts, and no debt is lost.
+
+- **A file a substitution in a sending statement reads is read.** `--body "Here's the log: $(tail -20
+  log.txt)"`, `-f body="$(cat f)"`, PowerShell `--body (Get-Content -Raw f)` read the file. The
+  substitutions are found in the raw statement with its own quoting (a single-quoted or escaped
+  `$(cat f)` reads nothing) and split into their statements (`$(tail f || echo none)`); in each
+  first pipeline stage (split on the raw text), a reader's files are read: bash `cat`'s words,
+  `tail`/`head`'s after `-n`/`-c` values; PowerShell `Get-Content`/`gc`/`type`/`cat`'s `-Path` or
+  first positional (every other parameter but a switch takes a value). An input redirect, found
+  on the quote-blanked text (`'<details>'` is text, `<(...)` runs a command), is read for a bare
+  `$(< f)` and for the commands whose output is their input (`cat`, `sort`, `grep`, ...; not a
+  count like `wc -l`); a quoted target (`< "my log.txt"`) is read as written. The sending
+  statement's own stdin (`--body-file - < f`, also behind `then`, `do`, `{`, `(` or as a leading
+  `< f gh ...`) is a whole body, read strictly and named as written; a reader piped into
+  it (`cat f | gh ... --body-file -`) is read best effort; a `<` inside its substitutions is
+  theirs. The null device (`/dev/null`, `nul`, `$null`) is an empty body, never a file the command
+  wrote. A whole-value read names its file by the same rules (`(Get-Content -Path:f -Raw)`). Redirects,
+  heredoc operators (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file) and flags are not
+  files. Best effort: a file found this way that cannot be read adds nothing (the substitution's
+  text is still read, as on main), so a misread word, a missing fallback (`$(cat VERSION || echo
+  dev)`) or `/dev/null` refuses nothing; a whole-value `--body "$(cat f)"`, `--body-file`, `-F` and
+  `@file` keep their could-not-look refusal. In PowerShell `$((...))` is a subexpression.
+
+Not yet: p3a (marking the shadow week's `would-deny` rows; the week ended 2026-10-15).
+
 ## [1.6.2] — 2026-10-20
 
 ### Fixed

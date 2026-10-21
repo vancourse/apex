@@ -13,9 +13,12 @@ Only a statement that writes is judged (a write method, or a body: gh's field fl
 ``--input``, curl's data flags), so reads are allowed: ``-X GET``, a plain ``gh api`` with a
 ``--jq`` that mentions "closed", listing closed ones (``milestones?state=closed``), and a
 ``--state closed`` in another statement. Changing a title or description is allowed too (an operator correction is
-written into the milestone description, and that goes through this API). What it cannot see:
-a request built in a script file, or a closed state assembled at run time. Shadow-first, like
-every new deny.
+written into the milestone description, and that goes through this API). A statement that
+runs a script file (``python x.py``, ``uv run python x.py``, ``bash x.sh``, ``pwsh -File x.ps1``,
+``./x.sh``, ``& ./x.ps1``) is judged by the script's text: one that names a milestone, writes
+and sets ``state`` to closed is refused like the command would be (p3j). What it cannot see: a
+closed state assembled at run time, or a script it cannot read. Shadow-first, like every new
+deny.
 """
 
 from __future__ import annotations
@@ -70,6 +73,78 @@ def _input_closes(evt: Event, command: str) -> bool:
     return False
 
 
+_SCRIPT = re.compile(r"\.(?:py|sh|bash|ps1|psm1)$", re.IGNORECASE)
+_TEST_FILE = re.compile(r"(?:^|[/\\])(?:tests?[/\\]|test_[^/\\]*$|conftest\.py$)")
+#: An HTTP write in a script's text: a write method named, a write call, or gh's
+#: body flags as tokens. (`data =` is any assignment in Python, not a write.)
+_SCRIPT_WRITES = re.compile(
+    r"\b(?:PATCH|POST|PUT)\b|\.(?:patch|post|put)\s*\(|['\"](?:-f|-F|--field|--raw-field|--input)['\"]"
+    r"|\s(?:-f|-F|--field|--raw-field|--input)\s"
+)
+_RUNNERS = {"python", "python3", "py", "uv", "bash", "sh", "zsh", "pwsh", "powershell", "&", "."}
+#: `uv run` options that take a value.
+_UV_VALUED = frozenset(
+    {"--with", "--with-requirements", "--with-editable", "--python", "-p", "--project", "--directory",
+     "--package", "--env-file", "--extra", "--group", "--index", "--only-group"}
+)
+
+
+def _scripts(evt: Event, command: str) -> list[Path]:
+    """The script files a command runs: the first argument naming one after a runner
+    (``python``, ``uv run python``, ``bash``, ``pwsh -File``, ``&``), or a statement that is
+    itself a script path (``./x.sh``)."""
+    from rails.gates.destructive import command_name, commands
+
+    found: list[Path] = []
+    try:
+        parsed = commands(command, evt.shell or "bash")
+    except Exception:  # noqa: BLE001
+        return found
+    for _, tokens in parsed:
+        if not tokens:
+            continue
+        head = command_name(tokens[0])
+        candidates = tokens[1:] if head in _RUNNERS else tokens[:1]
+        # `python -m pytest tests/x.py`: -m names the program, and what follows are its
+        # arguments; a test file is never the script that runs.
+        stop = next((i for i, tok in enumerate(candidates) if tok in ("-m", "-c", "run")), None)
+        if stop is not None and head != "uv":
+            candidates = candidates[:stop]
+        if head == "uv":
+            # `uv run [opts] x.py`, or `uv run [opts] python[3] x.py`; anything else uv runs
+            # (`uv run pytest ...`) names a program, not a script.
+            after = candidates[candidates.index("run") + 1 :] if "run" in candidates else []
+            i = 0
+            while i < len(after) and after[i].startswith("-"):
+                i += 2 if after[i] in _UV_VALUED else 1
+            after = after[i:]
+            if after and command_name(after[0]) in ("python", "python3", "py"):
+                after = after[1:]
+                candidates = after[: next((j for j, tok in enumerate(after) if tok in ("-m", "-c")), len(after))]
+            else:
+                candidates = after[:1]
+        for tok in candidates:
+            if _SCRIPT.search(tok.strip("'\"")) and not _TEST_FILE.search(tok):
+                path = Path(tok.strip("'\""))
+                if not path.is_absolute() and evt.cwd is not None:
+                    path = evt.cwd / path
+                found.append(path)
+                break
+    return found
+
+
+def _script_closes(evt: Event, command: str) -> str | None:
+    """The first script the command runs that writes a closed state to a milestone."""
+    for path in _scripts(evt, command):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "milestones" in text and _CLOSED.search(text) and _SCRIPT_WRITES.search(text):
+            return path.name
+    return None
+
+
 def _statements(evt: Event, command: str) -> list[str]:
     from rails.shell import segments
 
@@ -81,6 +156,17 @@ def _statements(evt: Event, command: str) -> list[str]:
 
 def check(evt: Event):
     command = evt.command or ""
+    lowered = command.lower()
+    script = (
+        _script_closes(evt, command)
+        if any(ext in lowered for ext in (".py", ".sh", ".ps1", ".bash", ".psm1"))
+        else None
+    )
+    if script:
+        return Deny(
+            f"rails: {script} writes state=closed to a milestone. Close it with `rails close <n>` - "
+            "it closes only when the operator said `used #<n> <task>` and no issue is open."
+        )
     if "milestones/" not in command:
         return None
     named = _MILESTONE.search(command)

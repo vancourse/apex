@@ -84,21 +84,60 @@ def _settle(repo: store.RepoId, pr: dict, settled: str, unproven: list[dict]) ->
         if store.read_json(path, None) != pr:
             return False
         if settled == "MERGED":
-            closes = {str(c).lstrip("#") for c in pr.get("closes") or []}
-            debt = {i.get("id") for i in unproven if str(i.get("closes", "")).lstrip("#") in closes}
-            if debt:
-                with store.updating(work.path(repo), {}) as fresh:
-                    for item in fresh.get("items", []):
-                        if item.get("status") == "open" and item.get("id") in debt:
-                            item["status"] = "unverified"
+            record_merge_debt(repo, pr, unproven)
         store.write_json(path, {**pr, "state": settled, "armed": False})
     return True
+
+
+def _unproven(repo: store.RepoId) -> list[dict]:
+    ok = work.passing_steps(repo)
+    return [
+        i
+        for i in work.load(repo)["items"]
+        if i.get("status") != "unverified" and i.get("step") and i["step"] not in ok and i.get("closes")
+    ]
+
+
+def settle_pending_debt(repo: store.RepoId, shadow: bool = False) -> None:
+    """The debt of a merge `cli.refresh_pr_state` saw first (``pending_debt``), judged now: at the
+    Stop or at the next `rails ship`, against the walk receipts as they stand then, so a walk that
+    passes after the merge leaves no debt (as `turn_end` alone judges it). The steps are read
+    outside pr.json's lock; the write is under it, only while the record is the one read."""
+    path = repo.leaf_dir / "pr.json"
+    pr = store.read_json(path, None)
+    if shadow or not isinstance(pr, dict) or not pr.get("pending_debt"):
+        return
+    unproven = _unproven(repo)
+    with store.locked(path):
+        record = store.read_json(path, None)
+        if not isinstance(record, dict) or not record.get("pending_debt") or record.get("number") != pr.get("number"):
+            return
+        record_merge_debt(repo, record, unproven)
+        record.pop("pending_debt", None)
+        store.write_json(path, record)
+
+
+def record_merge_debt(repo: store.RepoId, pr: dict, unproven: list[dict] | None = None) -> None:
+    """The debt a merged PR leaves: each open item closing one of its issues, with a step and no
+    passing walk receipt, becomes ``unverified``. One helper for the Stop (`_settle`) and for a
+    merge `cli.refresh_pr_state` saw first (`settle_pending_debt`). Called under pr.json's lock; it
+    takes work.json's (the order `_settle` uses)."""
+    if unproven is None:
+        unproven = _unproven(repo)
+    closes = {str(c).lstrip("#") for c in pr.get("closes") or []}
+    debt = {i.get("id") for i in unproven if str(i.get("closes", "")).lstrip("#") in closes}
+    if debt:
+        with store.updating(work.path(repo), {}) as fresh:
+            for item in fresh.get("items", []):
+                if item.get("status") == "open" and item.get("id") in debt:
+                    item["status"] = "unverified"
 
 
 def check(evt: Event):
     repo = store.find_repo(evt.cwd)
     if repo is None:
         return None
+    settle_pending_debt(repo, shadow=bool(evt.payload.get("_rails_shadow")))
     data = work.load(repo)
     pr = store.read_json(repo.leaf_dir / "pr.json", None)
     problems = []
