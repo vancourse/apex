@@ -444,7 +444,23 @@ def test_arm_review_refuses_a_hand_armed_merge_without_a_review(repo, commit, gi
     rid = store.find_repo(repo)
     store.write_json(rid.leaf_dir / "pr.json", {"number": 12, "armed": False})
     assert arm_review.check(arm) is None
-    assert store.read_json(rid.leaf_dir / "pr.json")["armed"] is True  # turn_end now holds the turn
+    record = store.read_json(rid.leaf_dir / "pr.json")
+    assert (record["armed"], record["armed_pr"]) == (True, 12)  # turn_end now holds the turn
+    # The number the arm named is recorded, so turn_end never settles a record under another
+    # PR's number (review of 1.6.2); a branch name or no argument names none.
+    for command, number in (
+        ("gh pr merge 12 --auto --squash", 12),
+        ("gh -R o/r pr merge 13 --squash --auto", 13),
+        ("gh pr merge https://github.com/o/r/pull/14 --auto", 14),
+        ("gh pr merge --auto --squash", None),
+        ("gh pr merge feature-branch --auto", None),
+        ("gh pr merge --subject 12 --auto 15", 15),
+        ("gh pr merge -R o/r 16 --auto", 16),
+        ("gh pr merge --body=x 17 --auto", 17),
+        ("gh api graphql -f query='mutation { enablePullRequestAutoMerge }'", None),
+    ):
+        tokens = [t for _, t in arm_review.commands(command, "bash")]
+        assert arm_review.armed_number(tokens) == number, command
 
 
 def test_arm_review_reads_words_and_judges_the_pushed_head(repo, commit, git, tmp_path):

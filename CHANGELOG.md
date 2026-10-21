@@ -29,6 +29,51 @@ All notable changes to rails (formerly apex) are documented here. Format follows
     jarvis agent commands: 108 of 1,092 refused, up from 27, every new one a multi-worker run.
 - jarvis's `ci/local_lanes.py` puts a lane run by hand under `rails lock` (morphyxAI/jarvis,
   same day), which closes the third way round.
+## [1.6.2] — 2026-10-20
+
+### Fixed
+- **A PR that already merged no longer holds the turns in its worktree.** `pr.json` gets `armed`
+  when a PR is armed (`rails ship`, or `arm_review` for one armed by hand), and nothing cleared
+  it after the merge. In jarvis on 2026-10-20, PR #2796 merged at 16:00 UTC, and a session's
+  turns ending in its worktree were still blocked with "PR #2796 is armed with no monitor bound".
+  There was no open PR to bind a monitor to, so the only ways past were a false
+  `rails work monitor-bound` or three blocks, after which the gate gives up and writes every open
+  closing item `unverified`. Before `turn_end` blocks over an armed PR (no monitor bound, or a
+  closing step with no walk receipt), it now looks the PR up with the lookup `merged_pr_push`
+  already uses (`gh pr list --head <branch> --state all`, 8 s timeout):
+  - **MERGED or CLOSED, and the record can be trusted to name it:** the turn ends, and
+    `pr.json` records that state with `armed: false`. For a merge, the closing items for the
+    issues that PR closes whose step has no walk receipt are written `unverified` at once. That
+    is narrower than the give-up, which writes every open closing item. A PR closed unmerged
+    closed nothing, so its items stay open.
+  - **Trusted** means all of:
+    - when the PR was armed by hand, the arm named this record's number. `arm_review` stamps
+      `armed` onto whatever record exists, so a PR armed by hand after a re-cut rides an older
+      record; it now also writes the number the command named as `armed_pr` (none for no
+      argument, a branch name or a GraphQL arm, and then the record is never settled; a record
+      stamped by 1.6.0's `arm_review` has no `armed_pr` and is trusted like `rails ship`'s);
+    - the record still says OPEN;
+    - it names the branch the worktree is on (a record with no branch: the current one);
+    - no open PR has that branch as its head.
+
+    Otherwise the turn blocks as before.
+  - **OPEN, not found, or no answer** (no `gh`, a timeout, an error): it blocks as on 1.6.0.
+  - **No lookup** on a turn with nothing to block. In shadow mode the lookup only decides
+    whether a would-block is logged; `pr.json` and the items are not written.
+  - `pr.json` is rewritten only if, re-read under the store's lock after the lookup, it is the
+    record that was looked up. Anything written meanwhile (a `rails ship`, an arm by hand, a
+    monitor bound) means nothing is written and the turn blocks; the next Stop looks again.
+    `arm_review` now stamps under the same lock; `rails ship` writes without it, so for a ship
+    this narrows the race rather than closing it.
+  - Once `pr.json` says MERGED or CLOSED, `second_pr` lets a new `gh pr create` through, and the
+    pre-push hook stops trusting the record and asks GitHub. A timeout or a failing `gh` still
+    counts as open; with no `gh` on PATH, or output it cannot parse, it does not. Both still
+    trust a stale OPEN anywhere `turn_end` has not looked, and a CLOSED record stays CLOSED if
+    the PR is later reopened.
+  - The Stop hook has 15 s. The lookup is one `git branch` (5 s cap) and one `gh` call (8 s
+    cap). If the whole hook runs past 15 s, Claude Code ends the turn without any Stop gate's
+    output.
+  - `rails --version`, the session-start line and posted statuses say 1.6.2 (`rails.VERSION`).
 
 ## [1.6.0] — 2026-10-19
 
