@@ -294,10 +294,15 @@ def _lane_lock(
             if isinstance(stamp, (int, float)):
                 with contextlib.suppress(OSError, ValueError, OverflowError):
                     since = time.strftime("%H:%M", time.localtime(stamp))
-            who = (
-                f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
-                f"{str(holder.get('sha', ''))[:12]}) since {since}"
-            )
+            if "leaf" in holder:
+                who = (
+                    f"{holder.get('leaf', '?')} ({holder.get('lane', '?')} at "
+                    f"{str(holder.get('sha', ''))[:12]}) since {since}"
+                )
+            upcoming = holder.get("next")
+            if isinstance(upcoming, dict):
+                # A trunk pass waits with priority: it runs before this lane does.
+                who += f"; {upcoming.get('leaf', '?')} goes next"
         print(
             f"  wait  {lane.name:<14} lock {lane.lock!r} held by {who}; "
             f"waited {waited / 60:.0f} min",

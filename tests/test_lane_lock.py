@@ -149,6 +149,69 @@ def test_a_holder_that_dies_without_releasing_frees_the_lock(hold):
     assert notes == [] and waited < 1.0
 
 
+def test_a_priority_waiter_gets_the_lock_before_a_plain_one(hold):
+    """a1. Another process holds "t"; a priority waiter queues, then a plain one that polls
+    fifty times as often. On release the priority one takes it, and the plain one only
+    after it lets go: without the claim, the faster poller would win."""
+    _, release = hold()
+    order: list[str] = []
+    claim = store.data_root() / "locks" / "t.priority.json"
+
+    def waiter(label: str, **kwargs) -> None:
+        with store.machine_lock("t", {"leaf": label}, **kwargs):
+            order.append(label)
+            time.sleep(0.3)
+
+    first = threading.Thread(target=waiter, args=("trunk",), kwargs={"priority": True, "poll": 0.05}, daemon=True)
+    first.start()
+    deadline = time.monotonic() + 20
+    while not claim.exists():
+        assert time.monotonic() < deadline, "the priority waiter never claimed its turn"
+        time.sleep(0.01)
+    notes: list[object] = []
+    second = threading.Thread(
+        target=waiter,
+        args=("session",),
+        kwargs={"poll": 0.001, "on_wait": lambda h, w: notes.append(h)},
+        daemon=True,
+    )
+    second.start()
+    time.sleep(0.2)
+    release.write_text("go")
+    first.join(30)
+    second.join(30)
+    assert order == ["trunk", "session"], order
+    assert notes and notes[0]["next"]["leaf"] == "trunk", notes
+    assert not claim.exists()
+
+
+def test_a_stale_priority_record_names_nobody_next(hold):
+    """A record with no claim behind it (a waiter that crashed, or one Windows would not
+    delete) is not a waiter: the wait line must not say a pass goes next (coop, review of
+    7aca8eb)."""
+    _, release = hold()
+    store.write_json(store.data_root() / "locks" / "t.priority.json", {"leaf": "rails trunk", "pid": 1})
+    notes: list[object] = []
+
+    def on_wait(holder, waited):
+        notes.append(holder)
+        release.write_text("go")
+
+    with store.machine_lock("t", {"leaf": "session"}, poll=0.02, on_wait=on_wait):
+        pass
+    assert notes and "next" not in notes[0], notes
+
+
+def test_a_plain_waiter_is_not_held_up_once_no_priority_waiter_waits(hold):
+    """The claim lives only while a priority waiter waits: once it has the lock, or has
+    gone, a plain waiter takes the lock at its next try."""
+    with store.machine_lock("t", {"leaf": "trunk"}, priority=True, poll=0.02) as waited:
+        assert waited < 1.0
+        assert not (store.data_root() / "locks" / "t.priority.json").exists()
+    with store.machine_lock("t", {"leaf": "session"}, poll=0.02) as waited:
+        assert waited < 1.0
+
+
 def test_an_unwritable_holder_record_does_not_cost_the_lock(monkeypatch):
     def refuse(*_args, **_kwargs):
         raise PermissionError(errno.EACCES, "held open by a waiter")

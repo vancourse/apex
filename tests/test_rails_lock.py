@@ -189,7 +189,7 @@ def test_a_locked_lane_and_a_trunk_rerun_advertise_the_lock_they_hold(tmp_path, 
 
     repo = store.RepoId(main=tmp_path, top=tmp_path, key="k", leaf="l")
     lane = lanes.Lane(name="suite", command=show, lock="suite", trunk_command=show, trunk_rerun=show)
-    with trunk._attribution_locks(repo, [lane], "abc123", io.StringIO()):
+    with trunk._pass_locks(repo, [lane], "abc123", io.StringIO()):
         assert os.environ["RAILS_LOCKS_HELD"] == f"suite:{os.getpid()}"
     assert "RAILS_LOCKS_HELD" not in os.environ
 
