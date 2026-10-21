@@ -107,7 +107,7 @@ def _reader_files(stage: list[str], shell: str) -> list[str]:
 #: send (`$(sort < f)`); a count (`wc -l < f`) or a program's result is not. "" is a bare `< f`.
 _BASH_INPUT_COMMANDS = frozenset({"", "cat", "tail", "head", "sort", "uniq", "grep", "tr", "sed", "cut"})
 #: An input redirect the shell reads: `<` that is not `<<`, `<&`, `<>` or a process substitution.
-_INPUT_REDIRECT = re.compile(r"(?<![<\w&])<(?![<&>(])\s*")
+_INPUT_REDIRECT = re.compile(r"(?<![<\w&])<(?![<&>(])")
 
 
 def _input_redirects(raw: str, shell: str) -> list[str]:
@@ -120,10 +120,62 @@ def _input_redirects(raw: str, shell: str) -> list[str]:
     visible = scrub(raw, "bash", comments=True)
     out = []
     for m in _INPUT_REDIRECT.finditer(visible):
-        target = re.match(r"'[^']*'|\"[^\"]*\"|[^\s;&|)<>]+", raw[m.end() :])
+        # the target as written: a quoted target is blank in `visible`, so it is read from `raw`
+        target = re.match(r"\s*((?:'[^']*'|\"[^\"]*\"|[^\s;&|)<>'\"])+)", raw[m.end() :])
         if target:
-            out.append(target.group(0).strip("'\""))
+            out.append(re.sub(r"['\"]", "", target.group(1)))
     return out
+
+
+#: The null device, however it is spelled: never a file written, never a body that could not be read.
+_NULL_DEVICES = frozenset({"/dev/null", "nul", "nul:", "$null", "\\\\.\\nul"})
+
+
+def _is_null(path: str) -> bool:
+    return path.strip().strip("'\"").lower() in _NULL_DEVICES
+
+
+def _without_substitutions(text: str, shell: str) -> str:
+    """``text`` with its substitutions blanked: what they read is `_files_read`'s, not the
+    statement's own stdin (`--body $(wc -l < f)`)."""
+    from rails.gates.destructive import _substitutions
+
+    for inner in _substitutions(text, shell):
+        for form in (f"$({inner})", f"`{inner}`"):
+            text = text.replace(form, " " * len(form))
+    return text
+
+
+def _sender_stdin(statement: str, shell: str) -> tuple[list[str], list[str]]:
+    """What the sending statement reads on stdin: (its own `< f`, a whole body read strictly; the
+    files a reader stage piped into it reads, best effort: `cat f | gh ... --body-file -`)."""
+    from rails.gates.destructive import command_name, command_words
+
+    stages = _stages(_without_substitutions(statement, shell), shell)
+    names = [command_name((command_words(_words(s, shell)) or [""])[0]).lower() for s in stages]
+    sender = next((k for k, n in enumerate(names) if n in ("gh", "git")), None)
+    if sender is None:
+        return [], []
+    own = _input_redirects(stages[sender], shell)
+    piped: list[str] = []
+    for k in range(sender):
+        words = command_words(_words(stages[k], shell))
+        piped.extend(_reader_files(words, shell))
+        if names[k] in _BASH_INPUT_COMMANDS:
+            piped.extend(_input_redirects(stages[k], shell))
+    return own, piped
+
+
+def _whole_value_files(value: str, shell: str) -> list[str]:
+    """The files a whole-value read names (`$(cat f)`, `$(< f)`, `(Get-Content -Path:f -Raw)`), by
+    the same rules as `_reader_files`; empty when it cannot tell."""
+    from rails.gates.destructive import command_words
+
+    inner = re.sub(r"^\$?\(\s*|\s*\)$", "", value)
+    words = _words(inner, shell)
+    if words and words[0].startswith("<") and not words[0].startswith("<<"):
+        return [words[1]] if words[0] == "<" and len(words) > 1 else [words[0][1:]]
+    return _reader_files(command_words(words) or words, shell)
 
 
 def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
@@ -133,7 +185,7 @@ def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
     single-quoted or escaped `$(cat f)` reads nothing; each substitution is split into its
     statements (`$(tail f || echo none)`), and only the first stage of each is a reader. Best
     effort: a name it finds that cannot be read adds nothing (see `extract_all`)."""
-    from rails.gates.destructive import _substitutions, command_name
+    from rails.gates.destructive import _substitutions, command_name, command_words
     from rails.shell import segments
 
     texts = list(_substitutions(statement, shell))
@@ -145,7 +197,7 @@ def _files_read(statement: str, shell: str, depth: int = 0) -> list[str]:
     for text in texts:
         for seg in segments(text, shell):
             first = _stages(seg, shell)[0]  # split on the raw text: `tail f|grep x`
-            words = _words(first, shell)
+            words = command_words(_words(first, shell)) or _words(first, shell)  # `LC_ALL=C sort < f`
             command = "" if not words or words[0].startswith("<") else command_name(words[0]).lower()
             if command in _BASH_INPUT_COMMANDS:
                 files.extend(_input_redirects(first, shell))
@@ -189,6 +241,8 @@ def _read(path: str, cwd: Path) -> str | None:
         path = base + path[temp.end() :] if base else path
     p = folder_of(path, cwd) if cwd is not None else Path(path)
     try:
+        if not p.is_file():
+            return None
         with open(p, encoding="utf-8", errors="replace") as handle:
             return handle.read(2_000_000)  # the head only, never the whole of a huge log in memory
     except (OSError, ValueError):  # ValueError: a NUL in the name
@@ -425,6 +479,8 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
     sending = 0  # index of the statement whose flags are being read
 
     def read_file(path: str) -> str:
+        if _is_null(path):
+            return ""  # the null device: an empty body, never a file this command wrote
         if path and path != "-":
             writers = _writers(path, statements[:sending], shell)
             if writers:
@@ -466,9 +522,12 @@ def extract_all(command: str, shell: str, cwd: Path) -> tuple[list[tuple[str, st
         # `/dev/null` refuses nothing; a crash here degrades to main's reading too. A file the
         # command writes before sending it is judged by its writers, as any other body file.
         try:
-            derived = list(dict.fromkeys(_files_read(statement, shell) + _input_redirects(statement, shell)))
+            own, piped = _sender_stdin(statement, shell)
+            derived = list(dict.fromkeys(_files_read(statement, shell) + piped))
         except Exception:  # noqa: BLE001 - best effort, never a hole in what main reads
-            derived = []
+            own, derived = [], []
+        for name in own:  # `--body-file - < f`: a whole body, read as `--body-file f` is
+            out.append((f"stdin: {name}", read_file(name)))
         for name in derived:
             label = f"read by a substitution: {name}"
             if _writers(name, statements[:sending], shell):
@@ -502,7 +561,10 @@ def _read_flags(words, command, is_git_commit, is_gh_pr_create, read_file, out, 
             out.append((flag, value))
             read = _READ_INTO.fullmatch(value.strip())
             if read:
-                out.append((f"{flag} {read.group(1)}", read_file(read.group(1))))  # `--body "$(cat f)"`
+                # `--body "$(cat f)"`: the whole value is the file, read strictly; its name by the
+                # reader's own rules (`Get-Content -Path:f -Raw` names f, not `-Path:f`)
+                for name in _whole_value_files(value.strip(), shell) or [read.group(1)]:
+                    out.append((f"{flag} {name}", read_file(name)))
             elif "$" in value:
                 out.append((flag, command))  # `-m $m`: the text was set elsewhere in the command
             i += step

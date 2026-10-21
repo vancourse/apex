@@ -168,7 +168,11 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   first positional (every other parameter but a switch takes a value). An input redirect, found
   on the quote-blanked text (`'<details>'` is text, `<(...)` runs a command), is read for a bare
   `$(< f)` and for the commands whose output is their input (`cat`, `sort`, `grep`, ...; not a
-  count like `wc -l`), and for the sending statement's own stdin (`--body-file - < f`). Redirects,
+  count like `wc -l`); a quoted target (`< "my log.txt"`) is read as written. The sending
+  statement's own stdin (`--body-file - < f`) is a whole body, read strictly; a reader piped into
+  it (`cat f | gh ... --body-file -`) is read best effort; a `<` inside its substitutions is
+  theirs. The null device (`/dev/null`, `nul`, `$null`) is an empty body, never a file the command
+  wrote. A whole-value read names its file by the same rules (`(Get-Content -Path:f -Raw)`). Redirects,
   heredoc operators (the default `-m "$(cat <<'EOF' ... EOF)"` reads no file) and flags are not
   files. Best effort: a file found this way that cannot be read adds nothing (the substitution's
   text is still read, as on main), so a misread word, a missing fallback (`$(cat VERSION || echo

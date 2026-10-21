@@ -1299,7 +1299,19 @@ def test_p2_a_ship_whose_statuses_were_held_back_says_so(repo, git, commit, monk
 
 def _leak(repo, shell, command):
     rows = [_row("leak_dispatch", ["PreToolUse"], ["Bash", "PowerShell", "Agent"])]
-    return dispatch(_evt("PreToolUse", repo, tool_name=shell, tool_input={"command": command}), rows).denies
+    out = dispatch(_evt("PreToolUse", repo, tool_name=shell, tool_input={"command": command}), rows)
+    # a gate that raises lets the call through: a "refuses nothing" test must not pass on a crash
+    assert not any("crashed" in n for n in out.notices), out.notices
+    return out.denies
+
+
+#: Words a misparse would read as files: each planted holding a value, so a misread one refuses.
+_MISREAD = ("notes.txt", "none", "ok", "SilentlyContinue", "x", "gh", "20", "utf8", "testcase", "echo", "log.txt;")
+
+
+def _plant_misreads(repo):
+    for name in _MISREAD:
+        (repo / name).write_text("total 1234.56\n", encoding="utf-8")
 
 
 def test_r5_leak_dispatch_reads_a_body_sent_from_inside_a_powershell_block(repo):
@@ -1739,6 +1751,7 @@ def test_r10_a_file_a_substitution_reads_is_read_wherever_it_sits(repo, shell, c
 )
 def test_r10_only_a_reader_s_files_are_read(repo, shell, command):
     _leaky_repo(repo)
+    _plant_misreads(repo)
     (repo / "log.txt").write_text("all green\n", encoding="utf-8")
     assert not _leak(repo, shell, command), command
 
@@ -1778,6 +1791,7 @@ def test_r10_a_pr_closed_unmerged_leaves_no_pending_debt(repo, tmp_path, monkeyp
 )
 def test_r11_shell_syntax_and_missing_files_refuse_nothing(repo, command):
     _leaky_repo(repo)
+    _plant_misreads(repo)
     (repo / "log.txt").write_text("total 1234.56\n" if "wc -l" in command else "all green\n", encoding="utf-8")
     assert not _leak(repo, "Bash", command), command
 
@@ -1818,3 +1832,74 @@ def test_r11_a_process_substitution_is_not_an_input_redirect(repo):
     _leaky_repo(repo)
     (repo / "(git").write_text("total 1234.56\n", encoding="utf-8")
     assert not _leak(repo, "Bash", 'gh pr comment 5 --body "Diff: $(cat <(git show HEAD:log.txt))"')
+
+
+# --- review round 12 (2026-10-20) --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "command"),
+    [
+        pytest.param("Bash", 'gh pr create --title x --body-file - < "log.txt"', id="quoted-stdin"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(cat < "log.txt")"', id="quoted-substitution-input"),
+        pytest.param("Bash", 'gh pr comment 5 --body "Log: $(LC_ALL=C sort < log.txt)"', id="env-prefix"),
+        pytest.param("Bash", "cat log.txt | gh pr create --title x --body-file -", id="a-reader-piped-into-the-sender"),
+        pytest.param("PowerShell", "Get-Content log.txt -Raw | gh pr create --title x --body-file -", id="ps-reader-piped-in"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Tail 20 log.txt)"', id="ps-tail-before-the-path"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Encoding utf8 log.txt)"', id="ps-encoding-before-the-path"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Path log.txt -Raw)"', id="ps-path"),
+        pytest.param("PowerShell", 'gh pr comment 5 --body "$(Get-Content -Path:log.txt -Raw)"', id="ps-path-colon"),
+    ],
+)
+def test_r12_a_file_read_in_these_shapes_is_read(repo, shell, command):
+    _leaky_repo(repo)
+    (repo / "log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    denies = _leak(repo, shell, command)
+    assert denies and not any("could not read" in d for d in denies), (command, denies)
+
+
+def test_r12_a_quoted_target_with_a_space_is_read(repo):
+    _leaky_repo(repo)
+    (repo / "my log.txt").write_text("total 1234.56\n", encoding="utf-8")
+    assert _leak(repo, "Bash", 'gh pr create --title x --body-file - < "my log.txt"')
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git fetch -q 2>/dev/null; gh pr comment 5 --body "done" < /dev/null',
+        'gh api repos/o/r/actions/artifacts 2>/dev/null | while read id; do gh api -X DELETE "repos/o/r/actions/artifacts/$id" < /dev/null; done',
+        "gh pr comment 5 --body-file /dev/null",
+    ],
+    ids=["stdin-after-a-stderr-redirect", "the-prune-loop", "a-null-body-file"],
+)
+def test_r12_the_null_device_is_neither_written_nor_unreadable(repo, command):
+    _leaky_repo(repo)
+    assert not _leak(repo, "Bash", command), command
+
+
+def test_r12_a_file_a_program_writes_and_a_substitution_reads_is_refused_unread(repo):
+    _leaky_repo(repo)
+    denies = _leak(repo, "Bash", 'uv run python report.py > out.txt && gh pr comment 5 --body "Log: $(tail -20 out.txt)"')
+    assert denies and "could not read" in denies[0], denies
+
+
+def test_r12_the_sender_s_own_stdin_is_a_whole_body(repo):
+    _leaky_repo(repo)
+    denies = _leak(repo, "Bash", "gh pr create --title x --body-file - < missing-body.md")
+    assert denies and "could not read" in denies[0], denies
+
+
+def test_r12_a_read_is_capped_and_a_nul_name_is_unreadable(repo):
+    from rails.gates import leak_dispatch
+
+    (repo / "big.txt").write_text("x" * 3_000_000, encoding="utf-8")
+    assert len(leak_dispatch._read("big.txt", repo)) == 2_000_000
+    assert leak_dispatch._read("a\x00b.txt", repo) is None
+    assert leak_dispatch._read(".", repo) is None  # a folder, not a file
+
+
+def test_r12_a_redirect_inside_a_substitution_is_not_the_sender_s_stdin(repo):
+    _leaky_repo(repo)
+    command = "uv run pytest -q > out.txt; gh api repos/o/r/issues/5/comments -f body=done -F lines=$(wc -l < out.txt)"
+    assert not _leak(repo, "Bash", command)
