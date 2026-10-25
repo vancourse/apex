@@ -20,11 +20,15 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ### Added
 - **`lock_when`: a lane asks before it waits.** With `lock`, an argv run in the worktree before
-  the lock. Exit 3 runs the lane without the lock, and the last line it printed is shown and
-  recorded (`lock_declined`). Any other answer takes the lock: 0, a crash, a usage error, a
-  command that cannot start, or no answer in 5 minutes. A lane run without its lock is not
-  told it holds it (`RAILS_LOCKS_HELD`). jarvis uses it to run a small test selection at once,
-  beside a suite that holds the lock.
+  the lock. Exit 3 with a last line `lock not needed: <why>` runs the lane without the lock,
+  and the why is shown and recorded (`lock_declined`). Any other answer takes the lock: 0, a
+  crash, a usage error, a command that cannot start, no answer in 5 minutes, or an exit 3
+  without that line (on Windows an abort exits 3). A lane run without its lock is not told it
+  holds it (`RAILS_LOCKS_HELD`), and is held to the commit it was sized on, as a locked lane
+  is after its wait. jarvis uses it to run a small test selection at once, beside a suite
+  that holds the lock.
+- **The trunk checks its kept tree out clean before the suite step** when a walk ran first, so
+  a walk's leftovers cannot fail the full run and pass its reruns.
 
 ## [1.7.0] — 2026-10-20
 
