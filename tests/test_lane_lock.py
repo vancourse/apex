@@ -460,6 +460,17 @@ def test_a_lane_whose_lock_when_says_anything_else_waits_for_the_lock(
     assert row["lock"] == "t" and "lock_declined" not in row, row
 
 
+def test_a_lock_when_whose_log_cannot_be_written_takes_the_lock(tmp_path, monkeypatch, py):
+    """An OSError asking `lock_when` (its log folder unwritable, say) is no answer: take
+    the lock (adversary, review of 5204f3a)."""
+    def unwritable(*_args):
+        raise PermissionError(13, "planted")
+
+    monkeypatch.setattr(check, "_ask_lock_when", unwritable)
+    lane = lanes.Lane(name="backend", lock="t", lock_when=[py, "-c", "print(1)"])
+    assert check._lock_declined(lane, tmp_path, tmp_path / "x.log") is None
+
+
 def test_an_edit_made_while_lock_when_answers_fails_the_check(repo, commit, py):
     """A declined lane is held to the commit it was sized on, as a locked one is after its
     wait: an edit during `lock_when` (up to five minutes) or an earlier lane certifies

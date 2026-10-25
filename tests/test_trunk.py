@@ -58,6 +58,8 @@ if count.with_name("mixed.on").exists():  # one test's own failure is load, anot
 if count.with_name("ports.on").exists():  # the box ran out of local ports mid-run
     fails.append("tests/test_x.py::test_flaky - psycopg.OperationalError: connection failed: "
                  "Address already in use (0x00002740/10048)")
+if (root / "walk-leftover.txt").exists():  # what a walk left in the shared tree
+    fails.append("tests/test_x.py::test_b - leftover")
 if count.with_name("old.broken").exists():  # an outside cause breaks test_old, by whatever name its file gives it
     renamed = "def test_new" in (root / "tests" / "test_x.py").read_text()
     fails.append("tests/test_x.py::" + ("test_new" if renamed else "test_old") + " - outside")
@@ -501,14 +503,17 @@ def test_what_a_walk_leaves_in_the_tree_does_not_reach_the_suite(site):
     _walk_lanes(site, f'["{PY}", "-c", "open(\'walk-leftover.txt\', \'w\').write(\'x\')"]')
     _pass(site)
     site.merge("src/a.py", "a = 1\n")
+    before = site.reruns()
     code, text = _pass(site)
+    # The fixture suite fails test_b when it finds the leftover: seen by the full run
+    # alone, it would rerun clean and pass, and read as a flake.
     assert code == 0 and site.forge.last()["state"] == "success", text
-    assert not (trunk.trunk_dir(site.repo) / "tree" / "walk-leftover.txt").exists()
+    assert "flake" not in site.forge.last()["description"] and site.reruns() == before, text
 
 
 def test_a_walk_that_reaches_no_verdict_runs_no_suite(site):
     """A lane with no rerun that fails without naming a failure ends the pass in `error`
-    before the suite's lock is taken or its full run started (coop, review of 3572777)."""
+    before the suite's full run starts, and leaves no lock held (coop, review of 3572777)."""
     _walk_lanes(site, f'["{PY}", "-c", "import sys; sys.exit(1)"]')
     _pass(site)
     site.merge("src/a.py", "a = 1\n")

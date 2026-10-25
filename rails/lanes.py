@@ -62,8 +62,10 @@ _DOS_DEVICES = frozenset(
 
 #: The one `lock_when` answer that runs a lane without its lock: exit 3 AND a last line
 #: that starts with `LOCK_DECLINED_SAYS`, followed by why. The exit alone is not enough:
-#: on Windows an abort or a fatal Python error also exits 3 (as does pytest's internal
-#: error), and a crash must never read as "no lock needed" (both voices, review of 3572777).
+#: on Windows a raised signal exits 3 (an abort under faulthandler, which pytest
+#: installs), as does pytest's internal error, and a crash must never read as "no lock
+#: needed" (both voices, review of 3572777). A `lock_when` prints that line last and
+#: exits at once.
 LOCK_DECLINED = 3
 LOCK_DECLINED_SAYS = "lock not needed:"
 #: What `rails trunk` may do with a culprit's PR: open an armed revert, open one for a

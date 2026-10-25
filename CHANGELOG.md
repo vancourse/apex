@@ -23,7 +23,7 @@ All notable changes to rails (formerly apex) are documented here. Format follows
   the lock. Exit 3 with a last line `lock not needed: <why>` runs the lane without the lock,
   and the why is shown and recorded (`lock_declined`). Any other answer takes the lock: 0, a
   crash, a usage error, a command that cannot start, no answer in 5 minutes, or an exit 3
-  without that line (on Windows an abort exits 3). A lane run without its lock is not told it
+  without that line (on Windows a raised signal exits 3). A lane run without its lock is not told it
   holds it (`RAILS_LOCKS_HELD`), and is held to the commit it was sized on, as a locked lane
   is after its wait. jarvis uses it to run a small test selection at once, beside a suite
   that holds the lock.
