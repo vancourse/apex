@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import os
 import shutil
 import signal
@@ -273,6 +274,54 @@ def _kill_tree(proc: subprocess.Popen) -> str:
     return note
 
 
+#: How long a lane's `lock_when` may take to answer before its lock is taken anyway.
+LOCK_WHEN_SECS = 300.0
+
+
+def _lock_declined(lane: lanes_mod.Lane, top: Path, log_path: Path) -> str | None:
+    """Why ``lane`` runs without its lock this time, or None to take it.
+
+    Its ``lock_when`` runs in the worktree with the lane's env; exit ``LOCK_DECLINED``
+    runs the lane unlocked, and the last line it printed says why. Any other answer takes
+    the lock: a command that crashes, hangs or cannot start costs a wait, never a second
+    suite beside a held one. Its output goes to ``log_path`` (not a pipe: a grandchild
+    left holding a pipe would hang the read after a timeout)."""
+    if not (lane.lock and lane.lock_when):
+        return None
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env.update(lane.env)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    with open(log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log:
+        log.write(f"$ {' '.join(lane.lock_when)}\n")
+        log.flush()
+        try:
+            proc = subprocess.Popen(
+                _resolve(lane.lock_when),
+                cwd=str(top),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError as exc:
+            log.write(f"\nRAILS: could not start: {exc}\n")
+            return None
+        try:
+            code = proc.wait(timeout=LOCK_WHEN_SECS)
+        except subprocess.TimeoutExpired:
+            log.write(f"\nRAILS: no answer in {LOCK_WHEN_SECS:.0f}s; {_kill_tree(proc)}\n")
+            return None
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+    if code != lanes_mod.LOCK_DECLINED:
+        return None
+    said = [line.strip() for line in _tail(log_path).splitlines() if line.strip()]
+    return (said[-1] if len(said) > 1 else "lock_when declined it")[:200]
+
+
 def _lane_lock(
     lane: lanes_mod.Lane, repo: store.RepoId, sha: str, out
 ) -> contextlib.AbstractContextManager[float]:
@@ -479,8 +528,14 @@ def check(
         log_path = log_dir / f"{lane.name}.log"
         lock_fields: dict[str, object] = {}
         moved = prerequisite = None
-        with _lane_lock(lane, repo, sha, out) as waited:
-            if lane.lock:
+        runs = lane
+        declined = _lock_declined(lane, top, log_dir / f"{lane.name}.lock_when.log")
+        if declined is not None:
+            print(f"  free  {lane.name:<14} lock {lane.lock!r} not taken: {declined}", file=out, flush=True)
+            lock_fields = {"lock": lane.lock, "lock_declined": declined}
+            runs = dataclasses.replace(lane, lock="")  # nor held for its children (`HELD_ENV`)
+        with _lane_lock(runs, repo, sha, out) as waited:
+            if runs.lock:
                 lock_fields = {"lock": lane.lock, "waited": round(waited, 1)}
                 # The slow probe first, the git re-read last: the window between the
                 # re-read and the lane's start stays as short as it can be.
@@ -488,7 +543,7 @@ def check(
                 moved = _moved_since_start(top, sha, tree_sha, dirty, allow_dirty)
             if moved is None and prerequisite is None:
                 print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
-                code, secs = run_lane(lane, top, log_path)
+                code, secs = run_lane(runs, top, log_path)
         if moved is not None:
             # The whole check stops describing `sha`, so it fails whatever the lane's
             # advisory date, and no later lane runs on the moved tree under `sha`.

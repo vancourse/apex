@@ -31,6 +31,7 @@ Schema::
     needs = ["postgres"]              # prerequisites: docker | postgres | node | pnpm | uv
     advisory_until = "2026-10-20"     # optional: runs and reports, gates nothing, until this date
     lock = "suite"                    # optional: wait for this machine-wide lock first; the wait is outside timeout_min
+    lock_when = ["uv", "run", "python", "sized.py"]   # with lock: asked first; exit 3 runs the lane without it
     trunk_command = ["uv", "run", "pytest", "-q"]   # optional: what `rails trunk` runs on the base tip after merges
     trunk_rerun = ["uv", "run", "pytest", "-q"]     # with trunk_command: reruns failed test ids (appended)
     trunk_timeout_min = 120           # with trunk_command: its timeout (default: twice timeout_min)
@@ -59,6 +60,9 @@ _DOS_DEVICES = frozenset(
 )
 
 
+#: The one `lock_when` exit that runs a lane without its lock. Not 1 or 2: a crash or a
+#: usage error must not read as "no lock needed".
+LOCK_DECLINED = 3
 #: What `rails trunk` may do with a culprit's PR: open an armed revert, open one for a
 #: person to arm, or only report.
 TRUNK_REVERT = ("auto", "propose", "off")
@@ -83,6 +87,10 @@ class Lane:
     # A machine-wide lock taken before the lane runs: every worktree and repo on the box
     # whose lane names the same lock runs it one at a time. Empty: no lock.
     lock: str = ""
+    # With `lock`: an argv run in the worktree before the lock is waited for. Exit
+    # `LOCK_DECLINED` runs the lane without the lock (a selection small enough to share
+    # the box); any other exit, a timeout or a command that cannot start takes it.
+    lock_when: list[str] = field(default_factory=list)
     # A trunk lane also runs on the base branch's tip after merges (`rails trunk`), pooled
     # over every merge since the last pass. `trunk_rerun` is the argv that reruns the
     # failed test ids it reports, to tell a flake from a culprit and to bisect.
@@ -191,6 +199,13 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 f"lane {name!r}: lock {lock!r} must be a plain word "
                 "(letters, digits, '.', '_' or '-', at most 64, not a Windows device name)"
             )
+        lock_when = raw.get("lock_when", [])
+        if not isinstance(lock_when, list):
+            raise ValueError(
+                f"lane {name!r}: lock_when must be an argv list, not {lock_when!r}"
+            )
+        if lock_when and not lock:
+            raise ValueError(f"lane {name!r}: lock_when needs a lock")
         for key in ("trunk_command", "trunk_rerun"):
             if isinstance(raw.get(key, []), str):
                 raise ValueError(
@@ -211,6 +226,7 @@ def parse(data: dict[str, Any]) -> LaneConfig:
                 needs=list(raw.get("needs", [])),
                 advisory_until=str(raw.get("advisory_until", "")),
                 lock=lock,
+                lock_when=[str(part) for part in lock_when],
                 trunk_command=[str(part) for part in raw.get("trunk_command", [])],
                 trunk_rerun=[str(part) for part in raw.get("trunk_rerun", [])],
                 trunk_timeout_min=float(raw.get("trunk_timeout_min", 0)),
