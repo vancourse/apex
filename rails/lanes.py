@@ -31,7 +31,7 @@ Schema::
     needs = ["postgres"]              # prerequisites: docker | postgres | node | pnpm | uv
     advisory_until = "2026-10-20"     # optional: runs and reports, gates nothing, until this date
     lock = "suite"                    # optional: wait for this machine-wide lock first; the wait is outside timeout_min
-    lock_when = ["uv", "run", "python", "sized.py"]   # with lock: asked first; exit 3 runs the lane without it
+    lock_when = ["uv", "run", "python", "sized.py"]   # with lock: asked first; exit 3 saying "lock not needed: <why>" runs it without
     trunk_command = ["uv", "run", "pytest", "-q"]   # optional: what `rails trunk` runs on the base tip after merges
     trunk_rerun = ["uv", "run", "pytest", "-q"]     # with trunk_command: reruns failed test ids (appended)
     trunk_timeout_min = 120           # with trunk_command: its timeout (default: twice timeout_min)
@@ -60,9 +60,12 @@ _DOS_DEVICES = frozenset(
 )
 
 
-#: The one `lock_when` exit that runs a lane without its lock. Not 1 or 2: a crash or a
-#: usage error must not read as "no lock needed".
+#: The one `lock_when` answer that runs a lane without its lock: exit 3 AND a last line
+#: that starts with `LOCK_DECLINED_SAYS`, followed by why. The exit alone is not enough:
+#: on Windows an abort or a fatal Python error also exits 3 (as does pytest's internal
+#: error), and a crash must never read as "no lock needed" (both voices, review of 3572777).
 LOCK_DECLINED = 3
+LOCK_DECLINED_SAYS = "lock not needed:"
 #: What `rails trunk` may do with a culprit's PR: open an armed revert, open one for a
 #: person to arm, or only report.
 TRUNK_REVERT = ("auto", "propose", "off")
@@ -88,8 +91,9 @@ class Lane:
     # whose lane names the same lock runs it one at a time. Empty: no lock.
     lock: str = ""
     # With `lock`: an argv run in the worktree before the lock is waited for. Exit
-    # `LOCK_DECLINED` runs the lane without the lock (a selection small enough to share
-    # the box); any other exit, a timeout or a command that cannot start takes it.
+    # `LOCK_DECLINED` with a last line `LOCK_DECLINED_SAYS <why>` runs the lane without
+    # the lock (a selection small enough to share the box); any other answer, a timeout
+    # or a command that cannot start takes it.
     lock_when: list[str] = field(default_factory=list)
     # A trunk lane also runs on the base branch's tip after merges (`rails trunk`), pooled
     # over every merge since the last pass. `trunk_rerun` is the argv that reruns the

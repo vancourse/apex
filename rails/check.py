@@ -281,13 +281,21 @@ LOCK_WHEN_SECS = 300.0
 def _lock_declined(lane: lanes_mod.Lane, top: Path, log_path: Path) -> str | None:
     """Why ``lane`` runs without its lock this time, or None to take it.
 
-    Its ``lock_when`` runs in the worktree with the lane's env; exit ``LOCK_DECLINED``
-    runs the lane unlocked, and the last line it printed says why. Any other answer takes
-    the lock: a command that crashes, hangs or cannot start costs a wait, never a second
-    suite beside a held one. Its output goes to ``log_path`` (not a pipe: a grandchild
-    left holding a pipe would hang the read after a timeout)."""
+    Its ``lock_when`` runs in the worktree with the lane's env. Exit ``LOCK_DECLINED``
+    with a last line ``LOCK_DECLINED_SAYS <why>`` runs the lane unlocked. Any other answer
+    takes the lock: a command that crashes, hangs or cannot start, or a log that cannot be
+    written, costs a wait, never a second suite beside a held one. Its output goes to
+    ``log_path`` (not a pipe: a grandchild left holding a pipe would hang the read after a
+    timeout)."""
     if not (lane.lock and lane.lock_when):
         return None
+    try:
+        return _ask_lock_when(lane, top, log_path)
+    except OSError:
+        return None
+
+
+def _ask_lock_when(lane: lanes_mod.Lane, top: Path, log_path: Path) -> str | None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.update(lane.env)
@@ -316,10 +324,11 @@ def _lock_declined(lane: lanes_mod.Lane, top: Path, log_path: Path) -> str | Non
             proc.kill()
             proc.wait()
             raise
-    if code != lanes_mod.LOCK_DECLINED:
-        return None
     said = [line.strip() for line in _tail(log_path).splitlines() if line.strip()]
-    return (said[-1] if len(said) > 1 else "lock_when declined it")[:200]
+    last = said[-1] if said else ""
+    if code != lanes_mod.LOCK_DECLINED or not last.startswith(lanes_mod.LOCK_DECLINED_SAYS):
+        return None
+    return (last[len(lanes_mod.LOCK_DECLINED_SAYS) :].strip() or "lock_when declined it")[:200]
 
 
 def _lane_lock(
@@ -540,6 +549,9 @@ def check(
                 # The slow probe first, the git re-read last: the window between the
                 # re-read and the lane's start stays as short as it can be.
                 prerequisite = missing_prerequisite(lane)
+            if runs.lock or declined is not None:
+                # A lock wait, or a `lock_when` answer and the lanes before it, can last
+                # long enough to commit or edit in (adversary, review of 3572777).
                 moved = _moved_since_start(top, sha, tree_sha, dirty, allow_dirty)
             if moved is None and prerequisite is None:
                 print(f"  run   {lane.name:<14} {' '.join(lane.command)}", file=out, flush=True)
@@ -547,7 +559,8 @@ def check(
         if moved is not None:
             # The whole check stops describing `sha`, so it fails whatever the lane's
             # advisory date, and no later lane runs on the moved tree under `sha`.
-            why = f"{moved}, checked after lock {lane.lock!r} (waited {waited:.0f}s)"
+            after = f"lock {lane.lock!r} (waited {waited:.0f}s)" if runs.lock else "lock_when"
+            why = f"{moved}, checked after {after}"
             print(f"  FAIL  {lane.name:<14} {why}", file=out)
             receipts.write(
                 repo,

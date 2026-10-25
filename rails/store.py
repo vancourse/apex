@@ -211,19 +211,6 @@ def _held_for_us(name: str, holder_path: Path) -> bool:
     return False
 
 
-def holds_record(name: str) -> bool:
-    """Whether the holder record of the machine lock ``name`` names this process: what a
-    child re-enters by (`_held_for_us`). ``machine_lock`` writes it best-effort, so a holder
-    that runs a child needing the lock checks it first, or the child waits on its parent."""
-    path = data_root() / "locks" / f"{name}.holder.json"
-    record = read_json(path, None)
-    if isinstance(record, dict) and record.get("pid") == os.getpid():
-        return True
-    # Held by an ancestor (a `rails lock suite -- rails trunk run`): its child re-enters by
-    # the same record (adversary, review of 90be54f).
-    return _held_for_us(name, path)
-
-
 def held_env(names: list[str], environ: Mapping[str, str] | None = None) -> str:
     """``HELD_ENV``'s value for a child of this process while it holds ``names``."""
     environ = os.environ if environ is None else environ

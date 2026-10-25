@@ -484,6 +484,43 @@ def test_a_walk_runs_first_under_its_own_lock_while_the_suites_lock_is_free(site
     assert "full free" not in lines and "rerun free" not in lines, lines
 
 
+def _walk_lanes(site, trunk_command: str) -> None:
+    _relanes(site, needs=(
+        'lock = "trunklock"\n'
+        '[[lane]]\nname = "walks"\nalways = true\n'
+        f'command = ["{PY}", "-c", "print(1)"]\n'
+        f"trunk_command = {trunk_command}\n"
+        'lock = "walklock"\n'
+    ))
+
+
+def test_what_a_walk_leaves_in_the_tree_does_not_reach_the_suite(site):
+    """The lanes share the kept tree. A walk runs first now, so the tree is checked out
+    clean again before the full run, whose reruns start clean too (coop, review of
+    3572777): a walk's leftovers would otherwise fail it and pass its reruns, a flake."""
+    _walk_lanes(site, f'["{PY}", "-c", "open(\'walk-leftover.txt\', \'w\').write(\'x\')"]')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    code, text = _pass(site)
+    assert code == 0 and site.forge.last()["state"] == "success", text
+    assert not (trunk.trunk_dir(site.repo) / "tree" / "walk-leftover.txt").exists()
+
+
+def test_a_walk_that_reaches_no_verdict_runs_no_suite(site):
+    """A lane with no rerun that fails without naming a failure ends the pass in `error`
+    before the suite's lock is taken or its full run started (coop, review of 3572777)."""
+    _walk_lanes(site, f'["{PY}", "-c", "import sys; sys.exit(1)"]')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    before = site.runs()
+    code, text = _pass(site)
+    assert site.forge.last()["state"] == "error", text
+    assert "walks exited 1" in site.forge.last()["description"], site.forge.last()
+    assert site.runs() == before, "the suite ran after a pass that can reach no verdict"
+    with store.machine_lock("trunklock", {}, wait=False):
+        pass  # free: LockBusy here is a lock the pass kept
+
+
 def test_a_pass_that_cannot_start_a_lane_on_an_idle_box_says_so_at_once(site, monkeypatch):
     """Docker down, Postgres gone, and no suite running: the box, not the tip. The pass
     posts `error` without taking the lock (adversary, review of 7aca8eb)."""
@@ -537,19 +574,6 @@ def test_a_prerequisite_a_running_suite_loads_is_checked_after_that_suite(site, 
     runner.join(120)
     code, text = box["r"]
     assert code == 0 and site.forge.last()["state"] == "success", text
-
-
-def test_a_revert_check_needs_no_lock_record_from_the_pass(site, monkeypatch):
-    """The pass holds no lock while it acts, so a revert's own `rails check` waits on
-    nobody it started (adversary, review of 7aca8eb): it runs whatever the holder records
-    say, where it was skipped while the pass held the lock throughout."""
-    _relanes(site, needs='lock = "trunklock"')
-    _pass(site)
-    site.merge("src/b.py", "boom = 1\n")
-    monkeypatch.setattr(store, "holds_record", lambda name: False)
-    code, text = _pass(site)
-    assert "revert check skipped" not in text, text
-    assert site.checked == [901]
 
 
 def test_a_resumed_revert_is_checked_by_the_next_pass(site):

@@ -405,7 +405,7 @@ def test_a_lane_whose_lock_when_declines_runs_beside_a_held_lock(repo, commit, p
     _write_lanes(
         repo,
         _lane("backend", py, lock="t", code=_NOT_TOLD_HELD,
-              extra=_asks(py, "import sys; print('small: 3 test modules'); sys.exit(3)")),
+              extra=_asks(py, "import sys; print('lock not needed: small: 3 test modules'); sys.exit(3)")),
     )
     sha = commit(repo, "src/a.py", "x = 1\n")
     proc, release = hold()
@@ -424,19 +424,24 @@ def test_a_lane_whose_lock_when_declines_runs_beside_a_held_lock(repo, commit, p
 
 @pytest.mark.parametrize(
     "answer",
-    ["take", "crash", "usage", "missing", "hang"],
+    ["take", "crash", "usage", "missing", "hang", "bare 3", "said, then more", "said, exit 0"],
 )
 def test_a_lane_whose_lock_when_says_anything_else_waits_for_the_lock(
     repo, commit, py, hold, monkeypatch, answer
 ):
-    """f2. Exit 0 takes the lock; so does every answer that is not exit 3: a crash (1), a
-    usage error (2), a command that cannot start, and one that does not answer in time.
-    None of them may run a second suite beside a held one."""
+    """f2. Exit 0 takes the lock; so does every answer that is not exit 3 with a last line
+    `lock not needed: <why>`: a crash (1), a usage error (2), a command that cannot start,
+    one that does not answer in time, and an exit 3 without that line, which is how an
+    abort ends on Windows (both voices, review of 3572777). None of them may run a second
+    suite beside a held one."""
     code = {
         "take": "import sys; sys.exit(0)",
         "crash": "raise SystemExit('boom')",
         "usage": "import sys; sys.exit(2)",
         "hang": "import time; time.sleep(60)",
+        "bare 3": "import sys; sys.exit(3)",
+        "said, then more": "import sys; print('lock not needed: x'); print('Traceback'); sys.exit(3)",
+        "said, exit 0": "print('lock not needed: x')",
     }.get(answer, "")
     asks = 'lock_when = ["no-such-command-rails-test"]\n' if answer == "missing" else _asks(py, code)
     if answer == "hang":
@@ -453,6 +458,23 @@ def test_a_lane_whose_lock_when_says_anything_else_waits_for_the_lock(
     assert "free  backend" not in text and text.index("wait  backend") < text.index("run   backend"), text
     (row,) = receipts.read(store.find_repo(repo), "lane", sha=sha)
     assert row["lock"] == "t" and "lock_declined" not in row, row
+
+
+def test_an_edit_made_while_lock_when_answers_fails_the_check(repo, commit, py):
+    """A declined lane is held to the commit it was sized on, as a locked one is after its
+    wait: an edit during `lock_when` (up to five minutes) or an earlier lane certifies
+    nothing (adversary, review of 3572777)."""
+    edits = "import pathlib, sys; pathlib.Path('src/a.py').write_text('x = 2'); print('lock not needed: x'); sys.exit(3)"
+    _write_lanes(repo, _lane("backend", py, lock="t", code=_GATE, extra=_asks(py, edits)))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    out = io.StringIO()
+    assert check.check(repo, out=out) == 1, out.getvalue()
+    assert "tracked files changed since the check started (src/a.py), checked after lock_when" in out.getvalue()
+    assert "run   backend" not in out.getvalue()
+    rid = store.find_repo(repo)
+    assert not receipts.has_marker(rid, sha, full=True)
+    (row,) = receipts.read(rid, "lane", sha=sha)
+    assert row["exit"] == 125 and row["lock_declined"] == "x", row
 
 
 def _in_thread(fn, seconds: float):

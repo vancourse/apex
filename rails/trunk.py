@@ -954,15 +954,20 @@ def _judge(
         return True
 
     rerunning = [lane for lane in trunk_lanes if lane.trunk_rerun]
-    reached = True
+    reached, ran = True, False
     for lane in trunk_lanes:
         if not lane.trunk_rerun:
             with _pass_locks(repo, [lane], tip, out):
-                reached = run(lane)
+                reached, ran = run(lane), True
             if not reached:
                 break
     if reached and rerunning:
         held.enter_context(_pass_locks(repo, rerunning, tip, out))
+        if ran:
+            # The lanes share the kept tree: what one before left there must not reach a
+            # full run whose reruns start clean (`_ask`), or its failure reads as a flake
+            # (coop, review of 3572777). Ignored files survive, so this is cheap.
+            _checkout(top, tree_path, tip)
         for lane in rerunning:
             if not run(lane):
                 break
