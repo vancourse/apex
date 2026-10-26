@@ -376,3 +376,123 @@ def test_a_lane_without_a_lock_takes_none(repo, commit, py):
     assert not (store.data_root() / "locks").exists()
     (row,) = receipts.read(store.find_repo(repo), "lane", sha=sha)
     assert "lock" not in row and "waited" not in row
+
+
+# --- lock_when (operator 2026-10-25) ----------------------------------------------------
+
+#: The lane fails if it was told it holds lock "t": a lane run without the lock must not
+#: let its own `rails lock t` re-enter a lock nobody took for it.
+_NOT_TOLD_HELD = "import os, sys; sys.exit(1 if 't:' in os.environ.get('RAILS_LOCKS_HELD', '') else 0)"
+
+
+def _asks(py: str, code: str) -> str:
+    return f'lock_when = ["{py}", "-c", "{code}"]\n'
+
+
+def test_lock_when_is_parsed_and_needs_a_lock_and_an_argv():
+    config = lanes.loads('[[lane]]\nname = "suite"\nlock = "suite"\nlock_when = ["sized", "--needs-lock"]\n')
+    assert config.lane("suite").lock_when == ["sized", "--needs-lock"]
+    assert lanes.loads('[[lane]]\nname = "suite"\nlock = "suite"\n').lane("suite").lock_when == []
+    with pytest.raises(ValueError, match="needs a lock"):
+        lanes.loads('[[lane]]\nname = "suite"\nlock_when = ["sized"]\n')
+    with pytest.raises(ValueError, match="argv list"):
+        lanes.loads('[[lane]]\nname = "suite"\nlock = "suite"\nlock_when = "sized --needs-lock"\n')
+
+
+def test_a_lane_whose_lock_when_declines_runs_beside_a_held_lock(repo, commit, py, hold):
+    """f2. Exit 3: the lane runs at once while another check holds its lock, says why,
+    records it, and is not told it holds the lock."""
+    _write_lanes(
+        repo,
+        _lane("backend", py, lock="t", code=_NOT_TOLD_HELD,
+              extra=_asks(py, "import sys; print('lock not needed: small: 3 test modules'); sys.exit(3)")),
+    )
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    proc, release = hold()
+    out = io.StringIO()
+    assert _in_thread(lambda: check.check(repo, out=out), 60.0) == 0, out.getvalue()
+    assert proc.poll() is None, "the holder let go: the lane may have waited for it"
+    text = out.getvalue()
+    assert "free  backend        lock 't' not taken: small: 3 test modules" in text, text
+    assert "wait  backend" not in text, text
+    (row,) = receipts.read(store.find_repo(repo), "lane", sha=sha)
+    assert row["exit"] == 0 and row["lock_declined"] == "small: 3 test modules", row
+    assert "waited" not in row and receipts.valid(row)
+    release.write_text("go")
+    proc.wait(timeout=20)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["take", "crash", "usage", "missing", "hang", "bare 3", "said, then more", "said, exit 0"],
+)
+def test_a_lane_whose_lock_when_says_anything_else_waits_for_the_lock(
+    repo, commit, py, hold, monkeypatch, answer
+):
+    """f2. Exit 0 takes the lock; so does every answer that is not exit 3 with a last line
+    `lock not needed: <why>`: a crash (1), a usage error (2), a command that cannot start,
+    one that does not answer in time, and an exit 3 without that line, which is how an
+    abort ends on Windows (both voices, review of 3572777). None of them may run a second
+    suite beside a held one."""
+    code = {
+        "take": "import sys; sys.exit(0)",
+        "crash": "raise SystemExit('boom')",
+        "usage": "import sys; sys.exit(2)",
+        "hang": "import time; time.sleep(60)",
+        "bare 3": "import sys; sys.exit(3)",
+        "said, then more": "import sys; print('lock not needed: x'); print('Traceback'); sys.exit(3)",
+        "said, exit 0": "print('lock not needed: x')",
+    }.get(answer, "")
+    asks = 'lock_when = ["no-such-command-rails-test"]\n' if answer == "missing" else _asks(py, code)
+    if answer == "hang":
+        monkeypatch.setattr(check, "LOCK_WHEN_SECS", 1.0)
+    _write_lanes(repo, _lane("backend", py, lock="t", extra=asks))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    proc, release = hold()
+    out = io.StringIO()
+    watcher = _when_waiting(out, "backend", lambda: release.write_text("go"))
+    assert check.check(repo, out=out) == 0, out.getvalue()
+    watcher.join(timeout=20)
+    proc.wait(timeout=20)
+    text = out.getvalue()
+    assert "free  backend" not in text and text.index("wait  backend") < text.index("run   backend"), text
+    (row,) = receipts.read(store.find_repo(repo), "lane", sha=sha)
+    assert row["lock"] == "t" and "lock_declined" not in row, row
+
+
+def test_a_lock_when_whose_log_cannot_be_written_takes_the_lock(tmp_path, monkeypatch, py):
+    """An OSError asking `lock_when` (its log folder unwritable, say) is no answer: take
+    the lock (adversary, review of 5204f3a)."""
+    def unwritable(*_args):
+        raise PermissionError(13, "planted")
+
+    monkeypatch.setattr(check, "_ask_lock_when", unwritable)
+    lane = lanes.Lane(name="backend", lock="t", lock_when=[py, "-c", "print(1)"])
+    assert check._lock_declined(lane, tmp_path, tmp_path / "x.log") is None
+
+
+def test_an_edit_made_while_lock_when_answers_fails_the_check(repo, commit, py):
+    """A declined lane is held to the commit it was sized on, as a locked one is after its
+    wait: an edit during `lock_when` (up to five minutes) or an earlier lane certifies
+    nothing (adversary, review of 3572777)."""
+    edits = "import pathlib, sys; pathlib.Path('src/a.py').write_text('x = 2'); print('lock not needed: x'); sys.exit(3)"
+    _write_lanes(repo, _lane("backend", py, lock="t", code=_GATE, extra=_asks(py, edits)))
+    sha = commit(repo, "src/a.py", "x = 1\n")
+    out = io.StringIO()
+    assert check.check(repo, out=out) == 1, out.getvalue()
+    assert "tracked files changed since the check started (src/a.py), checked after lock_when" in out.getvalue()
+    assert "run   backend" not in out.getvalue()
+    rid = store.find_repo(repo)
+    assert not receipts.has_marker(rid, sha, full=True)
+    (row,) = receipts.read(rid, "lane", sha=sha)
+    assert row["exit"] == 125 and row["lock_declined"] == "x", row
+
+
+def _in_thread(fn, seconds: float):
+    """Run `fn` in a thread; fail (rather than hang the suite) if it waits on a lock."""
+    box: dict = {}
+    worker = threading.Thread(target=lambda: box.setdefault("value", fn()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"still running after {seconds:.0f}s (waiting on a lock?)"
+    return box.get("value")

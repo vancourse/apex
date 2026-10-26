@@ -9,6 +9,7 @@ the code host is a fake that records what the runner posts, opens and arms.
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 import time
@@ -57,6 +58,8 @@ if count.with_name("mixed.on").exists():  # one test's own failure is load, anot
 if count.with_name("ports.on").exists():  # the box ran out of local ports mid-run
     fails.append("tests/test_x.py::test_flaky - psycopg.OperationalError: connection failed: "
                  "Address already in use (0x00002740/10048)")
+if (root / "walk-leftover.txt").exists():  # what a walk left in the shared tree
+    fails.append("tests/test_x.py::test_b - leftover")
 if count.with_name("old.broken").exists():  # an outside cause breaks test_old, by whatever name its file gives it
     renamed = "def test_new" in (root / "tests" / "test_x.py").read_text()
     fails.append("tests/test_x.py::" + ("test_new" if renamed else "test_old") + " - outside")
@@ -396,10 +399,11 @@ def test_a_false_failure_in_one_bisect_probe_names_no_culprit(site):
     assert "unattributed" in site.forge.last()["description"]
 
 
-def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(site):
+def test_the_suite_step_holds_the_lanes_lock_and_lets_go_before_the_revert_check(site):
     """No two suites share the box (operator 2026-10-20): the full run and the reruns that
-    name a culprit (#2668) both run under the lane's machine lock. The revert's own check
-    takes the same lock and re-enters it, rather than waiting on the pass that holds it."""
+    name a culprit (#2668) both run under the lane's machine lock. Once the culprit is
+    found the lock goes (operator 2026-10-25): the revert's own check finds it free, and
+    is not told it holds it."""
     _relanes(site, needs='lock = "trunklock"')
     _pass(site)
     home = str(Path(trunk.__file__).resolve().parents[1])
@@ -408,11 +412,18 @@ def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(s
     at_check: list[str] = []
 
     def check(made: dict) -> bool:
+        told = os.environ.get(store.HELD_ENV, "")
+        held = os.environ.pop(store.HELD_ENV, None)  # looked at as another process would
         try:
             with store.machine_lock("trunklock", {}, wait=False):
                 at_check.append("free")
         except store.LockBusy:
             at_check.append("held")
+        finally:
+            if held is not None:
+                os.environ[store.HELD_ENV] = held
+        if "trunklock:" in told:
+            at_check.append("told held")
         return True
 
     code, text = _pass(site, check=check)
@@ -423,6 +434,96 @@ def test_the_whole_pass_holds_the_lanes_lock_and_the_revert_check_re_enters_it(s
     assert "rerun held" in lines and "rerun free" not in lines, lines
     assert at_check == ["free"]
     assert [r["pr"] for r in site.forge.reverts] == [site.forge.prs[bad]["number"]]
+
+
+# A walk: a trunk lane with no rerun. argv: where to write, the plugin's home. It records
+# whether the suite's lock and its own are held, looked at from outside.
+WALK = """
+import os, sys
+sys.path.insert(0, sys.argv[2])
+from rails import store
+os.environ.pop("RAILS_LOCKS_HELD", None)
+seen = []
+for name in ("trunklock", "walklock"):
+    try:
+        with store.machine_lock(name, {}, wait=False):
+            seen.append(name + "-free")
+    except store.LockBusy:
+        seen.append(name + "-held")
+with open(sys.argv[1], "a") as fh:
+    fh.write(" ".join(seen) + "\\n")
+"""
+
+
+def test_a_walk_runs_first_under_its_own_lock_while_the_suites_lock_is_free(site):
+    """f1. A lane with no rerun runs before the lanes that rerun and holds its own lock for
+    its run alone: a pre-merge suite does not wait out the walks. The suite then holds
+    its lock from its run through its last rerun."""
+    home = str(Path(trunk.__file__).resolve().parents[1])
+    walk = site.tmp / "scripts" / "walk.py"
+    walk.write_text(WALK, encoding="utf-8")
+    walk_seen = site.tmp / "walkseen.txt"
+    s = lambda p: str(p).replace("\\", "/")  # noqa: E731
+    walks = (
+        'lock = "trunklock"\n'
+        '[[lane]]\nname = "walks"\nalways = true\n'
+        f'command = ["{PY}", "-c", "print(1)"]\n'
+        f'trunk_command = ["{PY}", "{s(walk)}", "{s(walk_seen)}", "{s(home)}"]\n'
+        'lock = "walklock"\n'
+    )
+    _relanes(site, needs=walks)
+    _pass(site)
+    (site.tmp / "lockprobe.txt").write_text(f"trunklock|{home}", encoding="utf-8")
+    walk_seen.unlink()
+    site.merge("src/b.py", "boom = 1\n")
+    code, text = _pass(site)
+    assert code == 1, text
+    assert text.index("PASS  walks") < text.index("FAIL  suite"), text
+    assert walk_seen.read_text(encoding="utf-8").split() == ["trunklock-free", "walklock-held"]
+    seen = (site.tmp / "lockseen.txt").read_text(encoding="utf-8").split()
+    lines = [" ".join(seen[i : i + 2]) for i in range(0, len(seen), 2)]
+    assert "full held" in lines and "rerun held" in lines, lines
+    assert "full free" not in lines and "rerun free" not in lines, lines
+
+
+def _walk_lanes(site, trunk_command: str) -> None:
+    _relanes(site, needs=(
+        'lock = "trunklock"\n'
+        '[[lane]]\nname = "walks"\nalways = true\n'
+        f'command = ["{PY}", "-c", "print(1)"]\n'
+        f"trunk_command = {trunk_command}\n"
+        'lock = "walklock"\n'
+    ))
+
+
+def test_what_a_walk_leaves_in_the_tree_does_not_reach_the_suite(site):
+    """The lanes share the kept tree. A walk runs first now, so the tree is checked out
+    clean again before the full run, whose reruns start clean too (coop, review of
+    3572777): a walk's leftovers would otherwise fail it and pass its reruns, a flake."""
+    _walk_lanes(site, f'["{PY}", "-c", "open(\'walk-leftover.txt\', \'w\').write(\'x\')"]')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    before = site.reruns()
+    code, text = _pass(site)
+    # The fixture suite fails test_b when it finds the leftover: seen by the full run
+    # alone, it would rerun clean and pass, and read as a flake.
+    assert code == 0 and site.forge.last()["state"] == "success", text
+    assert "flake" not in site.forge.last()["description"] and site.reruns() == before, text
+
+
+def test_a_walk_that_reaches_no_verdict_runs_no_suite(site):
+    """A lane with no rerun that fails without naming a failure ends the pass in `error`
+    before the suite's full run starts, and leaves no lock held (coop, review of 3572777)."""
+    _walk_lanes(site, f'["{PY}", "-c", "import sys; sys.exit(1)"]')
+    _pass(site)
+    site.merge("src/a.py", "a = 1\n")
+    before = site.runs()
+    code, text = _pass(site)
+    assert site.forge.last()["state"] == "error", text
+    assert "walks exited 1" in site.forge.last()["description"], site.forge.last()
+    assert site.runs() == before, "the suite ran after a pass that can reach no verdict"
+    with store.machine_lock("trunklock", {}, wait=False):
+        pass  # free: LockBusy here is a lock the pass kept
 
 
 def test_a_pass_that_cannot_start_a_lane_on_an_idle_box_says_so_at_once(site, monkeypatch):
@@ -480,23 +581,9 @@ def test_a_prerequisite_a_running_suite_loads_is_checked_after_that_suite(site, 
     assert code == 0 and site.forge.last()["state"] == "success", text
 
 
-def test_a_pass_that_cannot_vouch_for_its_lock_record_skips_the_revert_check(site, monkeypatch):
-    """A revert's own `rails check` re-enters the pass's lock by its holder record; without
-    one it would wait on the pass forever (adversary, review of 7aca8eb). No check then."""
-    _relanes(site, needs='lock = "trunklock"')
-    _pass(site)
-    site.merge("src/b.py", "boom = 1\n")
-    monkeypatch.setattr(store, "holds_record", lambda name: False)
-    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
-    assert "revert check skipped" in text, text
-    assert site.checked == []
-
-
-def test_a_resumed_revert_is_not_checked_by_a_pass_without_its_own_lock_record(site, monkeypatch):
+def test_a_resumed_revert_is_checked_by_the_next_pass(site):
     """Both voices, review of acb7290: an earlier pass opened a revert and died during its
-    check, leaving the row unchecked. A later pass that cannot vouch for its lock record
-    must not run that check either (its `rails check` would wait on the pass forever); the
-    row stays unchecked for a pass that can."""
+    check, leaving the row unchecked. The next pass that names the culprit runs it."""
     _relanes(site, needs='lock = "trunklock"')
     _pass(site)
     site.merge("src/b.py", "boom = 1\n")
@@ -508,11 +595,10 @@ def test_a_resumed_revert_is_not_checked_by_a_pass_without_its_own_lock_record(s
         _pass(site, check=dies)
     rows = trunk.read_state(site.repo)["reverts"]
     assert rows and rows[-1]["checked"] is False
-    monkeypatch.setattr(store, "holds_record", lambda name: False)
-    code, text = _pass(site, check=lambda made: pytest.fail("the revert check ran"))
-    assert "check skipped this pass" in text, text
+    code, text = _pass(site)
     row = trunk.read_state(site.repo)["reverts"][-1]
-    assert row["checked"] is False and row["commented"] is False, row
+    assert row["checked"] is True and row["commented"] is True, (row, text)
+    assert site.checked == [901, 901]
 
 
 def _in_thread(fn, seconds: float = 120.0):
@@ -547,13 +633,14 @@ def test_a_pass_waits_for_a_running_suite_and_names_it(site):
     assert holding.wait(10)
     out = io.StringIO()
     box: dict = {}
+    before = site.runs()
     runner = threading.Thread(target=lambda: box.setdefault("r", _pass(site, out=out)), daemon=True)
     runner.start()
     deadline = time.monotonic() + 30
     while "held by a session" not in out.getvalue() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert "held by a session" in out.getvalue(), out.getvalue()
-    assert "testing" not in out.getvalue(), "the full run started beside a held suite"
+    assert site.runs() == before, "the full run started beside a held suite"
     release.set()
     runner.join(120)
     assert not runner.is_alive()

@@ -353,7 +353,7 @@ def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo
 
 
 def test_known_limit_an_unclosed_reminder_that_quotes_a_closing_tag_reads_what_follows():
-    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.7.1, Known
+    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.9.1, Known
     limits). The text alone cannot rule it out; in the 175 reminder-led non-meta user lines of the
     local transcripts (2026-10-20), no closing tag was quoted mid-line."""
     prompt = "<system-reminder>\nIt reported: \"stops at </system-reminder>\nlooks right"

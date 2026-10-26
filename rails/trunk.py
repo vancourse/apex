@@ -32,7 +32,7 @@ not already have is rerun alone at the tip (``trunk_rerun``):
   the tip stays red and the id is reported, never attributed.
 
 Many ids are rerun in parts that each fit one command line. The reruns get at most
-``ATTRIBUTION_SECS`` (they hold the lanes' locks; see below); what that leaves unasked is
+``ATTRIBUTION_SECS`` (they hold their lane's lock; see below); what that leaves unasked is
 reported.
 
 ``trunk_revert`` (lanes file ``[settings]``, read at the last verdict's commit so a culprit
@@ -48,10 +48,14 @@ naming every failure, a crash) posts ``error`` and is retried: at once by ``rail
 run``, by ``watch`` after a backoff and at most a few times per tip.
 
 One runner per repository holds the machine lock ``trunk-<repo>``; a second finds it
-held and leaves. A pass holds the trunk lanes' ``lock`` (the pre-merge lanes') for all of
-it, the full run, the reruns and what is done about the result, and takes it with priority:
-no two suites share the box (operator 2026-10-20), and a pre-merge suite that starts while
-the pass waits queues behind it. A pre-merge suite can wait out a whole pass.
+held and leaves. A pass holds a trunk lane's ``lock`` (the pre-merge lanes') for that lane's
+step only, and takes it with priority, so a pre-merge suite that starts while the pass
+waits queues behind it. A lane with no ``trunk_rerun`` runs first and holds its lock for
+its run alone; the lanes that rerun run last and hold theirs from their first run until
+their culprits are found: no two suites share the box (operator 2026-10-20), and a load
+failure between a run and its reruns cannot blame a merge (#2668). Nothing is held while
+the pass acts on its verdict; a revert's own `rails check` queues like any other. A
+pre-merge suite waits out one step of a pass, never the whole of it (operator 2026-10-25).
 """
 
 from __future__ import annotations
@@ -779,14 +783,13 @@ def run_pass(
 def _pass_locks(
     repo: store.RepoId, lanes: list[lanes_mod.Lane], tip: str, out
 ) -> Iterator[None]:
-    """Hold the trunk lanes' machine locks (`lock = "<name>"`) for the whole pass: the full
-    run, the reruns that decide who broke the tip, and what is done about it. No two suites
-    share the box (operator 2026-10-20): a pre-merge suite beside the full run loaded both,
-    and a load failure that outlives one rerun blamed a merge (#2668). The pass takes them
-    with priority, so a check that starts while it waits queues behind it rather than
-    ahead. A revert's own `rails check` re-enters them through ``HELD_ENV``. Several are
-    taken together or not at all: a busy one is waited for holding none of the others, so
-    no lane's suites wait on a lock held idle (#2673)."""
+    """Hold ``lanes``' machine locks (`lock = "<name>"`) for one step of the pass (`_judge`).
+    No two suites share the box (operator 2026-10-20): a pre-merge suite beside the full
+    run loaded both, and a load failure that outlives one rerun blamed a merge (#2668). The
+    pass takes them with priority, so a check that starts while it waits queues behind it
+    rather than ahead. A lane's own `rails lock` of a held name re-enters through
+    ``HELD_ENV``. Several are taken together or not at all: a busy one is waited for
+    holding none of the others, so no lane's suites wait on a lock held idle (#2673)."""
     names = sorted({lane.lock for lane in lanes if lane.lock})
 
     def take(stack: contextlib.ExitStack, name: str, wait: bool) -> None:
@@ -875,9 +878,9 @@ def _run(
             _record(repo, state, result, verdict=None)
             return
 
-    with _pass_locks(repo, trunk_lanes, tip, out):
+    with contextlib.ExitStack() as held:
         _judge(repo, top, tip, branch, state, result, forge, revert_check, out,
-               tree_path, log_dir, tip_config, trunk_lanes, tree_sha)
+               tree_path, log_dir, tip_config, trunk_lanes, tree_sha, held)
 
 
 def _locks_free(lanes: list[lanes_mod.Lane]) -> bool:
@@ -906,25 +909,32 @@ def _judge(
     tip_config: lanes_mod.LaneConfig,
     trunk_lanes: list[lanes_mod.Lane],
     tree_sha: str,
+    held: contextlib.ExitStack,
 ) -> None:
     """Run the trunk lanes on the tip, attribute what is newly red, act, record, post.
-    The caller holds the lanes' locks for all of it (`_pass_locks`)."""
+
+    Each lane's lock is held for its own step (`_pass_locks`). A lane with no rerun runs
+    first, holding its lock for its run alone; the lanes that rerun run last, holding
+    theirs in ``held`` from their first run until the last rerun and probe that decides a
+    culprit, and they are released before anything is done about the verdict."""
     from rails.check import missing_prerequisite, run_lane
 
     print(f"rails trunk: testing {tip[:12]} ({branch})", file=out, flush=True)
     failing: dict[str, list[str]] = {}
     loaded: set[str] = set()  # failed ids whose own report shows the box ran out of connections
-    for lane in trunk_lanes:
+
+    def run(lane: lanes_mod.Lane) -> bool:
+        """Run one lane on the tip; False when the pass can reach no verdict."""
         why = missing_prerequisite(lane)
         if why:
             result.state, result.note = "error", f"{lane.name}: prerequisite: {why}"
-            break
+            return False
         log = log_dir / f"{lane.name}.log"
         code, secs = run_lane(lane.on_trunk(), tree_path, log)
         result.lane_runs += 1
         print(f"  {'PASS' if code == 0 else 'FAIL'}  {lane.name:<14} {int(secs)}s  log: {log}", file=out)
         if code == 0:
-            continue
+            return True
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         entries = _summary_entries(text)
         ids = list(dict.fromkeys(entries))
@@ -938,9 +948,29 @@ def _judge(
                 if not ids
                 else f"{lane.name}: {tally} failures, {len(ids)} named"
             )
-            break
+            return False
         failing[lane.name] = ids
-        loaded |= _loaded_ids(text)
+        loaded.update(_loaded_ids(text))
+        return True
+
+    rerunning = [lane for lane in trunk_lanes if lane.trunk_rerun]
+    reached, ran = True, False
+    for lane in trunk_lanes:
+        if not lane.trunk_rerun:
+            with _pass_locks(repo, [lane], tip, out):
+                reached, ran = run(lane), True
+            if not reached:
+                break
+    if reached and rerunning:
+        held.enter_context(_pass_locks(repo, rerunning, tip, out))
+        if ran:
+            # The lanes share the kept tree: what one before left there must not reach a
+            # full run whose reruns start clean (`_ask`), or its failure reads as a flake
+            # (coop, review of 3572777). Ignored files survive, so this is cheap.
+            _checkout(top, tree_path, tip)
+        for lane in rerunning:
+            if not run(lane):
+                break
 
     if result.state == "error":
         # No verdict: the tip is retried, and the last verdict stays the bisect base.
@@ -983,7 +1013,7 @@ def _judge(
         if [i for i in ids if i not in seen]:
             new[name] = [i for i in ids if i not in seen]
 
-    # The reruns that decide who broke the tip run under the locks the pass holds (#2668).
+    # The reruns that decide who broke the tip run under the locks their full runs took (#2668).
     reruns_needed = any(by_name[name].trunk_rerun for name in new)
     result.deadline = time.monotonic() + ATTRIBUTION_SECS
     reproduced: dict[str, list[str]] = {}
@@ -1071,22 +1101,13 @@ def _judge(
     spent = reruns_needed and time.monotonic() >= result.deadline
     if spent:
         print(f"  reruns stopped at their {ATTRIBUTION_SECS / 60:.0f} min budget; the rest is reported", file=out)
+    # The culprits are found: the suites' locks go before anything is done about them.
+    held.close()
 
     for sha in commits:
         if sha in found:
             result.culprits.append(Culprit(sha=sha, ids=found[sha], revertable=sha not in unrevertable))
     mode = _policy(top, base_sha)
-    # A revert's own `rails check` re-enters the pass's locks by their holder records. One
-    # this pass could not write would leave that check waiting on the pass forever, holding
-    # the box (adversary, review of 7aca8eb): no revert then, only the report.
-    names = sorted({lane.lock for lane in trunk_lanes if lane.lock})
-    if result.culprits and not all(store.holds_record(name) for name in names):
-        # Reported, as with `trunk_revert = "off"`: no revert is opened that no check could
-        # pass (coop, review of 90be54f: a revert left unchecked read as a red check).
-        print("  revert check skipped: a lock's holder record is not this pass's; reported only", file=out)
-        mode = "off"
-        revert_check = None  # an earlier pass's revert, resumed in `_act`, is not checked either
-
     for culprit in result.culprits:
         _act(repo, top, state, mode, forge, culprit, tip, revert_check, out)
 
@@ -1318,9 +1339,9 @@ def _finish(
     check and the arm, then the comment on the culprit PR. A pass that dies part-way
     leaves the rest to the next pass that names the same culprit."""
     if not row.get("checked", True) and revert_check is None:
-        # This pass cannot run the check (its lock record is not its own): the row stays
-        # unchecked, and uncommented, for the next pass that can (both voices, reviews of
-        # acb7290 and 07ea71a: a comment now would say "not armed" before the check ran).
+        # This pass was given no check to run: the row stays unchecked, and uncommented,
+        # for the next pass that has one (both voices, reviews of acb7290 and 07ea71a: a
+        # comment now would say "not armed" before the check ran).
         culprit.note = "the revert's check was skipped this pass; a later pass runs it"
         print(f"  revert #{row['revert']}: check skipped this pass", file=out)
         return
