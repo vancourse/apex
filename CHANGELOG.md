@@ -4,6 +4,32 @@ All notable changes to rails (formerly apex) are documented here. Format follows
 
 ---
 
+## [1.9.0] — 2026-10-25
+
+### Changed
+- **The trunk holds a lane's lock for that lane's step, not for its whole pass** (operator
+  2026-10-25). On jarvis on 2026-10-25 a pre-merge suite waited 69 minutes for one pass: its
+  full suite, then three browser walks that never touch the suite's database, all under
+  `suite`. Now a trunk lane with no `trunk_rerun` runs first and holds its lock for its run
+  alone, and the lanes that rerun run last, holding theirs from their first run until their
+  culprits are found. Both still take it with priority, and no two suites share the box. The
+  lock goes before the pass acts on its verdict, so a revert's own `rails check` queues like
+  any other. The 1.7.0 skip for a pass whose holder record was not its own is gone with it:
+  nothing can now wait on the pass that started it. A pass with both kinds of lane runs them
+  in a new order: the ones with no rerun first.
+
+### Added
+- **`lock_when`: a lane asks before it waits.** With `lock`, an argv run in the worktree before
+  the lock. Exit 3 with a last line `lock not needed: <why>` runs the lane without the lock,
+  and the why is shown and recorded (`lock_declined`). Any other answer takes the lock: 0, a
+  crash, a usage error, a command that cannot start, no answer in 5 minutes, or an exit 3
+  without that line (on Windows a raised signal exits 3). A lane run without its lock is not told it
+  holds it (`RAILS_LOCKS_HELD`), and is held to the commit it was sized on, as a locked lane
+  is after its wait. jarvis uses it to run a small test selection at once, beside a suite
+  that holds the lock.
+- **The trunk checks its kept tree out clean before the suite step** when a walk ran first, so
+  a walk's leftovers cannot fail the full run and pass its reruns.
+
 ## [1.7.0] — 2026-10-20
 
 ### Changed
