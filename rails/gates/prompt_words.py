@@ -1,5 +1,11 @@
 """UserPromptSubmit: the operator's words, and the intent ack (design R24, R22, decision 13.2).
 
+A message that begins with closed harness `<system-reminder>` blocks (re-read instructions, a side
+session reporting in, "Linked sessions now") is read from after them (`intent.operator_text`).
+Every other message is read as on 1.6.0, except a spawned session's brief, now a machine message
+by its header (`intent.MACHINE_PREFIXES`). One that begins with a reminder that cannot be taken
+off cleanly stays a machine message, and the session is told its words were not read (`_UNREAD`).
+
 Words, matched only on a HUMAN message whose whole first line is the word:
   hold                  pushes refuse until `release`
   release               lifts hold
@@ -46,12 +52,28 @@ def _classify_ceremony(prompt: str) -> str:
     return "other"
 
 
+#: Told, not acted on: no state changes. The operator may have written in such a message, but
+#: agent text may be in it too, past the point where the reminders could be taken off.
+_UNREAD = (
+    "rails: this message begins with a `<system-reminder>` that never closes, or that leaves a "
+    "reminder tag after it, so it was read as a machine message, as on 1.6.0. If the operator "
+    "wrote in it, their words were not read: no intent was acked or voided, and no `hold`, "
+    "`release`, `used` or `approve` was recorded. Tell them, and ask them to say it again."
+)
+
+
 def check(evt: Event):
     store.touch_heartbeat()
     repo = store.find_repo(evt.cwd)
     prompt = evt.prompt
-    if repo is None or not intent.is_human(evt.payload, prompt):
+    if repo is None:
         return None
+    if not intent.is_human(evt.payload, prompt):
+        return [Notice(_UNREAD)] if intent.unread_reply(evt.payload, prompt) else None
+    # The words, the ack and the ceremony log read what the operator wrote, never the closed
+    # reminders the harness put in front of it (a "rather than" in a side session's report is not
+    # theirs).
+    prompt = intent.operator_text(prompt)
     first = prompt.strip().splitlines()[0].strip() if prompt.strip() else ""
     word = first.lower().rstrip(".!")
     now = int(time.time())

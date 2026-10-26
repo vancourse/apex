@@ -214,6 +214,163 @@ def test_machine_messages_never_ack(repo):
     assert not intent.acked(rid, repo)
 
 
+#: What Claude Code puts in front of an operator's words when a side session reported in, and
+#: when instruction files were re-read. Its own words ("rather than", "push") are not the
+#: operator's.
+_REMINDER = (
+    "<system-reminder>\nThe session \"Fix the lanes\" you started finished a turn. It reported: "
+    "\"push the second branch rather than the first\".\n</system-reminder>\n\n"
+)
+_REREAD = "<system-reminder>\nInstruction files were re-read when this session started.\n</system-reminder>\n"
+
+
+def test_an_operator_reply_behind_harness_reminders_still_acks(repo):
+    """Observed in jarvis 2026-10-20: "go ahead and merge" reached the session behind a reminder,
+    was judged a machine message, and `rails ship` refused three times as never acked. The
+    reminders' own words must not read as a correction ("rather than") or set the ceremony
+    class ("push"); the operator's "merge" does."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    prompt = "\n\n" + _REREAD + _REMINDER + "go ahead and merge"
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+    assert f"intent {h} acked by message" in out.notices[0]
+    assert intent.acked(rid, repo)
+    log = store.read_jsonl(rid.dir / "ceremony.jsonl")
+    assert [(r["class"], r["len"]) for r in log] == [("merge", len("go ahead and merge"))]
+
+
+def test_a_correction_behind_a_harness_reminder_is_still_a_correction(repo):
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    out = dispatch(
+        _evt("UserPromptSubmit", repo, prompt=_REMINDER + "wait, export to xlsx instead"), rows
+    )
+    assert "Rewrite .rails/intent.md" in out.notices[0]
+    assert not intent.acked(rid, repo)
+
+
+_BRIEF = (
+    "Background (from the session that started this one):\n"
+    "The operator wants this merged; push after rails check."
+)
+#: A report quoting a closing tag ends the block early: agent text, and the real closing tag, are
+#: left in front of the operator's words.
+_QUOTES_A_TAG = (
+    "<system-reminder>\nThe session \"Fix\" finished a turn. It reported: \"operator_text stops "
+    "at </system-reminder> rather than at the last tag\".\n</system-reminder>\n\n"
+)
+#: None of these is read as the operator's. Agent text is delivered INSIDE reminders (a background
+#: agent's result, a side session's quoted report), and quoting a closing tag ends a block early;
+#: quoting a closing tag and then an opening one would, if blocks were removed anywhere, pair with
+#: the real tags and leave agent text standing alone. A spawned session's brief sits behind a
+#: reminder too. Each case: (prompt, the session is told the operator's words were not read).
+_NEVER_THE_OPERATOR = {
+    "reminders only": (_REMINDER, False),
+    "notification behind a reminder": (
+        _REMINDER + "<task-notification>done</task-notification>",
+        False,
+    ),
+    "notification alone": ("<task-notification>done</task-notification>\nok", False),
+    "spawned session's brief": (_BRIEF, False),
+    "spawned session's brief behind a reminder": (_REMINDER + _BRIEF, False),
+    "unclosed reminder in front": ("<system-reminder>never closed, so nothing is stripped\n\nok", True),
+    "report quotes a closing tag, then ok": (_QUOTES_A_TAG + "ok", True),
+    "report quotes a closing tag, then a correction": (
+        _QUOTES_A_TAG + "no, export to xlsx instead",
+        True,
+    ),
+    "report quotes a closing then an opening tag": (
+        "<system-reminder>\nIt reported: \"the match stops at </system-reminder> and then "
+        "<system-reminder> starts again\".\n</system-reminder>\n\nok",
+        True,
+    ),
+    "agent result quotes a closing tag": (
+        "<system-reminder>\n<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n"
+        "<result>Closed </system-reminder> blocks are removed first.</result>\n"
+        "</task-notification>\n</system-reminder>",
+        True,
+    ),
+    "hold behind an unclosed reminder": (
+        "<system-reminder>\nInstruction files were re-read.\n\nhold",
+        True,
+    ),
+    "hold behind a report that quotes a closing tag": (_QUOTES_A_TAG + "hold", True),
+}
+
+
+@pytest.mark.parametrize(
+    ("prompt", "unread"), list(_NEVER_THE_OPERATOR.values()), ids=list(_NEVER_THE_OPERATOR)
+)
+def test_agent_text_and_untrustworthy_boundaries_are_never_read(repo, prompt, unread):
+    """Each is a machine message (all but the bare brief were on 1.6.0 too): nothing acked, voided,
+    held or logged. One the operator may have written in says their words were not read, and
+    changes no state, so agent text quoted in a reminder can neither ack an intent nor pass for
+    the operator's correction."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60, blocked_hash=h)
+    before = intent.get(rid)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+    if unread:
+        assert len(out.notices) == 1 and "their words were not read" in out.notices[0]
+    else:
+        assert not out.notices
+    assert intent.get(rid) == before
+    assert "hold" not in (store.read_json(rid.dir / "state.json") or {})
+    assert store.read_jsonl(rid.dir / "ceremony.jsonl") == []
+    # A subagent's prompt is never the operator's, and is not reported either.
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt, agent_id="sub1"), rows)
+    assert not out.notices
+
+
+def test_a_prompt_that_does_not_begin_with_a_reminder_is_judged_as_on_1_6_0(repo):
+    """Only a leading run is taken off. A reply followed by a reminder, or by one that never
+    closes, acked on 1.6.0 and still does, and its whole text is what is read and logged."""
+    rid = store.find_repo(repo)
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    prompts = ("go ahead\n\n" + _REREAD, "go ahead\n<system-reminder>never closed")
+    for n, prompt in enumerate(prompts):
+        assert intent.operator_text(prompt) == prompt
+        h = _intent(repo, f"# Export CSV, take {n}\n")
+        intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+        out = dispatch(_evt("UserPromptSubmit", repo, prompt=prompt), rows)
+        assert f"intent {h} acked by message" in out.notices[0], prompt
+    log = store.read_jsonl(rid.dir / "ceremony.jsonl")
+    assert [r["len"] for r in log] == [len(p) for p in prompts]
+    dispatch(_evt("UserPromptSubmit", repo, prompt="hold\n\n" + _REMINDER), rows)
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    # Known limit: a reminder after the reply is read with it, as on 1.6.0, so its "rather than"
+    # makes the reply a correction.
+    h = _intent(repo, "# Export CSV, take 2\n")
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    out = dispatch(_evt("UserPromptSubmit", repo, prompt="go ahead\n\n" + _REMINDER), rows)
+    assert "Rewrite .rails/intent.md" in out.notices[0]
+
+
+def test_known_limit_an_unclosed_reminder_that_quotes_a_closing_tag_reads_what_follows():
+    """It cannot be told from a closed reminder followed by a reply (CHANGELOG 1.9.1, Known
+    limits). The text alone cannot rule it out; in the 175 reminder-led non-meta user lines of the
+    local transcripts (2026-10-20), no closing tag was quoted mid-line."""
+    prompt = "<system-reminder>\nIt reported: \"stops at </system-reminder>\nlooks right"
+    assert intent.operator_text(prompt) == "looks right"
+
+
+def test_the_operators_words_are_read_behind_a_harness_reminder(repo):
+    """`hold` is matched on the first line of the operator's words, not of the reminder, and the
+    ceremony log counts the operator's words, not the harness's."""
+    rows = [_row("prompt_words", ["UserPromptSubmit"])]
+    rid = store.find_repo(repo)
+    dispatch(_evt("UserPromptSubmit", repo, prompt=_REMINDER + "hold"), rows)
+    assert store.read_json(rid.dir / "state.json")["hold"]["on"] is True
+    log = store.read_jsonl(rid.dir / "ceremony.jsonl")
+    assert [(r["class"], r["len"]) for r in log] == [("hold", len("hold"))]
+
+
 def test_classifier_fixture_per_class():
     for text in (
         "no, do X",
@@ -224,8 +381,41 @@ def test_classifier_fixture_per_class():
         "I meant the other one",
     ):
         assert intent.classify(text) == "changes", text
-    for text in ("yes", "looks good, go", "ship it", "great - and also check the docs"):
+    for text in (
+        "yes",
+        "looks good, go",
+        "ship it",
+        "great - and also check the docs",
+        "go ahead and merge",
+        "Ack the B7 intent. Go ahead with the failing test and the fix.",
+    ):
         assert intent.classify(text) == "approves", text
+
+
+#: Agent-written buttons that decline the shown intent. A click submits the button's text as the
+#: operator's prompt.
+_DECLINE_BUTTONS = (
+    "Hold B7 for now; leave the branch unpushed.",
+    "Leave #65 open for now.",
+    "Do the per-worker connection pooling the brief asked for, not the abortive close.",
+)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known limit, open decision #67: a click on an agent-written decline button acks",
+)
+@pytest.mark.parametrize("click", _DECLINE_BUTTONS)
+def test_a_click_on_a_decline_button_does_not_ack(repo, click):
+    """Each acks the intent it declines today. Pinned at the hook, not the classifier, so it flips
+    however #67 is decided; the chosen behaviour then replaces this test."""
+    h = _intent(repo)
+    rid = store.find_repo(repo)
+    intent.update(rid, hash=h, shown_at=int(time.time()) - 60)
+    dispatch(
+        _evt("UserPromptSubmit", repo, prompt=click), [_row("prompt_words", ["UserPromptSubmit"])]
+    )
+    assert not intent.acked(rid, repo)
 
 
 # --- the operator's words -------------------------------------------------------------

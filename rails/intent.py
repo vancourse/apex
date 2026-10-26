@@ -5,8 +5,7 @@
 hash only when that marker appears in the LAST assistant message of the turn —
 so "shown" means the operator could actually see it. The next HUMAN message is
 classified: a correction clears the ack and asks for a rewrite; anything else
-acks that hash. ``rails: autonomous <scope>`` in a dispatch prompt acks for an
-unattended session, and is counted separately.
+acks that hash (`rails.gates.prompt_words`, the only writer of ``acked_hash``).
 
 State per leaf in ``<store>/<repo>/state.json`` under ``intent[<leaf>]``:
 ``{hash, shown_at, acked_hash, acked_at, acked_by}``.
@@ -33,7 +32,66 @@ CORRECTION = re.compile(
     re.IGNORECASE,
 )
 
-MACHINE_PREFIXES = ("<", "[", "{", "Caveat:", "This session is being continued")
+#: The last one is the header of a session's first prompt when another session started it: the
+#: parent agent's brief, which a reminder hides until it is removed (`operator_text`). Seen as
+#: the first prompt of four jarvis worktree sessions (review of 1.9.1).
+MACHINE_PREFIXES = (
+    "<",
+    "[",
+    "{",
+    "Caveat:",
+    "This session is being continued",
+    "Background (from the session that started this one)",
+)
+
+#: Context Claude Code puts in front of an operator's words: re-read instruction files, a side
+#: session reporting in. None of the reminders seen in front of a reply carried the operator's
+#: words (175 reminder-led non-meta user lines in the local transcripts to 2026-10-20), so a
+#: prompt is judged without them. Behind one, "go ahead and merge" started with `<` and was taken
+#: for a machine message; the intent was never acked and `rails ship` refused three times (jarvis,
+#: 2026-10-20).
+#:
+#: Only a RUN of closed blocks at the very START is removed, and only when no reminder tag is left
+#: after it. The text inside a reminder can be agent-written: a background agent's result, a side
+#: session's quoted report. Quoting a closing tag ends the block early and leaves agent text and
+#: the real closing tag behind; quoting a closing tag and then an opening one would, if blocks
+#: were removed anywhere, pair with the real tags and leave agent text standing as the operator's.
+#: So a prompt with a tag left, like one whose reminder never closes (and quotes no closing tag:
+#: see the known limit below), is not taken apart at all:
+#: it is judged whole, as on 1.6.0, and starts with `<`. Failing open would let agent text ack
+#: an intent; failing closed drops that one reply, as 1.6.0 dropped every reply behind a reminder,
+#: and `prompt_words` says so (`unread_reply`).
+#:
+#: Known limit: a reminder that never closes but QUOTES a closing tag cannot be told from a closed
+#: one followed by a reply, so what follows the quote is read as the operator's. The text alone
+#: cannot show this never happens. What it shows: in the 175 non-meta user lines of the local
+#: transcripts to 2026-10-20 that begin with a reminder, every closing tag starts a line, so none
+#: was quoted mid-line. (Elsewhere, in tool results and assistant text, closing tags do sit
+#: mid-line.)
+_LEADING_REMINDER = re.compile(r"\A\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
+_REMINDER_TAG = re.compile(r"</?system-reminder>")
+
+
+def operator_text(prompt: str) -> str:
+    """The text after the closed reminders that begin the prompt, stripped, when no reminder tag
+    is left after them. Otherwise the prompt itself, unchanged, to be judged as on 1.6.0."""
+    text = prompt
+    while match := _LEADING_REMINDER.match(text):
+        text = text[match.end() :]
+    if text == prompt or _REMINDER_TAG.search(text):
+        return prompt
+    return text.strip()
+
+
+def unread_reply(payload: dict[str, Any], prompt: str) -> bool:
+    """A main-session prompt that begins with a reminder `operator_text` could not take off: one
+    that never closes (and quotes no closing tag), or one that leaves a tag after it. The operator
+    may have written in it."""
+    return (
+        not payload.get("agent_id")
+        and prompt.lstrip().startswith("<system-reminder>")
+        and operator_text(prompt) == prompt
+    )
 
 
 def intent_file(top: Path) -> Path:
@@ -93,7 +151,7 @@ def update(repo: store.RepoId, **fields: Any) -> None:
 def is_human(payload: dict[str, Any], prompt: str) -> bool:
     if payload.get("agent_id"):
         return False
-    stripped = prompt.lstrip()
+    stripped = operator_text(prompt).lstrip()
     return bool(stripped) and not stripped.startswith(MACHINE_PREFIXES)
 
 
